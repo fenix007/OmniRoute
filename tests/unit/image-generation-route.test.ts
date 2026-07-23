@@ -74,6 +74,20 @@ test.after(() => {
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 });
 
+test("image routes expose CORS preflight handlers", async () => {
+  const responses = await Promise.all([
+    imageRoute.OPTIONS(),
+    providerImageRoute.OPTIONS(),
+    imageEditRoute.OPTIONS(),
+  ]);
+
+  for (const response of responses) {
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("Access-Control-Allow-Methods") ?? "", /POST/);
+    assert.equal(response.headers.get("Access-Control-Allow-Headers"), "*");
+  }
+});
+
 test("v1 image models GET exposes image-only modalities for credential-backed image-only models", async () => {
   await seedConnection("topaz", { apiKey: "topaz-key" });
   await seedConnection("stability-ai", { apiKey: "stability-key" });
