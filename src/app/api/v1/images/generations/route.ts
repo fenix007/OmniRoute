@@ -19,7 +19,8 @@ import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { v1ImageGenerationSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
-import { getAllCustomModels, resolveProxyForConnection } from "@/lib/localDb";
+import { getAllCustomModels } from "@/lib/db/models";
+import { resolveProxyForConnection } from "@/lib/db/settings";
 import { resolveImageRouteModel } from "@/lib/images/imageRouteModel";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
@@ -28,6 +29,7 @@ import { generateRequestId } from "@/shared/utils/requestId";
 import { getSpecialtyModelsResponse } from "@/app/api/v1/_shared/specialtyCatalog";
 import { enforceClientApiRouteAuth } from "@/shared/utils/clientApiRouteAuth";
 import { runWithCallLogApiKeyContext } from "@/lib/usage/callLogApiKeyContext";
+import { executeImageWithCredentialFallback } from "@/sse/services/imageCredentialRetry";
 
 export const dynamic = "force-dynamic";
 
@@ -299,7 +301,16 @@ async function postHandler(request, context) {
       : generateImage();
   };
 
-  let result = await executeImageGeneration(credentials);
+  // #9231: keep image requests on the same credential lifecycle as chat —
+  // refresh OAuth and rotate accounts on upstream 401 before giving up.
+  const execution = await executeImageWithCredentialFallback({
+    provider,
+    requestedModel,
+    credentials,
+    execute: executeImageGeneration,
+  });
+  credentials = execution.credentials;
+  let result = execution.result;
 
   // Some ChatGPT accounts can use Codex but do not have the requested model
   // entitlement. Retry one sibling account for that exact upstream response;
