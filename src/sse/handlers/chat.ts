@@ -1288,10 +1288,22 @@ async function handleSingleModelChat(
         }
 
         const breakerFailureStatus = Number(lastStatus ?? credentials?.lastErrorCode);
+        // lastError is a string here — check for the proxy_unreachable tag embedded by
+        // tagProxyUnreachable (proxyFetch.ts) and OmniRoute's own queue timeouts. Both mean
+        // we never reached the provider, so they must not trip the provider breaker.
+        const isNetworkError =
+          typeof lastError === "string" &&
+          (lastError.includes("proxy_unreachable") || lastError.includes("PROXY_UNREACHABLE"));
+        const isQueueTimeout =
+          typeof lastError === "string" &&
+          (lastError.includes("RATE_LIMIT_QUEUE_TIMEOUT") ||
+            lastError.includes("RATE_LIMIT_QUEUE_WEDGED"));
         if (
           !forceLiveComboTest &&
           credentials?.allRateLimited &&
-          PROVIDER_BREAKER_FAILURE_STATUSES.has(breakerFailureStatus)
+          PROVIDER_BREAKER_FAILURE_STATUSES.has(breakerFailureStatus) &&
+          !isNetworkError &&
+          !isQueueTimeout
         ) {
           breaker._onFailure();
         }
@@ -1789,6 +1801,12 @@ async function handleSingleModelChat(
       if (
         !forceLiveComboTest &&
         !isCombo &&
+        // Network-layer errors (ECONNREFUSED, ETIMEDOUT) never reached the provider —
+        // the provider may be healthy, only the network path is broken. OmniRoute's own
+        // rate-limit queue timeouts are backpressure we applied, not a provider failure.
+        result.errorCode !== "proxy_unreachable" &&
+        result.errorCode !== "RATE_LIMIT_QUEUE_TIMEOUT" &&
+        result.errorCode !== "RATE_LIMIT_QUEUE_WEDGED" &&
         PROVIDER_BREAKER_FAILURE_STATUSES.has(Number(result.status))
       ) {
         breaker._onFailure();

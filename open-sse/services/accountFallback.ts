@@ -111,6 +111,15 @@ const CONNECTION_FAILURE_DEDUP_MS = 5000;
 const MAX_CONNECTION_FAILURE_DEDUP_ENTRIES = 10_000;
 const lastConnectionFailure = new Map<string, number>();
 
+// Per-provider network-error dedup: several combo targets on the SAME provider can
+// fail the same single network event (a VPN blip) in the same request. Without this,
+// each target counts once and one transient blip opens the whole-provider breaker
+// while the provider is healthy. A genuinely dead proxy persists ACROSS requests
+// (past the window) and still accumulates to its threshold.
+const NETWORK_ERROR_DEDUP_MS = 10_000;
+const MAX_NETWORK_ERROR_DEDUP_ENTRIES = 1000;
+const lastNetworkErrorByProvider = new Map<string, number>();
+
 function pruneConnectionFailureDedupeEntries(): void {
   while (lastConnectionFailure.size > MAX_CONNECTION_FAILURE_DEDUP_ENTRIES) {
     const oldestKey = lastConnectionFailure.keys().next().value;
@@ -921,9 +930,30 @@ export function recordProviderFailure(
   provider: string | null | undefined,
   log?: { warn?: (...args: unknown[]) => void },
   connectionId?: string | null,
-  profile?: ProviderBreakerProfile | null
+  profile?: ProviderBreakerProfile | null,
+  opts?: { isQueueTimeout?: boolean; isNetworkError?: boolean }
 ): void {
   if (!provider) return;
+  // OmniRoute's own rate-limit queue timeout is backpressure we applied, not a
+  // provider failure — the provider never saw the request, so it must not count
+  // toward the provider breaker.
+  if (opts?.isQueueTimeout) return;
+
+  // Network-layer errors (proxy_unreachable) get a separate SAME-PROVIDER dedup, so a
+  // single transient network event is not counted once per combo target (see the
+  // declaration). A dead proxy persists across requests and still accumulates.
+  if (opts?.isNetworkError) {
+    const now = Date.now();
+    const last = lastNetworkErrorByProvider.get(provider);
+    if (last && now - last < NETWORK_ERROR_DEDUP_MS) return;
+    lastNetworkErrorByProvider.delete(provider);
+    lastNetworkErrorByProvider.set(provider, now);
+    while (lastNetworkErrorByProvider.size > MAX_NETWORK_ERROR_DEDUP_ENTRIES) {
+      const oldestKey = lastNetworkErrorByProvider.keys().next().value;
+      if (typeof oldestKey !== "string") break;
+      lastNetworkErrorByProvider.delete(oldestKey);
+    }
+  }
 
   // Deduplicate rapid-fire failures from the same connection
   if (connectionId) {
