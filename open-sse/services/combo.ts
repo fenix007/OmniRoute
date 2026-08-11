@@ -17,6 +17,7 @@ import {
   isModelLocked,
   recordModelLockoutFailure,
   recordProviderFailure,
+  recordProviderSuccess,
   selectLockoutCooldownMs,
 } from "./accountFallback.ts";
 import {
@@ -78,11 +79,7 @@ import { acquireQuotaShareConcurrencySlot } from "./combo/quotaShareConcurrency.
 import { orderTargetsByEvalScores } from "./evalRouting.ts";
 import type { CompressionMode } from "./compression/types.ts";
 import { getProviderConnections } from "../../src/lib/db/providers";
-import {
-  isProviderInCooldown,
-  recordProviderCooldown,
-  recordProviderSuccess,
-} from "./providerCooldownTracker.ts";
+import { isProviderInCooldown, recordProviderCooldown } from "./providerCooldownTracker.ts";
 import {
   resolveResilienceSettings,
   type ResilienceSettings,
