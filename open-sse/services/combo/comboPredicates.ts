@@ -213,6 +213,21 @@ export function isTokenLimitBreachErrorBody(errorBody: unknown): boolean {
   return (error as Record<string, unknown>).code === "TOKEN_LIMIT_EXCEEDED";
 }
 
+/** Local limiter capacity is not an upstream/provider failure and must not cascade. */
+export function isLocalQueueCapacityErrorBody(errorBody: unknown): boolean {
+  if (!errorBody || typeof errorBody !== "object") return false;
+  const error = (errorBody as Record<string, unknown>).error;
+  if (!error || typeof error !== "object") return false;
+  const code = String((error as Record<string, unknown>).code || "").toUpperCase();
+  const type = String((error as Record<string, unknown>).type || "").toLowerCase();
+  return (
+    code === "RATE_LIMIT_QUEUE_TIMEOUT" ||
+    code === "RATE_LIMIT_QUEUE_FULL" ||
+    code === "RATE_LIMIT_QUEUE_WEDGED" ||
+    type === "local_queue_capacity"
+  );
+}
+
 export function toRecordedTarget(target: ResolvedComboTarget) {
   return {
     executionKey: target.executionKey,
