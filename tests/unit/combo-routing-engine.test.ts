@@ -2708,6 +2708,69 @@ test("handleComboChat round-robin retries a transient failure on the same model 
   assert.deepEqual(calls, ["model-a", "model-a"]);
 });
 
+test("handleComboChat round-robin: failoverBeforeRetry skips the same-model retry and goes straight to the sibling", async () => {
+  // #2417's whole point: failoverBeforeRetry should prefer a sibling model
+  // over hammering a rate-limited one again. Same shape as the test above
+  // (maxRetries: 1, a transient 429 on the first call) but with a second
+  // model available and failoverBeforeRetry set — calls must show a single
+  // model-a attempt followed directly by model-b, never a same-model retry.
+  const calls = [];
+
+  const result = await handleComboChat({
+    body: {},
+    combo: {
+      name: "rr-failover-before-retry",
+      strategy: "round-robin",
+      models: ["model-a", "model-b"],
+      config: {
+        maxRetries: 1,
+        retryDelayMs: 1,
+        failoverBeforeRetry: true,
+        concurrencyPerModel: 1,
+        queueTimeoutMs: 5,
+      },
+    },
+    handleSingleModel: async (_body, modelStr) => {
+      calls.push(modelStr);
+      if (modelStr === "model-a") return errorResponse(429, "rate limited");
+      return okResponse();
+    },
+    isModelAvailable: async () => true,
+    log: createLog(),
+    settings: null,
+    relayOptions: null,
+    allCombos: null,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, ["model-a", "model-b"]);
+});
+
+test("handleComboChat priority strategy: failoverBeforeRetry skips the same-model retry and goes straight to the sibling", async () => {
+  const calls = [];
+
+  const result = await handleComboChat({
+    body: {},
+    combo: {
+      name: "priority-failover-before-retry",
+      models: ["model-a", "model-b"],
+      config: { maxRetries: 1, retryDelayMs: 1, failoverBeforeRetry: true },
+    },
+    handleSingleModel: async (_body, modelStr) => {
+      calls.push(modelStr);
+      if (modelStr === "model-a") return errorResponse(429, "rate limited");
+      return okResponse();
+    },
+    isModelAvailable: async () => true,
+    log: createLog(),
+    settings: null,
+    allCombos: null,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, ["model-a", "model-b"]);
+});
+
 test("handleComboChat round-robin recovers from 400s when a later model succeeds", async () => {
   const calls: any[] = [];
 
