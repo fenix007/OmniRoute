@@ -142,6 +142,7 @@ export {
   // LKGP (Last Known Good Provider) (#919)
   getLKGP,
   setLKGP,
+  clearLKGP,
 
   // Pricing
   getPricing,

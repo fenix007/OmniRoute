@@ -2292,8 +2292,57 @@ test("handleComboChat standalone lkgp strategy updates LKGP after a successful c
   }
 
   assert.equal(result.ok, true);
-  // getLKGP now returns LKGPRecord | null — source: src/lib/db/settings.ts getLKGP()
   assert.equal(persistedProvider?.provider, "openai");
+});
+
+test("handleComboChat standalone lkgp strategy clears LKGP after the last-known-good target fails", async () => {
+  // A prior successful request pinned "openai" as the last known good provider —
+  // exactly the state left behind by the previous (success) test's own scenario.
+  await settingsDb.setLKGP("standalone-lkgp-clear", "standalone-lkgp-clear", "openai");
+
+  const calls: string[] = [];
+  const result = await handleComboChat({
+    body: {},
+    combo: {
+      id: "standalone-lkgp-clear",
+      name: "standalone-lkgp-clear",
+      strategy: "lkgp",
+      // maxRetries: 0 below means this single target is tried exactly once,
+      // then the combo loop gives up on it (and on the whole combo, since it's
+      // the only model) — the exact "Done retrying this model" failure path.
+      models: ["openai/gpt-4o-mini"],
+      config: { maxRetries: 0 },
+    },
+    handleSingleModel: async (_body: Record<string, unknown>, modelStr: string) => {
+      calls.push(modelStr);
+      return errorResponse(504, "Stream produced no non-ping SSE event within 95000ms");
+    },
+    isModelAvailable: async () => true,
+    log: createLog(),
+    settings: null,
+    relayOptions: null,
+    allCombos: null,
+  });
+
+  // Give the async fire-and-forget LKGP clear a chance to execute
+  let persistedProvider: Awaited<ReturnType<typeof settingsDb.getLKGP>> = null;
+  for (let i = 0; i < 20; i++) {
+    persistedProvider = await settingsDb.getLKGP("standalone-lkgp-clear", "standalone-lkgp-clear");
+    if (persistedProvider === null) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(result.ok, false, "the only target failed, so the whole combo call fails");
+  assert.deepEqual(calls, ["openai/gpt-4o-mini"]);
+  // The bug this guards: without clearing, a *separate* subsequent request would
+  // keep re-selecting "openai" via LKGP reordering even though it just failed.
+  assert.equal(
+    persistedProvider,
+    null,
+    "LKGP must be cleared after its target fails, not left pointing at a just-failed provider"
+  );
 });
 
 test("handleComboChat auto strategy falls back to the full pool when tool filtering empties candidates", async () => {

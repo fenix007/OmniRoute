@@ -2222,6 +2222,24 @@ export async function handleComboChat({
             strategy,
             target: toRecordedTarget(target),
           });
+          // LKGP (#919) mirror of the success-path set below: a just-failed target
+          // must not keep re-pinning itself as the "last known good" choice for the
+          // *next* separate request. Circuit breaker / model lockout deliberately
+          // don't react to request-scoped failure classes (see scopedFailure below),
+          // so nothing else clears this stale pin.
+          void (async () => {
+            try {
+              const { clearLKGP } = await import("../../src/lib/localDb");
+              await Promise.all([
+                clearLKGP(combo.name, target.executionKey),
+                clearLKGP(combo.name, combo.id || combo.name),
+              ]);
+            } catch (err) {
+              log.warn("COMBO", "Failed to clear Last Known Good Provider. This is non-fatal.", {
+                err,
+              });
+            }
+          })();
           recordedAttempts++;
           lastError = errorText || String(result.status);
           if (!lastStatus) lastStatus = result.status;
@@ -3123,6 +3141,22 @@ async function handleRoundRobinCombo({
           strategy: "round-robin",
           target: toRecordedTarget(target),
         });
+        // LKGP (#919) mirror of handleComboChat's failure-path clear above — see
+        // that comment for why this must happen (nothing else clears a pin left
+        // by a request-scoped failure class like a stream-readiness timeout).
+        void (async () => {
+          try {
+            const { clearLKGP } = await import("../../src/lib/localDb");
+            await Promise.all([
+              clearLKGP(combo.name, target.executionKey),
+              clearLKGP(combo.name, combo.id || combo.name),
+            ]);
+          } catch (err) {
+            log.warn("COMBO-RR", "Failed to clear Last Known Good Provider. This is non-fatal.", {
+              err,
+            });
+          }
+        })();
         recordedAttempts++;
         lastError = errorText || String(result.status);
         if (!lastStatus) lastStatus = result.status;
