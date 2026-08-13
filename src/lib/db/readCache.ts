@@ -142,6 +142,11 @@ export async function setCachedLKGP(
   lkgpCache.invalidate(`lkgp:${comboName}:${modelId}`);
 }
 
+/** Drop one LKGP pin from the read cache (or all pins when no key is given). */
+export function invalidateCachedLKGP(pinKey?: string): void {
+  lkgpCache.invalidate(pinKey ? `lkgp:${pinKey}` : undefined);
+}
+
 // ──────────────── Combo Cache Invalidation Signal ────────────────
 //
 // The nested-combo expansion caches live in request handlers

@@ -1205,7 +1205,8 @@ export async function handleComboChat({
     ? ({ targets: orderedTargets, messageHash: null, stuck: false } as const)
     : await applySessionStickiness(
         orderedTargets,
-        body.messages as Array<{ role?: string; content?: unknown }>
+        body.messages as Array<{ role?: string; content?: unknown }>,
+        combo.name
       );
   orderedTargets = _sticky.targets;
   orderedTargets = orderTargetsByEvalScores(orderedTargets, config.evalRouting, log);
@@ -2670,7 +2671,8 @@ async function handleRoundRobinCombo({
     ? ({ targets: filteredTargets, messageHash: null, stuck: false } as const)
     : await applySessionStickiness(
         filteredTargets,
-        body?.messages as Array<{ role?: string; content?: unknown }>
+        body?.messages as Array<{ role?: string; content?: unknown }>,
+        combo.name
       );
   let rrStartIndex = startIndex;
   if (_rrSessionSticky.stuck) {
