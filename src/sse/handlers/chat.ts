@@ -63,6 +63,7 @@ import {
   getCombosCacheVersion,
   getSessionAccountAffinity,
 } from "@/lib/localDb";
+import { dispatchChatWithAffinityEviction } from "./chatDispatch";
 import { resolveModelLockoutSettings } from "@/lib/resilience/modelLockoutSettings";
 import {
   ensureOpenAIStoreSessionFallback,
@@ -72,7 +73,6 @@ import { guardrailRegistry, resolveDisabledGuardrails } from "@/lib/guardrails";
 import {
   resolveModelOrError,
   checkPipelineGates,
-  executeChatWithBreaker,
   handleNoCredentials,
   safeResolveProxy,
   safeLogEvents,
@@ -809,6 +809,7 @@ export async function handleChat(
           failoverBeforeRetry?: boolean;
           providerId?: string | null;
           effectiveComboStrategy?: string | null;
+          modelAbortSignal?: AbortSignal | null;
         }
       ) =>
         handleSingleModelChat(
@@ -836,6 +837,7 @@ export async function handleChat(
             providerId: target?.providerId ?? null,
             correlationId: reqId,
             modelPinned: (target as any)?.modelPinned ?? false,
+            modelAbortSignal: target?.modelAbortSignal ?? null,
           },
           target?.effectiveComboStrategy ?? combo.strategy,
           true
@@ -996,6 +998,7 @@ async function handleSingleModelChat(
     cachedSettings?: any;
     providerId?: string | null;
     correlationId?: string | null;
+    modelAbortSignal?: AbortSignal | null;
   } = {},
   comboStrategy: string | null = null,
   isCombo: boolean = false
@@ -1379,33 +1382,36 @@ async function handleSingleModelChat(
 
       // 4. Execute chat via core after breaker gate checks (with optional TLS tracking)
       if (telemetry) telemetry.startPhase("connect");
-      const { result, tlsFingerprintUsed } = await executeChatWithBreaker({
-        bypassCircuitBreaker: forceLiveComboTest || hasForcedConnection,
-        breaker,
-        body: requestBody,
-        provider,
-        model: effectiveModel,
-        refreshedCredentials,
-        proxyInfo,
-        appliedProxySink,
-        log,
-        clientRawRequest,
-        credentials,
-        apiKeyInfo,
-        userAgent,
-        comboName,
-        comboStrategy,
-        isCombo,
-        comboStepId: runtimeOptions.comboStepId ?? null,
-        comboExecutionKey: runtimeOptions.comboExecutionKey ?? runtimeOptions.comboStepId ?? null,
-        extendedContext,
-        modelApiFormat: apiFormat,
-        providerProfile,
-        cachedSettings: runtimeOptions.cachedSettings,
-        skipUpstreamRetry: runtimeOptions.skipUpstreamRetry ?? false,
-        correlationId: runtimeOptions?.correlationId ?? null,
-        modelPinned: runtimeOptions?.modelPinned ?? false,
-      });
+      const { result, tlsFingerprintUsed } = await dispatchChatWithAffinityEviction(
+        {
+          bypassCircuitBreaker: forceLiveComboTest || hasForcedConnection,
+          breaker,
+          body: requestBody,
+          provider,
+          model: effectiveModel,
+          refreshedCredentials,
+          proxyInfo,
+          appliedProxySink,
+          log,
+          clientRawRequest,
+          credentials,
+          apiKeyInfo,
+          userAgent,
+          comboName,
+          comboStrategy,
+          isCombo,
+          comboStepId: runtimeOptions.comboStepId ?? null,
+          comboExecutionKey: runtimeOptions.comboExecutionKey ?? runtimeOptions.comboStepId ?? null,
+          extendedContext,
+          modelApiFormat: apiFormat,
+          providerProfile,
+          cachedSettings: runtimeOptions.cachedSettings,
+          skipUpstreamRetry: runtimeOptions.skipUpstreamRetry ?? false,
+          correlationId: runtimeOptions?.correlationId ?? null,
+          modelPinned: runtimeOptions?.modelPinned ?? false,
+        },
+        runtimeOptions
+      );
       if (telemetry) telemetry.endPhase();
 
       const proxyLatency = Date.now() - proxyStartTime;

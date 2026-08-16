@@ -10,6 +10,10 @@
  * See _tasks/superpowers/plans/2026-07-03-blocoJ-combo-hotpath-decomposition.md (Task 1).
  */
 import { errorResponse } from "../../utils/error.ts";
+import {
+  COMBO_HEDGE_CANCELLED_REASON,
+  COMBO_PER_MODEL_TIMEOUT_REASON,
+} from "./comboAbortReasons.ts";
 import type { HandleSingleModel, SingleModelTarget, ComboLogger } from "./types.ts";
 
 export function buildTargetTimeoutRunner(deps: {
@@ -43,7 +47,7 @@ export function buildTargetTimeoutRunner(deps: {
           "COMBO",
           `Model ${modelStr} exceeded ${comboTargetTimeoutMs}ms timeout — falling back`
         );
-        timeoutController.abort(new Error("combo-per-model-timeout"));
+        timeoutController.abort(new Error(COMBO_PER_MODEL_TIMEOUT_REASON));
         resolve(
           new Response(JSON.stringify({ error: { message: `Model ${modelStr} timed out` } }), {
             status: 524,
@@ -60,10 +64,10 @@ export function buildTargetTimeoutRunner(deps: {
     let onParentHedgeAbort: (() => void) | null = null;
     if (parentHedgeSignal) {
       if (parentHedgeSignal.aborted) {
-        timeoutController.abort(new Error("hedge-cancelled"));
+        timeoutController.abort(new Error(COMBO_HEDGE_CANCELLED_REASON));
       } else {
         onParentHedgeAbort = () => {
-          timeoutController.abort(new Error("hedge-cancelled"));
+          timeoutController.abort(new Error(COMBO_HEDGE_CANCELLED_REASON));
         };
         parentHedgeSignal.addEventListener("abort", onParentHedgeAbort, { once: true });
       }
