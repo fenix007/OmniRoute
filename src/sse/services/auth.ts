@@ -28,6 +28,7 @@ import {
   hasPerModelQuota,
   getRuntimeProviderProfile,
   recordModelLockoutFailure,
+  isProviderModelUnsupported400,
 } from "@omniroute/open-sse/services/accountFallback.ts";
 import { isLocalProvider } from "@omniroute/open-sse/config/providerRegistry.ts";
 import { COOLDOWN_MS, RateLimitReason } from "@omniroute/open-sse/config/constants.ts";
@@ -1955,6 +1956,26 @@ export async function markAccountUnavailable(
           cooldownMs: new Date(scopeRateLimitedUntil).getTime() - Date.now(),
         };
       }
+    }
+
+    // #10460: model-unsupported 400 — the PROVIDER does not serve this model, not
+    // this account. Cooling down the account and rotating to the next one wastes an
+    // upstream call because all accounts share the same model catalog. Return
+    // shouldFallback: false so the error propagates to the combo layer, which already
+    // has isModelScoped400() (combo.ts:1827) to advance to the next combo target.
+    // Uses isProviderModelUnsupported400() — the SAME disambiguation
+    // (AUTH_CREDENTIAL_ERROR_PATTERNS exclusion) checkFallbackError's 400 branch
+    // applies, narrowed further to exclude the broader/ambiguous
+    // MODEL_ACCESS_DENIED_PATTERNS access-/permission-phrased matches (e.g. "does not
+    // have permission to access this model"), which can be an ACCOUNT-scoped
+    // entitlement gap (PRO vs free tier) rather than a provider-wide unsupported
+    // model — those must keep rotating to other accounts normally.
+    if (isProviderModelUnsupported400(status, errorText)) {
+      log.info(
+        "AUTH",
+        `${connectionId.slice(0, 8)} provider_model_unsupported 400 (${provider}/${model ?? "n/a"}) — skipping account cooldown, letting combo advance`
+      );
+      return { shouldFallback: false, cooldownMs: 0, reason: "provider_model_unsupported" };
     }
 
     const effectiveProviderProfile =
