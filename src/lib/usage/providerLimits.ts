@@ -13,7 +13,12 @@ import {
 } from "@/lib/localDb";
 import { syncToCloud } from "@/lib/cloudSync";
 import { setQuotaCache } from "@/domain/quotaCache";
-import { buildClaudeExtraUsageConnectionUpdate } from "@/lib/providers/claudeExtraUsage";
+import {
+  buildClaudeExtraUsageConnectionUpdate,
+  CLAUDE_EXTRA_USAGE_ERROR_SOURCE,
+  isClaudeExtraUsageBlockEnabled,
+  isClaudeExtraUsageQueued,
+} from "@/lib/providers/claudeExtraUsage";
 import { clearRecoveredProviderState } from "@/sse/services/auth";
 import { getMachineId } from "@/shared/utils/machine";
 import { USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
@@ -426,12 +431,67 @@ export function hasUsableQuota(usage: JsonRecord): boolean {
   return false;
 }
 
+// A window "still blocks" recovery when it governs quota and is either still
+// exhausted with a real reset that hasn't passed yet, or exhausted with no
+// parseable real reset at all (unknown-reset windows stay locked, matching
+// the pre-existing kimi-coding partial-refresh semantics).
+function windowStillExhaustedAfterRealReset(value: unknown, nowMs: number): boolean {
+  if (!isRecord(value)) return false;
+  if (value.unlimited === true) return false;
+  const remaining =
+    typeof value.remaining === "number"
+      ? value.remaining
+      : typeof value.remainingPercentage === "number"
+        ? value.remainingPercentage
+        : null;
+  if (remaining !== null && remaining > 0) return false;
+  if (value.resetAt == null) return true;
+  const resetMs = Date.parse(String(value.resetAt));
+  if (Number.isNaN(resetMs)) return true;
+  return resetMs > nowMs;
+}
+
 export async function maybeClearRecoveredQuotaState(
   connection: ProviderConnectionLike,
   usage: JsonRecord
 ): Promise<ProviderConnectionLike> {
   if (!hasUsableQuota(usage)) return connection;
   if (isTerminalStatusForQuotaRecovery(connection.testStatus)) return connection;
+  if (connection.lastErrorType === "quota_exhausted") {
+    if (
+      connection.lastErrorSource === CLAUDE_EXTRA_USAGE_ERROR_SOURCE &&
+      isClaudeExtraUsageBlockEnabled(connection.provider, connection.providerSpecificData) &&
+      isClaudeExtraUsageQueued(usage)
+    ) {
+      // Claude's pay-as-you-go extra-usage block is orthogonal to the
+      // session/weekly quota windows checked below: the upstream can report a
+      // fully recovered quota window while extraUsage.queued is still true.
+      // Only syncClaudeExtraUsageStateIfNeeded (buildClaudeExtraUsageConnectionUpdate)
+      // owns clearing this specific state — the general window-recovery logic
+      // below must not release it just because some quota window looks fresh.
+      return connection;
+    }
+
+    const quotas = usage?.quotas;
+    if (isRecord(quotas)) {
+      // Honor the REAL per-window resetAt from the freshly fetched quota
+      // instead of the synthetic cooldown persisted at failure time (e.g.
+      // Claude's flat 1h SUBSCRIPTION_QUOTA_COOLDOWN_MS when no upstream
+      // reset was parseable). Only stay locked if some window that governs
+      // this connection's quota is still demonstrably exhausted.
+      const anyStillBlocking = Object.values(quotas).some((value) =>
+        windowStillExhaustedAfterRealReset(value, Date.now())
+      );
+      if (anyStillBlocking) return connection;
+    } else if (
+      connection.rateLimitedUntil &&
+      new Date(connection.rateLimitedUntil).getTime() > Date.now()
+    ) {
+      // No quota object at all (degraded/failed fetch shape) — fall back to
+      // the previous synthetic-cooldown guard.
+      return connection;
+    }
+  }
 
   const hasTransientState =
     connection.testStatus === "unavailable" ||
