@@ -22,6 +22,18 @@ this fork instead of `diegosouzapw/omniroute`.
 | fix(api): retry Codex image generation by account                        | #8307 (open)    | port of the functional subset; the model-access matcher also unwraps raw JSON error strings (3.8.48 codex handler has no sanitizeImageProviderError) |
 | ci(fork): fork-image-fenix007.yml                                        | —               | fork-only                                                                                                                                            |
 
+Tier-1 upstream fixes ported from release/v3.8.50 (fork.2):
+
+| Commit                                                                        | Upstream PR | What                                                                                         |
+| ----------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------- |
+| fix(codex): surface capacity errors embedded in 200-OK SSE streams            | #6710       | cherry-pick (trivial conflicts)                                                              |
+| fix(codex): non-stream chat 502 "Response body is already used"               | #7526       | cherry-pick clean                                                                            |
+| fix(codex): check content-type before touching response.body in peek          | #7570       | cherry-pick clean                                                                            |
+| fix(sse): preserve parallel_tool_calls for GPT-5.6 under Codex Responses Lite | #7957       | cherry-pick clean                                                                            |
+| fix(sse): bound Codex SSE peek read with per-read timeout                     | #8043       | cherry-pick clean                                                                            |
+| fix(images): refresh OAuth and rotate accounts on 401                         | #9231       | adapted: merged with our #8307 port (fallback wrapper first, codex model-access retry after) |
+| fix(settings,auth): debugMode false + no rotation on model-unsupported 400    | #10525      | cherry-pick + carried the settings.ts debugMode default flip the squash relied on            |
+
 ## Releasing an image
 
 ```bash
