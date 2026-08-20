@@ -41,7 +41,11 @@ import {
   extractComfyOutputFiles,
 } from "../utils/comfyuiClient.ts";
 import { fetchRemoteImage } from "@/shared/network/remoteImageFetch";
-import { FetchTimeoutError, fetchWithTimeout, getConfiguredTimeout } from "@/shared/utils/fetchTimeout";
+import {
+  FetchTimeoutError,
+  fetchWithTimeout,
+  getConfiguredTimeout,
+} from "@/shared/utils/fetchTimeout";
 import { sanitizeErrorMessage, sanitizeUpstreamDetails } from "../utils/error.ts";
 
 // --- Per-provider handlers (extracted to co-located files in PR-#4582-batch) ---
@@ -62,7 +66,10 @@ import {
   CHATGPT_WEB_IMAGE_ID_RE,
 } from "./imageGeneration/providers/chatgptWeb.ts";
 import { handleNvidiaNimImageGeneration } from "./imageGeneration/providers/nvidiaNim.ts";
+import { saveImageErrorResult, saveImageSuccessResult } from "./imageGeneration/callLogResult.ts";
 
+// Re-export so route-level fallbacks can log per-connection results.
+export { saveImageErrorResult, saveImageSuccessResult };
 
 interface KieImageOptions {
   model: string;
@@ -128,9 +135,7 @@ const IMAGE_ASPECT_RATIO_PATTERN = /^\d+:\d+$/;
  */
 export function resolveImageBaseUrl(
   credentials:
-    | { baseUrl?: unknown; providerSpecificData?: { baseUrl?: unknown } | null }
-    | null
-    | undefined,
+    { baseUrl?: unknown; providerSpecificData?: { baseUrl?: unknown } | null } | null | undefined,
   fallback: string,
   endpoint: "generations" | "edits" = "generations"
 ): string {
@@ -1107,7 +1112,10 @@ export async function handleOpenAIImageEdit({
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
   if (log) {
-    log.info("IMAGE", `${provider}/${model} (edit) | prompt: "${prompt.slice(0, 60)}..." -> ${url}`);
+    log.info(
+      "IMAGE",
+      `${provider}/${model} (edit) | prompt: "${prompt.slice(0, 60)}..." -> ${url}`
+    );
   }
 
   const result = await fetchImageEndpoint(
@@ -2223,6 +2231,7 @@ async function handleCodexImageGeneration({
     return saveImageErrorResult({
       provider,
       model,
+      connectionId: credentials?.connectionId,
       status: 400,
       startTime,
       error: "Prompt is required for Codex image generation",
@@ -2243,6 +2252,7 @@ async function handleCodexImageGeneration({
     return saveImageErrorResult({
       provider,
       model,
+      connectionId: credentials?.connectionId,
       status: 401,
       startTime,
       error: "Codex credentials missing accessToken — reconnect the Codex provider",
@@ -2318,6 +2328,7 @@ async function handleCodexImageGeneration({
         error: {
           provider,
           model,
+          connectionId: credentials?.connectionId,
           status: 502,
           startTime,
           error: `Image provider error: ${(err as Error).message}`,
@@ -2335,6 +2346,7 @@ async function handleCodexImageGeneration({
         error: {
           provider,
           model,
+          connectionId: credentials?.connectionId,
           status: response.status,
           startTime,
           error: errorText,
@@ -2351,6 +2363,7 @@ async function handleCodexImageGeneration({
         error: {
           provider,
           model,
+          connectionId: credentials?.connectionId,
           status: 502,
           startTime,
           error:
@@ -2389,59 +2402,12 @@ async function handleCodexImageGeneration({
   return saveImageSuccessResult({
     provider,
     model,
+    connectionId: credentials?.connectionId,
     startTime,
     requestBody: upstreamBody,
     responseBody: { images_count: data.length },
     images: data,
   });
-}
-
-export function saveImageSuccessResult({
-  provider,
-  model,
-  startTime,
-  requestBody = null,
-  responseBody = null,
-  created = null,
-  images,
-}) {
-  saveCallLog({
-    method: "POST",
-    path: "/v1/images/generations",
-    status: 200,
-    model: `${provider}/${model}`,
-    provider,
-    duration: Date.now() - startTime,
-    requestBody,
-    responseBody,
-  }).catch(() => {});
-
-  return {
-    success: true,
-    data: {
-      created: created || Math.floor(Date.now() / 1000),
-      data: images,
-    },
-  };
-}
-
-export function saveImageErrorResult({ provider, model, status, startTime, error, requestBody = null }) {
-  saveCallLog({
-    method: "POST",
-    path: "/v1/images/generations",
-    status,
-    model: `${provider}/${model}`,
-    provider,
-    duration: Date.now() - startTime,
-    error: typeof error === "string" ? error.slice(0, 500) : String(error).slice(0, 500),
-    requestBody,
-  }).catch(() => {});
-
-  return {
-    success: false,
-    status,
-    error,
-  };
 }
 
 /**
