@@ -67,6 +67,17 @@ Sources: `open-sse/utils/keepaliveThreshold.ts`, `open-sse/utils/earlyStreamKeep
 `tests/unit/keepalive-threshold.test.ts`, `tests/unit/earlyStreamKeepalive.test.ts`,
 `tests/unit/resolve-stream-flag.test.ts`.
 
+Quality gates (fork.5):
+
+`check:complexity-ratchets` was red on `stable` from fork.3 onward. Measured per tag:
+the cyclomatic baseline (2056) was already 2 behind on pristine `v3.8.48`, and the
+ported patches added +1 in fork.2 and +1 in fork.3; the cognitive baseline (890) matched
+the base and grew +3 / +2 across the same two tags. fork.3 rebaselined `check:file-size`
+for these ports but not the two complexity ratchets, so both were rebaselined to the
+measured 2060 / 895 with the per-tag evidence recorded in
+`config/quality/complexity-baseline.json` and `config/quality/quality-baseline.json`.
+The fork.4 patch set itself added zero violations.
+
 Evaluated and deliberately NOT ported:
 
 | Upstream PR                                                              | Why not                                                                                                                                                            |
