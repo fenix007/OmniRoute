@@ -34,6 +34,27 @@ Tier-1 upstream fixes ported from release/v3.8.50 (fork.2):
 | fix(images): refresh OAuth and rotate accounts on 401                         | #9231       | adapted: merged with our #8307 port (fallback wrapper first, codex model-access retry after) |
 | fix(settings,auth): debugMode false + no rotation on model-unsupported 400    | #10525      | cherry-pick + carried the settings.ts debugMode default flip the squash relied on            |
 
+Tier-2 combo resilience + Tier-3 quota/limiter fixes ported from release/v3.8.50 (fork.3):
+
+| Commit                                                                         | Upstream PR  | What                                                                                                                                                                             |
+| ------------------------------------------------------------------------------ | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fix(combo): recover provider circuit breaker from HALF_OPEN on success         | #9207        | adapted: kept this base's `getProviderConnections` import and file-size baseline                                                                                                 |
+| fix(rate-limit): patch Bottleneck doExpire capacity leak                       | #9328        | cherry-pick (baseline only)                                                                                                                                                      |
+| fix(combo): network errors must not trip provider circuit breaker              | #9342        | adapted: the breaker guard lives inline in chat.ts here (upstream extracted chatPredicates.ts later)                                                                             |
+| fix(rate-limit): separate queue wait from execution timeout                    | #9164        | partial: classifier + combo leg only; the connection-cooldown leg rides on a later 3.8.50 predicate refactor                                                                     |
+| fix(combo): clear LKGP pin when its target fails                               | #10034       | adapted: took `clearLKGP` only, plus a matching `invalidateCachedLKGP` in readCache (that helper landed in the #10137 commit)                                                    |
+| fix(combo): isolate session stickiness by combo                                | #10137       | adapted: namespaced BOTH call sites (this base still has the main path in combo.ts, not targetResolution.ts)                                                                     |
+| fix(combo): make failoverBeforeRetry actually skip the same-model retry        | #10217       | cherry-pick clean                                                                                                                                                                |
+| fix(account-fallback): classify 'insufficient credits' as credits-exhausted    | #10116       | cherry-pick clean                                                                                                                                                                |
+| fix(sse): clear quota_exhausted cooldown when the real window recovers         | #10534       | cherry-pick clean                                                                                                                                                                |
+| fix(resilience): retry Codex pre-output transport failures on the same account | #9708/#10792 | adapted: replaced the 3.8.50 `connectionFilterStatus` map with a transport-cooled id set, dropped the managed-lease call and the lease/occupancy locals this base has no use for |
+
+Evaluated and deliberately NOT ported:
+
+| Upstream PR                                                              | Why not                                                                                                                                                            |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| #10744 (fail over streaming responses terminated with empty completions) | needs the `openAi` SSE-lifecycle tracker from the #7285 rework; validateQuality.ts has diverged by ~357/73 lines, so porting it would drag a large slice of 3.8.50 |
+
 ## Releasing an image
 
 ```bash
