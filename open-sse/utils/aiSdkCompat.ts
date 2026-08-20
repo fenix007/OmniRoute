@@ -27,8 +27,24 @@ function normalizeResolveStreamFlagOptions(optionsOrUserAgent?: unknown): Resolv
   return { userAgent: optionsOrUserAgent };
 }
 
+const STREAM_DEFAULT_MODE_ENV_VAR = "OMNIROUTE_STREAM_DEFAULT_MODE";
+
+/**
+ * Normalizes the per-key stream default, falling back to
+ * {@link STREAM_DEFAULT_MODE_ENV_VAR} when the key does not set one.
+ *
+ * The legacy default routes a client that omits `stream` and sends a wildcard
+ * Accept header (python-httpx, most machine clients) through the streaming path.
+ * There the response is committed as a 200 event-stream, so an upstream failure
+ * arrives as an in-band error frame the client reads as an empty success rather
+ * than a retryable status. The env var lets a deployment flip that default for
+ * every key at once instead of patching each key individually.
+ */
 export function normalizeStreamDefaultMode(value: unknown): StreamDefaultMode {
-  return value === "json" ? "json" : "legacy";
+  if (value === "json") return "json";
+  if (value === "legacy") return "legacy";
+
+  return process.env[STREAM_DEFAULT_MODE_ENV_VAR] === "json" ? "json" : "legacy";
 }
 
 /**
