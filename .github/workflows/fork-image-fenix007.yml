@@ -3,6 +3,10 @@ name: Fork Image (fenix007)
 # Builds the stable-branch fork image (v3.8.48 + our patch set) and publishes it
 # to GHCR. Tag scheme deliberately avoids the upstream "v*" pattern so the
 # inherited release workflows (docker-publish, electron-release) never fire.
+#
+# Platforms build in separate jobs (like upstream docker-publish.yml): the
+# Dockerfile's shared apt cache mounts deadlock when two platforms build
+# concurrently in one buildx invocation.
 on:
   push:
     branches: [stable]
@@ -18,9 +22,18 @@ env:
 
 jobs:
   build:
-    name: Build and Push Fork Image
+    name: Build ${{ matrix.arch }}
     if: github.repository == 'fenix007/OmniRoute'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
@@ -30,8 +43,60 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # target mirrors upstream docker-publish.yml's main image (plain tag =
+      # runner-base; the -web variant is not built here).
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runner-base
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          tags: ${{ env.IMAGE_NAME }}
+          cache-from: type=gha,scope=fork-${{ matrix.arch }}
+          cache-to: type=gha,scope=fork-${{ matrix.arch }},mode=max
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v6
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge manifest and tag
+    if: github.repository == 'fenix007/OmniRoute'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -59,16 +124,18 @@ jobs:
             org.opencontainers.image.source=https://github.com/fenix007/OmniRoute
             org.opencontainers.image.licenses=MIT
 
-      # target/platforms mirror upstream docker-publish.yml's main image
-      # (plain tag = runner-base; the -web variant is not built here).
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          target: runner-base
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          tags=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tags+=(-t "$tag")
+          done <<< "$DOCKER_METADATA_OUTPUT_TAGS"
+          refs=()
+          for d in *; do
+            refs+=("${IMAGE_NAME}@sha256:${d}")
+          done
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+
+      - name: Inspect image
+        run: docker buildx imagetools inspect "${IMAGE_NAME}:${{ steps.meta.outputs.version }}"
