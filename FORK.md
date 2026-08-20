@@ -49,6 +49,24 @@ Tier-2 combo resilience + Tier-3 quota/limiter fixes ported from release/v3.8.50
 | fix(sse): clear quota_exhausted cooldown when the real window recovers         | #10534       | cherry-pick clean                                                                                                                                                                |
 | fix(resilience): retry Codex pre-output transport failures on the same account | #9708/#10792 | adapted: replaced the 3.8.50 `connectionFilterStatus` map with a transport-cooled id set, dropped the managed-lease call and the lease/occupancy locals this base has no use for |
 
+Owned fixes for upstream error-status masking (fork.4):
+
+A provider failure was reaching clients as HTTP 200 with the error buried in the body,
+so every client whose retry logic keys on 429/5xx treated a transient overload as a
+terminal success. Two independent layers caused it, and both are fixed here.
+
+| Change                                                                    | Upstream PR | What                                                                                                                                                                                                             |
+| ------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fix(sse): widen the keepalive commit window so failures keep their status | —           | fork-only: `resolveKeepaliveThreshold` default 2000 → 4000 ms (`OMNIROUTE_KEEPALIVE_THRESHOLD_MS`, capped at 4500 to stay under reqwest's ~5s idle read). Handler failures inside the window keep a real status. |
+| fix(sse): carry the upstream status in the in-band error frame            | —           | fork-only: `annotateErrorFrameStatus` adds `error.status` when the stream already committed to 200 — the only signal a client has left to tell a retryable 5xx/429 from a terminal 4xx.                          |
+| fix(sse): emit Anthropic-shaped error frames on /v1/messages              | —           | fork-only: `buildErrorFrameData` + `errorFrameFormat: "anthropic"`. Claude clients branch on `error.type` and ignore an OpenAI-shaped frame, so a failure previously read as a stream that simply ended.         |
+| feat(compat): global stream default for machine clients                   | —           | fork-only: `OMNIROUTE_STREAM_DEFAULT_MODE=json` applies the existing per-key `streamDefaultMode` fallback deployment-wide, so wildcard-Accept clients that omit `stream` take the status-preserving JSON path.   |
+
+Sources: `open-sse/utils/keepaliveThreshold.ts`, `open-sse/utils/earlyStreamKeepalive.ts`,
+`open-sse/utils/aiSdkCompat.ts`, `src/app/api/v1/messages/route.ts`. Tests:
+`tests/unit/keepalive-threshold.test.ts`, `tests/unit/earlyStreamKeepalive.test.ts`,
+`tests/unit/resolve-stream-flag.test.ts`.
+
 Evaluated and deliberately NOT ported:
 
 | Upstream PR                                                              | Why not                                                                                                                                                            |
