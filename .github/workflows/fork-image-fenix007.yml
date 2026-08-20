@@ -26,6 +26,7 @@ jobs:
     if: github.repository == 'fenix007/OmniRoute'
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: amd64
