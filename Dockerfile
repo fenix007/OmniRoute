@@ -1,5 +1,9 @@
 # ── Common base with runtime deps ──────────────────────────────────────────
-FROM node:24-trixie-slim AS base
+# Pinned to the node version upstream built the working v3.8.48 images with
+# (NODE_VERSION=24.18.0 in diegosouzapw/omniroute:3.8.48). Newer node:24 minors
+# SIGABRT better-sqlite3 12.11.1 (this base's lockfile) inside the Next.js
+# build worker on both amd64 and arm64.
+FROM node:24.18.0-trixie-slim AS base
 WORKDIR /app
 
 # `apt-get upgrade` pulls the security-patched versions of the Debian (trixie)
