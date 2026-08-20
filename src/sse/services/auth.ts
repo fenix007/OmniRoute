@@ -38,6 +38,10 @@ import {
 } from "@omniroute/open-sse/services/quotaPreflight.ts";
 import { resolveResilienceSettings } from "@/lib/resilience/settings";
 import { resolveModelLockoutSettings } from "@/lib/resilience/modelLockoutSettings";
+import {
+  buildMixedAvailabilityError,
+  isTransportCooldownErrorCode,
+} from "../services/sameAccountTransportRetry";
 import { syncHealthFromDB, type KeyHealth } from "@omniroute/open-sse/services/apiKeyRotator.ts";
 import {
   classifyProviderError,
@@ -1222,6 +1226,9 @@ export async function getProviderCredentials(
 
     let modelLockedCount = 0;
     let familyLockedCount = 0;
+    // #9708: connections held out only by a transport cooldown, so an
+    // all-quota-exhausted verdict can be told apart from a transient one.
+    const transportCooledIds = new Set<string>();
     // Filter out unavailable accounts and excluded connection
     const availableConnections = connections.filter((c) => {
       if (excludedConnectionIds.has(c.id)) return false;
@@ -1229,7 +1236,10 @@ export async function getProviderCredentials(
         return false;
       }
       if (!allowSuppressedConnections) {
-        if (!allowRateLimitedConnections && isAccountUnavailable(c.rateLimitedUntil)) return false;
+        if (!allowRateLimitedConnections && isAccountUnavailable(c.rateLimitedUntil)) {
+          if (isTransportCooldownErrorCode(c.errorCode)) transportCooledIds.add(c.id);
+          return false;
+        }
         if (isTerminalConnectionStatus(c)) return false;
         if (provider === "codex" && isCodexScopeUnavailable(c, requestedModel)) return false;
         // Per-model lockout: if this specific model/family is locked on this connection, skip it
@@ -1423,6 +1433,29 @@ export async function getProviderCredentials(
     }
 
     if (policyEligibleConnections.length === 0 && availableConnections.length > 0) {
+      const transportUnavailable = connections.filter((connection) =>
+        transportCooledIds.has(connection.id)
+      );
+      if (transportUnavailable.length > 0) {
+        const mixed = buildMixedAvailabilityError({
+          provider,
+          quotaFilteredCount: blockedByPolicy.length,
+          transportUnavailableCount: transportUnavailable.length,
+          transportStatus: Number(transportUnavailable[0]?.errorCode) || 503,
+        });
+        const retryAfter =
+          getEarliestFutureDate(
+            transportUnavailable.map((connection) => connection.rateLimitedUntil || null)
+          ) || new Date(Date.now() + 3000).toISOString();
+        return {
+          allRateLimited: true,
+          retryAfter,
+          retryAfterHuman: formatRetryAfter(retryAfter),
+          lastError: mixed.lastError,
+          lastErrorCode: mixed.lastErrorCode,
+        };
+      }
+
       const earliestResetAt = getEarliestFutureDate(blockedByPolicy.map((entry) => entry.resetAt));
       const earliestResetMs = parseFutureDateMs(earliestResetAt);
 
@@ -1483,8 +1516,7 @@ export async function getProviderCredentials(
       { fallbackStrategy?: string; stickyRoundRobinLimit?: number }
     >;
     const providerOverride = providerStrategyOverrides[resolvedId] || {};
-    const strategy =
-      providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
+    const strategy = providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
 
     let connection;
     const affinityConnection = await selectSessionAffinityConnection(

@@ -131,6 +131,10 @@ import {
   resolveCooldownAwareRetrySettings,
   waitForCooldownAwareRetry,
 } from "../services/cooldownAwareRetry";
+import {
+  shouldRetrySameAccountTransport,
+  sameAccountTransportRetryDelayMs,
+} from "../services/sameAccountTransportRetry";
 import { constrainConnectionsToQuota, resolveQuotaKeyScope } from "../../lib/quota/quotaKey";
 import { checkConnectionCapacity } from "../utils/backpressure";
 
@@ -1215,6 +1219,7 @@ async function handleSingleModelChat(
   // re-attempt to exactly one for the whole request. Declared outside both retry
   // loops so it can never reset and loop.
   let streamEarlyEofRetries = 0;
+  const sameAccountTransportRetries = new Map<string, number>();
 
   requestAttemptLoop: while (true) {
     const excludedConnectionIds = new Set<string>();
@@ -1732,6 +1737,35 @@ async function handleSingleModelChat(
         ) {
           markAccountExhaustedFrom429(credentials.connectionId, provider);
         }
+      }
+
+      // #9708: retry a retryable pre-output transport failure once on the same
+      // account (jittered 2-3s) before cooling the connection. A first 503/507
+      // must not rotate away from a still-healthy Codex prompt-cache partition.
+      const transportAttempts = sameAccountTransportRetries.get(credentials.connectionId) || 0;
+      if (
+        shouldRetrySameAccountTransport({
+          status: result.status,
+          errorText: errorStr,
+          errorCode: result.errorCode,
+          errorType: result.errorType,
+          attempt: transportAttempts,
+          hasForcedConnection,
+        })
+      ) {
+        sameAccountTransportRetries.set(credentials.connectionId, transportAttempts + 1);
+        const waitMs = sameAccountTransportRetryDelayMs();
+        log.warn(
+          "RETRY",
+          `${provider}/${model} retryable pre-output ${result.status} — retrying same account once after ${waitMs}ms`
+        );
+        const completed = await waitForCooldownAwareRetry(waitMs, requestSignal);
+        if (!completed) {
+          releaseOAuthSession();
+          return errorResponse(499, "Request aborted");
+        }
+        preselectedCredentials = credentials;
+        continue;
       }
 
       // 8. Fallback to next account
