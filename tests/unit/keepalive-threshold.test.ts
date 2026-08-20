@@ -12,26 +12,26 @@ import {
 } from "../../open-sse/utils/keepaliveThreshold.ts";
 
 describe("resolveKeepaliveThreshold", () => {
-  it("returns 2000ms default for undefined model", () => {
-    assert.equal(resolveKeepaliveThreshold(undefined), 2000);
+  it("returns the 4000ms default for undefined model", () => {
+    assert.equal(resolveKeepaliveThreshold(undefined), 4000);
   });
 
-  it("returns 2000ms default for null model", () => {
-    assert.equal(resolveKeepaliveThreshold(null), 2000);
+  it("returns the 4000ms default for null model", () => {
+    assert.equal(resolveKeepaliveThreshold(null), 4000);
   });
 
-  it("returns 2000ms default for empty string", () => {
-    assert.equal(resolveKeepaliveThreshold(""), 2000);
+  it("returns the 4000ms default for empty string", () => {
+    assert.equal(resolveKeepaliveThreshold(""), 4000);
   });
 
-  it("returns 2000ms default for model without prefix", () => {
-    assert.equal(resolveKeepaliveThreshold("gpt-4"), 2000);
+  it("returns the 4000ms default for model without prefix", () => {
+    assert.equal(resolveKeepaliveThreshold("gpt-4"), 4000);
   });
 
-  it("returns 2000ms default for normal API-key provider", () => {
-    assert.equal(resolveKeepaliveThreshold("openai/gpt-4"), 2000);
-    assert.equal(resolveKeepaliveThreshold("anthropic/claude-sonnet-4"), 2000);
-    assert.equal(resolveKeepaliveThreshold("deepseek/deepseek-chat"), 2000);
+  it("returns the 4000ms default for normal API-key provider", () => {
+    assert.equal(resolveKeepaliveThreshold("openai/gpt-4"), 4000);
+    assert.equal(resolveKeepaliveThreshold("anthropic/claude-sonnet-4"), 4000);
+    assert.equal(resolveKeepaliveThreshold("deepseek/deepseek-chat"), 4000);
   });
 
   it("returns 15000ms for anonymous fallback provider (pollinations)", () => {
@@ -71,5 +71,53 @@ describe("resolveKeepaliveThreshold", () => {
     assert.ok(!SLOW_KEEPALIVE_PROVIDERS.has("openai"));
     assert.ok(!SLOW_KEEPALIVE_PROVIDERS.has("anthropic"));
     assert.ok(!SLOW_KEEPALIVE_PROVIDERS.has("deepseek"));
+  });
+});
+
+describe("resolveKeepaliveThreshold default threshold", () => {
+  const ENV_VAR = "OMNIROUTE_KEEPALIVE_THRESHOLD_MS";
+
+  function withEnv(value: string | undefined, fn: () => void) {
+    const previous = process.env[ENV_VAR];
+    if (value === undefined) delete process.env[ENV_VAR];
+    else process.env[ENV_VAR] = value;
+    try {
+      fn();
+    } finally {
+      if (previous === undefined) delete process.env[ENV_VAR];
+      else process.env[ENV_VAR] = previous;
+    }
+  }
+
+  it("defaults to 4000ms so a failing handler can still set a real HTTP status", () => {
+    withEnv(undefined, () => {
+      assert.equal(resolveKeepaliveThreshold("codex/gpt-5.6-sol"), 4000);
+      assert.equal(resolveKeepaliveThreshold(undefined), 4000);
+    });
+  });
+
+  it("honors the env override, including a revert to the historical 2000ms", () => {
+    withEnv("2000", () => {
+      assert.equal(resolveKeepaliveThreshold("codex/gpt-5.6-sol"), 2000);
+    });
+    withEnv("0", () => {
+      assert.equal(resolveKeepaliveThreshold("openai/gpt-4"), 0);
+    });
+  });
+
+  it("ignores unusable or unsafe overrides", () => {
+    // Above the reqwest idle-read timeout the keepalive exists to beat, negative,
+    // and non-numeric values all fall back to the built-in default.
+    for (const raw of ["9000", "-1", "abc", ""]) {
+      withEnv(raw, () => {
+        assert.equal(resolveKeepaliveThreshold("codex/gpt-5.6-sol"), 4000);
+      });
+    }
+  });
+
+  it("keeps the slow-provider threshold independent of the override", () => {
+    withEnv("2000", () => {
+      assert.equal(resolveKeepaliveThreshold("chatgpt-web/gpt-5"), 15000);
+    });
   });
 });
