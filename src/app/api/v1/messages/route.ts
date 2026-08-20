@@ -58,7 +58,12 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
   if (accept.includes("text/event-stream")) {
     let model;
     try {
-      const body = preParsedBody ?? (await request.clone().json().catch(() => null));
+      const body =
+        preParsedBody ??
+        (await request
+          .clone()
+          .json()
+          .catch(() => null));
       model = body?.model;
     } catch {
       // body unavailable / non-JSON — fall back to the default keepalive threshold
@@ -67,6 +72,9 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
       signal: request.signal,
       thresholdMs: resolveKeepaliveThreshold(model),
       keepaliveFrame: ANTHROPIC_PING_FRAME,
+      // Claude clients branch on `error.type` inside the stream; an OpenAI-shaped
+      // error frame is ignored, so a failure would read as a stream that just ended.
+      errorFrameFormat: "anthropic",
     });
   }
   return await handleChat(request, null, preParsedBody);

@@ -69,60 +69,71 @@ test("slow path forwards SSE stream content", async () => {
 
 // ── Upstream error with 0 bytes → error frame emitted ─────────────────────
 
-test("upstream error with 0 bytes forwarded emits error frame", { skip: true, todo: "ReadableStream error simulation hangs in Node.js test runner" }, async () => {
-  // Use a TransformStream where we error the writable side
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  const writer = writable.getWriter();
-  writer.releaseLock();
-  writable.abort(new Error("upstream died")).catch(() => {});
+test(
+  "upstream error with 0 bytes forwarded emits error frame",
+  { skip: true, todo: "ReadableStream error simulation hangs in Node.js test runner" },
+  async () => {
+    // Use a TransformStream where we error the writable side
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = writable.getWriter();
+    writer.releaseLock();
+    writable.abort(new Error("upstream died")).catch(() => {});
 
-  const response = new Response(readable, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
+    const response = new Response(readable, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
 
-  const delayed = new Promise<Response>((resolve) => setTimeout(() => resolve(response), 10));
+    const delayed = new Promise<Response>((resolve) => setTimeout(() => resolve(response), 10));
 
-  const result = await withEarlyStreamKeepalive(delayed, {
-    thresholdMs: 10,
-    intervalMs: 50,
-  });
+    const result = await withEarlyStreamKeepalive(delayed, {
+      thresholdMs: 10,
+      intervalMs: 50,
+    });
 
-  assert.equal(result.status, 200);
-  const text = await drainStream(result.body!);
-  assert.ok(text.includes("Upstream stream failed before completion"), "should contain error frame");
-});
+    assert.equal(result.status, 200);
+    const text = await drainStream(result.body!);
+    assert.ok(
+      text.includes("Upstream stream failed before completion"),
+      "should contain error frame"
+    );
+  }
+);
 
 // ── Upstream error after partial content → NO error frame ──────────────────
 
-test("upstream error after partial content does NOT emit error frame", { skip: true, todo: "ReadableStream error simulation hangs in Node.js test runner" }, async () => {
-  // Use a TransformStream where we send one chunk then error
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  const writer = writable.getWriter();
-  await writer.write(ENCODER.encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
-  writer.releaseLock();
-  writable.abort(new Error("upstream died mid-stream")).catch(() => {});
+test(
+  "upstream error after partial content does NOT emit error frame",
+  { skip: true, todo: "ReadableStream error simulation hangs in Node.js test runner" },
+  async () => {
+    // Use a TransformStream where we send one chunk then error
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = writable.getWriter();
+    await writer.write(ENCODER.encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+    writer.releaseLock();
+    writable.abort(new Error("upstream died mid-stream")).catch(() => {});
 
-  const response = new Response(readable, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
+    const response = new Response(readable, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
 
-  const delayed = new Promise<Response>((resolve) => setTimeout(() => resolve(response), 10));
+    const delayed = new Promise<Response>((resolve) => setTimeout(() => resolve(response), 10));
 
-  const result = await withEarlyStreamKeepalive(delayed, {
-    thresholdMs: 10,
-    intervalMs: 50,
-  });
+    const result = await withEarlyStreamKeepalive(delayed, {
+      thresholdMs: 10,
+      intervalMs: 50,
+    });
 
-  assert.equal(result.status, 200);
-  const text = await drainStream(result.body!);
-  assert.ok(text.includes("partial"), "should contain forwarded content");
-  assert.ok(
-    !text.includes("Upstream stream failed"),
-    "should NOT contain error frame after partial content"
-  );
-});
+    assert.equal(result.status, 200);
+    const text = await drainStream(result.body!);
+    assert.ok(text.includes("partial"), "should contain forwarded content");
+    assert.ok(
+      !text.includes("Upstream stream failed"),
+      "should NOT contain error frame after partial content"
+    );
+  }
+);
 
 // ── Handler rejection → error frame ───────────────────────────────────────
 
@@ -161,4 +172,133 @@ test("client abort stops keepalive and closes stream", async () => {
   const text = await drainStream(result.body!);
   // Should have received some keepalive frames then closed
   assert.ok(text.length >= 0, "stream should close on abort");
+});
+
+// ── Slow path: upstream status survives inside the committed 200 ───────────
+
+test("slow path in-band error frame carries the handler's HTTP status", async () => {
+  // OmniRoute relays provider overload as a JSON 502; once the keepalive stream has
+  // committed to 200 the status line is gone, so `error.status` is the only signal
+  // a client has left to tell a retryable failure from a terminal one.
+  const handler = new Promise<Response>((resolve) => {
+    setTimeout(
+      () =>
+        resolve(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "Our servers are currently overloaded. Please try again later.",
+                type: "server_error",
+                code: "bad_gateway",
+              },
+            }),
+            { status: 502, headers: { "Content-Type": "application/json" } }
+          )
+        ),
+      30
+    );
+  });
+
+  const result = await withEarlyStreamKeepalive(handler, { thresholdMs: 5, intervalMs: 250 });
+  assert.equal(result.status, 200);
+
+  const text = await drainStream(result.body!);
+  const frame = text.split("\n").find((line) => line.startsWith("data: "));
+  assert.ok(frame, "expected an in-band error frame");
+  const payload = JSON.parse(frame!.slice("data: ".length));
+  assert.equal(payload.error.status, 502);
+  assert.equal(payload.error.code, "bad_gateway");
+  assert.match(payload.error.message, /overloaded/);
+});
+
+test("annotateErrorFrameStatus leaves unparseable and pre-tagged payloads alone", async () => {
+  const { annotateErrorFrameStatus } = await import("../../open-sse/utils/earlyStreamKeepalive.ts");
+
+  // Not JSON — must reach the client verbatim.
+  assert.equal(annotateErrorFrameStatus("upstream exploded", 502), "upstream exploded");
+  // Already carries a status — never overwritten.
+  const tagged = JSON.stringify({ error: { message: "x", status: 429 } });
+  assert.equal(annotateErrorFrameStatus(tagged, 502), tagged);
+  // Success-shaped or statusless payloads are untouched.
+  const noError = JSON.stringify({ choices: [] });
+  assert.equal(annotateErrorFrameStatus(noError, 502), noError);
+  // Out-of-range statuses are not annotations worth making.
+  const body = JSON.stringify({ error: { message: "x" } });
+  assert.equal(annotateErrorFrameStatus(body, 200), body);
+});
+
+test("anthropic-format error frame is shaped for Claude clients", async () => {
+  const { buildErrorFrameData } = await import("../../open-sse/utils/earlyStreamKeepalive.ts");
+
+  const overload = JSON.stringify({
+    error: {
+      message: "Our servers are currently overloaded. Please try again later.",
+      type: "server_error",
+      code: "bad_gateway",
+    },
+  });
+
+  // A 502 capacity failure must arrive as `overloaded_error` — one of the two types
+  // Claude clients retry — with the top-level Anthropic error envelope.
+  const framed = JSON.parse(buildErrorFrameData(overload, 502, "anthropic"));
+  assert.equal(framed.type, "error");
+  assert.equal(framed.error.type, "overloaded_error");
+  assert.equal(framed.error.status, 502);
+  assert.match(framed.error.message, /overloaded/);
+
+  // Status-based mapping for the other cases clients branch on.
+  const pick = (status: number) =>
+    JSON.parse(
+      buildErrorFrameData(JSON.stringify({ error: { message: "x" } }), status, "anthropic")
+    ).error.type;
+  assert.equal(pick(429), "rate_limit_error");
+  assert.equal(pick(401), "authentication_error");
+  assert.equal(pick(400), "invalid_request_error");
+  assert.equal(pick(500), "api_error");
+
+  // A capacity message still maps to overloaded_error when the status is a bare 500.
+  const byMessage = JSON.parse(
+    buildErrorFrameData(
+      JSON.stringify({ error: { message: "Model is at capacity" } }),
+      500,
+      "anthropic"
+    )
+  );
+  assert.equal(byMessage.error.type, "overloaded_error");
+
+  // OpenAI format stays the default and keeps the original envelope.
+  const openai = JSON.parse(buildErrorFrameData(overload, 502));
+  assert.equal(openai.error.code, "bad_gateway");
+  assert.equal(openai.error.status, 502);
+  assert.equal(openai.type, undefined);
+});
+
+test("slow path emits the anthropic envelope when the route asks for it", async () => {
+  const handler = new Promise<Response>((resolve) => {
+    setTimeout(
+      () =>
+        resolve(
+          new Response(JSON.stringify({ error: { message: "Overloaded", type: "server_error" } }), {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          })
+        ),
+      30
+    );
+  });
+
+  const result = await withEarlyStreamKeepalive(handler, {
+    thresholdMs: 5,
+    intervalMs: 250,
+    errorFrameFormat: "anthropic",
+  });
+
+  const text = await drainStream(result.body!);
+  const frame = text
+    .split("\n")
+    .find((line) => line.startsWith("data: ") && line.includes("error"));
+  assert.ok(frame, "expected an anthropic error frame");
+  const payload = JSON.parse(frame!.slice("data: ".length));
+  assert.equal(payload.type, "error");
+  assert.equal(payload.error.type, "overloaded_error");
 });
