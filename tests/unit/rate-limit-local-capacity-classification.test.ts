@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { isLocalQueueCapacityErrorBody, isRequestScopedUpstreamFailure, shouldSkipConnDisable } =
+const { isLocalQueueCapacityErrorBody } =
   await import("../../open-sse/services/combo/comboPredicates.ts");
 const { handleComboChat } = await import("../../open-sse/services/combo.ts");
 
@@ -22,33 +22,18 @@ function createLog() {
   return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 }
 
-test("local queue capacity is request-scoped and never disables a healthy connection", () => {
-  assert.equal(
-    isRequestScopedUpstreamFailure({
-      code: "RATE_LIMIT_QUEUE_TIMEOUT",
-      type: "local_queue_capacity",
-    }),
-    true
-  );
-  assert.equal(
-    shouldSkipConnDisable(
-      {
-        status: 429,
-        errorCode: "RATE_LIMIT_QUEUE_TIMEOUT",
-        errorType: "local_queue_capacity",
-      },
-      false,
-      false,
-      "nvidia"
-    ),
-    true
-  );
+// This base has no request-scoped/connection-cooldown predicate machinery
+// (isRequestScopedUpstreamFailure, shouldSkipConnDisable arrived with a later
+// 3.8.50 refactor), so the ported fix covers the classifier plus the combo and
+// provider-breaker legs only.
+test("a local queue capacity body is classified as local capacity", () => {
   assert.equal(
     isLocalQueueCapacityErrorBody({
       error: { code: "RATE_LIMIT_QUEUE_TIMEOUT", type: "local_queue_capacity" },
     }),
     true
   );
+  assert.equal(isLocalQueueCapacityErrorBody({ error: { code: "rate_limit_exceeded" } }), false);
 });
 
 test("combo returns a local queue capacity response without retrying or rotating targets", async () => {

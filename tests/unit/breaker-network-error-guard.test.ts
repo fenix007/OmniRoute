@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shouldTripProviderBreakerForResult } from "../../src/sse/handlers/chatPredicates.ts";
+import fs from "node:fs";
 import {
   recordProviderFailure,
   clearProviderFailure,
@@ -13,61 +13,23 @@ import { PROVIDER_PROFILES } from "../../open-sse/config/constants.ts";
 // saw the request, so it may be perfectly healthy while only the network path is
 // broken (single-model path; the combo same-provider dead-proxy case is #8376's
 // contract and stays untouched).
-test("proxy_unreachable errorCode does NOT trip provider breaker", () => {
-  const result = shouldTripProviderBreakerForResult(
-    { status: 502, errorCode: "proxy_unreachable", errorType: null, error: "ECONNREFUSED" },
-    false,
-    false
+test("chat.ts keeps network and queue-capacity codes out of the provider breaker", () => {
+  // The predicate this fix guards lives inline in chat.ts on this base (upstream
+  // extracted it into chatPredicates.ts in a later 3.8.50 refactor), so assert on
+  // the guard at its dispatch site.
+  const src = fs.readFileSync(new URL("../../src/sse/handlers/chat.ts", import.meta.url), "utf8");
+  for (const code of ["proxy_unreachable", "RATE_LIMIT_QUEUE_TIMEOUT", "RATE_LIMIT_QUEUE_WEDGED"]) {
+    assert.match(
+      src,
+      new RegExp(`result\\.errorCode !== "${code}"`),
+      `${code} must be excluded from the provider-breaker trip`
+    );
+  }
+  assert.match(
+    src,
+    /!isNetworkError &&\s*\n\s*!isQueueTimeout/,
+    "the allRateLimited breaker trip must skip network errors and queue timeouts"
   );
-  assert.equal(result, false);
-});
-test("RATE_LIMIT_QUEUE_TIMEOUT errorCode does NOT trip provider breaker", () => {
-  const result = shouldTripProviderBreakerForResult(
-    { status: 503, errorCode: "RATE_LIMIT_QUEUE_TIMEOUT", errorType: null, error: "queue expired" },
-    false,
-    false
-  );
-  assert.equal(result, false);
-});
-test("RATE_LIMIT_QUEUE_WEDGED errorCode does NOT trip provider breaker", () => {
-  const result = shouldTripProviderBreakerForResult(
-    { status: 503, errorCode: "RATE_LIMIT_QUEUE_WEDGED", errorType: null, error: "limiter wedged" },
-    false,
-    false
-  );
-  assert.equal(result, false);
-});
-test("genuine 502 without proxy_unreachable DOES trip provider breaker", () => {
-  const result = shouldTripProviderBreakerForResult(
-    { status: 502, errorCode: null, errorType: null, error: "upstream error" },
-    false,
-    false
-  );
-  assert.equal(result, true);
-});
-test("genuine 503 without queue timeout DOES trip provider breaker", () => {
-  const result = shouldTripProviderBreakerForResult(
-    { status: 503, errorCode: null, errorType: null, error: "service unavailable" },
-    false,
-    false
-  );
-  assert.equal(result, true);
-});
-test("isCombo=true prevents breaker trip regardless of error", () => {
-  const result = shouldTripProviderBreakerForResult(
-    { status: 502, errorCode: null, errorType: null, error: "upstream error" },
-    true,
-    false
-  );
-  assert.equal(result, false);
-});
-test("forceLiveComboTest=true prevents breaker trip (combo will try next target)", () => {
-  const result = shouldTripProviderBreakerForResult(
-    { status: 502, errorCode: null, errorType: null, error: "upstream error" },
-    false,
-    true
-  );
-  assert.equal(result, false);
 });
 
 test("queue-timeout recordProviderFailure never opens the provider breaker", () => {
