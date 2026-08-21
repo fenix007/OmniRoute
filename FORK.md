@@ -67,6 +67,22 @@ Sources: `open-sse/utils/keepaliveThreshold.ts`, `open-sse/utils/earlyStreamKeep
 `tests/unit/keepalive-threshold.test.ts`, `tests/unit/earlyStreamKeepalive.test.ts`,
 `tests/unit/resolve-stream-flag.test.ts`.
 
+Gaps in that patch set, found while verifying fork.5 on production (fork.6):
+
+| Change                                                              | Upstream PR | What                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| fix(sse): emit Responses-shaped error frames on /v1/responses       | —           | fork-only: `errorFrameFormat: "responses"` + `errorFrameEventName`. fork.4 fixed the payload shape but not the event name, and Responses API clients (Codex CLI) terminate a stream on `response.failed` and ignore `event: error` whatever it carries — the fork.4 frame was inert. |
+| fix(compat): let the deployment-wide stream default reach real keys | —           | fork-only: `normalizeStreamDefaultMode` no longer treats a stored `legacy` as an explicit opt-out. Every key row is created with `stream_default_mode = "legacy"`, so `OMNIROUTE_STREAM_DEFAULT_MODE=json` was dead code on any real database — verified inert on production.        |
+
+The stream-default change is a deliberate semantics trade: with the env var set, a key
+cannot pin itself back to SSE through its stored mode. Per-request opt-in (`stream: true`
+or `Accept: text/event-stream`) still outranks the deployment default, which is how a
+caller that needs SSE asks for it.
+
+Sources: `open-sse/utils/earlyStreamKeepalive.ts`, `open-sse/utils/aiSdkCompat.ts`,
+`src/app/api/v1/responses/route.ts`. Tests: `tests/unit/earlyStreamKeepalive.test.ts`,
+`tests/unit/resolve-stream-flag.test.ts`.
+
 Quality gates (fork.5):
 
 `check:complexity-ratchets` was red on `stable` from fork.3 onward. Measured per tag:
