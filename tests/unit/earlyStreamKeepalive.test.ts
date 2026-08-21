@@ -302,3 +302,92 @@ test("slow path emits the anthropic envelope when the route asks for it", async 
   assert.equal(payload.type, "error");
   assert.equal(payload.error.type, "overloaded_error");
 });
+
+test("responses format carries the capacity failure in a response.failed envelope", async () => {
+  const { buildErrorFrameData } = await import("../../open-sse/utils/earlyStreamKeepalive.ts");
+  const overload = JSON.stringify({
+    error: { message: "Our servers are currently overloaded. Please try again later." },
+  });
+
+  const payload = JSON.parse(buildErrorFrameData(overload, 502, "responses"));
+  assert.equal(payload.type, "response.failed");
+  assert.equal(payload.response.status, "failed");
+  assert.equal(payload.response.error.code, "server_overloaded");
+  assert.equal(payload.response.error.status_code, 502);
+  assert.match(payload.response.error.message, /overloaded/i);
+
+  // A 429 must stay distinguishable from a 5xx so the client picks the right backoff.
+  const rateLimited = JSON.parse(
+    buildErrorFrameData(JSON.stringify({ error: { message: "Rate limited" } }), 429, "responses")
+  );
+  assert.equal(rateLimited.response.error.code, "rate_limit_exceeded");
+  assert.equal(rateLimited.response.error.status_code, 429);
+
+  // A terminal 4xx must NOT read as retryable capacity pressure.
+  const badRequest = JSON.parse(
+    buildErrorFrameData(JSON.stringify({ error: { message: "Bad model" } }), 400, "responses")
+  );
+  assert.equal(badRequest.response.error.code, "invalid_request_error");
+  assert.equal(badRequest.response.error.type, "invalid_request_error");
+});
+
+test("event name follows the frame format so Responses clients see response.failed", async () => {
+  const { errorFrameEventName } = await import("../../open-sse/utils/earlyStreamKeepalive.ts");
+  assert.equal(errorFrameEventName("openai"), "error");
+  assert.equal(errorFrameEventName("anthropic"), "error");
+  assert.equal(errorFrameEventName("responses"), "response.failed");
+  assert.equal(errorFrameEventName(), "error");
+});
+
+test("slow path emits a response.failed event when the route asks for it", async () => {
+  const handler = new Promise<Response>((resolve) => {
+    setTimeout(
+      () =>
+        resolve(
+          new Response(
+            JSON.stringify({
+              error: { message: "Our servers are currently overloaded. Please try again later." },
+            }),
+            { status: 502, headers: { "Content-Type": "application/json" } }
+          )
+        ),
+      30
+    );
+  });
+
+  const result = await withEarlyStreamKeepalive(handler, {
+    thresholdMs: 5,
+    intervalMs: 250,
+    errorFrameFormat: "responses",
+  });
+
+  const text = await drainStream(result.body!);
+  assert.ok(
+    text.includes("event: response.failed"),
+    "expected a response.failed event, got: " + text
+  );
+  const frame = text.split("\n").find((line) => line.startsWith("data: {"));
+  assert.ok(frame, "expected a data frame");
+  const payload = JSON.parse(frame!.slice("data: ".length));
+  assert.equal(payload.type, "response.failed");
+  assert.equal(payload.response.error.status_code, 502);
+});
+
+test("a rejected handler also fails a Responses stream in-band, not silently", async () => {
+  const handler = new Promise<Response>((_resolve, reject) => {
+    setTimeout(() => reject(new Error("boom at /secret/path.ts:12")), 30);
+  });
+
+  const result = await withEarlyStreamKeepalive(handler, {
+    thresholdMs: 5,
+    intervalMs: 250,
+    errorFrameFormat: "responses",
+  });
+
+  const text = await drainStream(result.body!);
+  assert.ok(text.includes("event: response.failed"), "expected a response.failed event");
+  assert.ok(!text.includes("secret/path.ts"), "must never leak the raw error/stack");
+  const frame = text.split("\n").find((line) => line.startsWith("data: {"));
+  const payload = JSON.parse(frame!.slice("data: ".length));
+  assert.equal(payload.response.error.status_code, 502);
+});

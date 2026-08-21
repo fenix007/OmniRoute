@@ -98,6 +98,11 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
     return await withEarlyStreamKeepalive(handleChat(resolved, null, resolvedBody), {
       signal: request.signal,
       thresholdMs,
+      // Once the keepalive stream commits to 200 the status line is gone and the failure
+      // can only travel in-band. Responses API clients (Codex CLI) terminate a stream on
+      // `response.failed` and ignore `event: error`, so an OpenAI-shaped frame here reads
+      // to them as a stream that just stopped — no error surfaced, no retry.
+      errorFrameFormat: "responses",
     });
   }
   return await handleChat(resolved, null, resolvedBody);

@@ -58,17 +58,37 @@ export type EarlyStreamKeepaliveOptions = {
   /** Extra headers to include in the keepalive response (e.g. X-Correlation-Id). */
   extraHeaders?: Record<string, string>;
   /**
-   * Shape of the in-band `event: error` payload. Anthropic-format routes
-   * (/v1/messages) must pass `"anthropic"`, because Claude clients branch on
-   * `error.type` and ignore an OpenAI-shaped `{"error":{...}}` frame entirely —
-   * a failure would look to them like a stream that just stopped.
+   * Shape AND event name of the in-band error frame. Each client family parses only
+   * its own: Anthropic clients (/v1/messages) branch on `error.type` and ignore an
+   * OpenAI-shaped `{"error":{...}}` frame, while Responses API clients (/v1/responses,
+   * notably Codex CLI) act only on a `response.failed` event and ignore `event: error`
+   * whatever its payload. Sending the wrong one makes a failure look to the client like
+   * a stream that simply stopped.
    */
   errorFrameFormat?: ErrorFrameFormat;
 };
 
 type SettledHandler = { ok: true; response: Response } | { ok: false; error: unknown };
 
-export type ErrorFrameFormat = "openai" | "anthropic";
+export type ErrorFrameFormat = "openai" | "anthropic" | "responses";
+
+/** Generic in-band failure text used when no upstream message exists. */
+const GENERIC_FAILURE_MESSAGE = "Upstream stream failed before completion.";
+
+/**
+ * SSE event name each client family listens on for an in-band failure. Responses API
+ * clients terminate a stream on `response.failed` and ignore `event: error` entirely,
+ * so the event name is part of the format, not just the payload.
+ */
+const ERROR_FRAME_EVENT_NAMES: Record<ErrorFrameFormat, string> = {
+  openai: "error",
+  anthropic: "error",
+  responses: "response.failed",
+};
+
+export function errorFrameEventName(format: ErrorFrameFormat = "openai"): string {
+  return ERROR_FRAME_EVENT_NAMES[format] ?? "error";
+}
 
 /**
  * Maps an HTTP status onto an Anthropic error type. Anthropic clients (Claude Code,
@@ -91,10 +111,33 @@ function anthropicErrorType(status: number, message: string): string {
   // Provider capacity failures reach us as 502/503 (and 529 upstream); the message is
   // the only discriminator when a gateway flattens them all onto 502.
   if (status === 502 || status === 503 || status === 529) return "overloaded_error";
-  if (/overload|at capacity|capacity constraint|try again later/i.test(message)) {
-    return "overloaded_error";
-  }
+  if (looksLikeCapacityFailure(message)) return "overloaded_error";
   return "api_error";
+}
+
+/** True when the message reads as a transient provider capacity failure. */
+function looksLikeCapacityFailure(message: string): boolean {
+  return /overload|at capacity|capacity constraint|try again later/i.test(message);
+}
+
+/**
+ * Maps an HTTP status onto a Responses API error code. Codex CLI reads the failure off
+ * the `response.failed` event's `error.code` / `error.status_code`, so a transient
+ * capacity failure must arrive with a code it recognizes as retryable rather than the
+ * generic `server_error` it treats as terminal.
+ */
+function responsesErrorCode(status: number, message: string): string {
+  if (status === 429) return "rate_limit_exceeded";
+  if (status === 401) return "authentication_error";
+  if (status === 403) return "permission_error";
+  if (status === 404) return "not_found";
+  if (status === 413) return "request_too_large";
+  if (status >= 400 && status < 500) return "invalid_request_error";
+  // Provider capacity failures reach us as 502/503 (529 upstream); when a gateway
+  // flattens them all onto 502 the message is the only discriminator left.
+  if (status === 502 || status === 503 || status === 529) return "server_overloaded";
+  if (looksLikeCapacityFailure(message)) return "server_overloaded";
+  return "server_error";
 }
 
 /** Best-effort extraction of a human-readable message from either error shape. */
@@ -116,21 +159,43 @@ function readErrorMessage(bodyText: string): string {
 
 /**
  * Builds the `data:` payload for an in-band error frame in the format the route's
- * clients actually parse. An OpenAI-shaped `{"error":{...}}` frame is silently
- * ignored by Anthropic clients, so a /v1/messages caller would see the stream simply
- * end instead of learning it failed.
+ * clients actually parse. An OpenAI-shaped `{"error":{...}}` frame is silently ignored
+ * by both other families — an Anthropic client branches on `error.type`, and a Responses
+ * API client acts only on a `response.failed` envelope — so the wrong shape makes a
+ * /v1/messages or /v1/responses caller see the stream simply end instead of learning it
+ * failed. Pair this with {@link errorFrameEventName} for the matching event name.
  */
 export function buildErrorFrameData(
   bodyText: string,
   status: number,
   format: ErrorFrameFormat = "openai"
 ): string {
-  if (format !== "anthropic") return annotateErrorFrameStatus(bodyText, status);
+  if (format === "openai") return annotateErrorFrameStatus(bodyText, status);
 
-  const message = readErrorMessage(bodyText) || "Upstream stream failed before completion.";
+  const message = readErrorMessage(bodyText) || GENERIC_FAILURE_MESSAGE;
+
+  if (format === "anthropic") {
+    return JSON.stringify({
+      type: "error",
+      error: { type: anthropicErrorType(status, message), message, status },
+    });
+  }
+
+  // Responses API envelope, mirroring the shape the codex executor already emits for
+  // upstream failures (open-sse/executors/codex.ts) so clients see one consistent
+  // failure event: the status travels in `status_code`, as it does there.
   return JSON.stringify({
-    type: "error",
-    error: { type: anthropicErrorType(status, message), message, status },
+    type: "response.failed",
+    response: {
+      id: null,
+      status: "failed",
+      error: {
+        type: status >= 400 && status < 500 ? "invalid_request_error" : "server_error",
+        code: responsesErrorCode(status, message),
+        message,
+        status_code: status,
+      },
+    },
   });
 }
 
@@ -177,18 +242,19 @@ export async function withEarlyStreamKeepalive(
   const keepaliveFrame = options.keepaliveFrame ?? KEEPALIVE_FRAME;
   const extraHeaders = options.extraHeaders ?? {};
   const errorFrameFormat = options.errorFrameFormat ?? "openai";
+  const errorEventName = errorFrameEventName(errorFrameFormat);
   // Handler-rejection frame: no upstream status exists, so report a generic 502
   // (never the raw error/stack) in the format this route's clients parse.
   const genericErrorFrame =
-    errorFrameFormat === "anthropic"
-      ? ENCODER.encode(
-          `event: error\ndata: ${buildErrorFrameData(
-            "Upstream stream failed before completion.",
+    errorFrameFormat === "openai"
+      ? ERROR_FRAME
+      : ENCODER.encode(
+          `event: ${errorEventName}\ndata: ${buildErrorFrameData(
+            GENERIC_FAILURE_MESSAGE,
             502,
-            "anthropic"
+            errorFrameFormat
           )}\n\n`
-        )
-      : ERROR_FRAME;
+        );
 
   // Settle into a tagged result so neither race branch leaves an unhandled
   // rejection when the threshold timer wins.
@@ -308,7 +374,7 @@ export async function withEarlyStreamKeepalive(
               response.status,
               errorFrameFormat
             );
-            controller.enqueue(ENCODER.encode(`event: error\ndata: ${dataLine}\n\n`));
+            controller.enqueue(ENCODER.encode(`event: ${errorEventName}\ndata: ${dataLine}\n\n`));
           }
         }
       } catch {
