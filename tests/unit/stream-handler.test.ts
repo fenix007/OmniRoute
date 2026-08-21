@@ -167,6 +167,106 @@ test("createDisconnectAwareStream treats cancel after Responses completed as suc
   assert.equal(disconnectHandled, false);
 });
 
+test("createDisconnectAwareStream treats cancel after an oversized Responses completed event as successful completion", async () => {
+  // The terminal event carries the whole response, so its payload routinely runs
+  // to tens of KB. Scanning only a small trailing window used to slice the
+  // marker away and report a fully delivered stream as a client disconnect.
+  const hugeCompleted = `event: response.completed\ndata: ${JSON.stringify({
+    type: "response.completed",
+    response: { output_text: "y".repeat(64 * 1024) },
+  })}\n\n`;
+
+  let disconnectHandled = false;
+  const transformStream = {
+    readable: new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode('event: response.created\ndata: {"type":"response.created"}\n\n')
+        );
+        controller.enqueue(encoder.encode(hugeCompleted));
+      },
+    }),
+    writable: createNoopAbortWritable(),
+  };
+
+  const stream = createDisconnectAwareStream(
+    transformStream,
+    createStreamController({
+      clientResponseFormat: FORMATS.OPENAI_RESPONSES,
+      onDisconnect() {
+        disconnectHandled = true;
+      },
+    })
+  );
+  const reader = stream.getReader();
+  await reader.read();
+  const terminal = await reader.read();
+  assert.match(decoder.decode(terminal.value), /response\.completed/);
+  await reader.cancel("request_signal_aborted");
+
+  assert.equal(disconnectHandled, false);
+});
+
+test("createDisconnectAwareStream detects a Responses terminal marker split across chunks", async () => {
+  let disconnectHandled = false;
+  const transformStream = {
+    readable: new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode("event: response.comp"));
+        controller.enqueue(encoder.encode('leted\ndata: {"type":"x"}\n\n'));
+      },
+    }),
+    writable: createNoopAbortWritable(),
+  };
+
+  const stream = createDisconnectAwareStream(
+    transformStream,
+    createStreamController({
+      clientResponseFormat: FORMATS.OPENAI_RESPONSES,
+      onDisconnect() {
+        disconnectHandled = true;
+      },
+    })
+  );
+  const reader = stream.getReader();
+  await reader.read();
+  await reader.read();
+  await reader.cancel("request_signal_aborted");
+
+  assert.equal(disconnectHandled, false);
+});
+
+test("createDisconnectAwareStream still reports a disconnect when no terminal marker arrived", async () => {
+  let disconnectReason = null;
+  const transformStream = {
+    readable: new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `event: response.output_text.delta\ndata: {"delta":"${"x".repeat(8192)}"}\n\n`
+          )
+        );
+      },
+    }),
+    writable: createNoopAbortWritable(),
+  };
+
+  const stream = createDisconnectAwareStream(
+    transformStream,
+    createStreamController({
+      clientResponseFormat: FORMATS.OPENAI_RESPONSES,
+      onDisconnect(event) {
+        disconnectReason = event.reason;
+      },
+    })
+  );
+  const reader = stream.getReader();
+  await reader.read();
+  await reader.cancel("request_signal_aborted");
+
+  assert.equal(disconnectReason, "request_signal_aborted");
+});
+
 test("createDisconnectAwareStream: Gemini 503 high-demand error becomes SSE error chunk with message preserved", async () => {
   const geminiMsg =
     "[503]: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.";

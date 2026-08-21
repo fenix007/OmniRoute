@@ -83,6 +83,27 @@ Sources: `open-sse/utils/earlyStreamKeepalive.ts`, `open-sse/utils/aiSdkCompat.t
 `src/app/api/v1/responses/route.ts`. Tests: `tests/unit/earlyStreamKeepalive.test.ts`,
 `tests/unit/resolve-stream-flag.test.ts`.
 
+Owned fix for false client-disconnect accounting (fork.7):
+
+| Change                                                          | Upstream PR | What                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| fix(sse): detect the terminal marker in oversized client chunks | —           | fork-only: `noteClientChunk` matched against a 4096-char trailing window, so any terminal SSE event whose own payload exceeded it lost the marker. `clientTerminalSeen` stayed false and a fully delivered stream was finalized as 499 `request_signal_aborted` with 0 tokens. |
+
+Production evidence (24h to 2026-08-21T13:49Z): 171 of 176 non-2xx call-logs were 499.
+Matching call-logs 1:1 against nginx over a 2h window on `/v1/responses` (211 vs 212
+entries), 68 of 72 of those 499s have exactly one same-path nginx line within ±1s and it
+is HTTP 200 with a full body; nginx saw a single genuine client abort. Reproduced twice
+on prod (combo and direct model, 44–51 chunks, 360–418 KB, read through
+`response.completed`, then hard close → logged 499 / 38.9s / 0 tokens); small
+single-chunk streams logged 200. The window threshold is exact: a completed-event
+payload of 4000 B was detected, 4100 B was not.
+
+Beyond the misreported success rate, the same defect zeroed `tokens.in`/`tokens.out` on
+the largest ~5% of requests, which is what ai-router's `lib/omniroute-call-log-sync.ts`
+aggregates into quota and `/limits`.
+
+Sources: `open-sse/utils/streamHandler.ts`. Tests: `tests/unit/stream-handler.test.ts`.
+
 Quality gates (fork.5):
 
 `check:complexity-ratchets` was red on `stable` from fork.3 onward. Measured per tag:

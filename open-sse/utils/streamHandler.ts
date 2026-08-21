@@ -176,6 +176,13 @@ function getErrorStatusCode(error: unknown): number {
   return 502;
 }
 
+/**
+ * Trailing characters carried between client chunks so a terminal marker split
+ * across a chunk boundary is still matched. Only needs to cover the longest
+ * marker literal plus its leading newline.
+ */
+const TERMINAL_CARRY_CHARS = 256;
+
 function hasClientTerminalSseMarker(text: string, clientResponseFormat?: string | null): boolean {
   if (/(?:^|\r?\n)data:\s*\[DONE\]\s*(?:\r?\n|$)/.test(text)) {
     return true;
@@ -455,21 +462,23 @@ export function createDisconnectAwareStream(transformStream, streamController) {
   const reader = transformStream.readable.getReader();
   const writer = transformStream.writable.getWriter();
   const terminalDecoder = new TextDecoder();
-  let terminalTail = "";
+  let terminalCarry = "";
   let clientTerminalSeen = false;
 
   const noteClientChunk = (chunk: unknown) => {
     if (clientTerminalSeen) return;
     if (!(chunk instanceof Uint8Array)) return;
 
-    terminalTail += terminalDecoder.decode(chunk, { stream: true });
-    if (terminalTail.length > 4096) {
-      terminalTail = terminalTail.slice(-4096);
-    }
-    clientTerminalSeen = hasClientTerminalSseMarker(
-      terminalTail,
-      streamController.clientResponseFormat
-    );
+    // Match against the carry-over plus the *whole* decoded chunk. Clamping the
+    // scanned text to a fixed window before matching dropped the marker whenever
+    // the terminal SSE event's own payload was larger than that window — every
+    // Codex CLI turn with real output — so a fully delivered stream was
+    // finalized as a 499 client disconnect with zero token usage.
+    const text = terminalCarry + terminalDecoder.decode(chunk, { stream: true });
+    clientTerminalSeen = hasClientTerminalSseMarker(text, streamController.clientResponseFormat);
+    // Keep just enough trailing text for a marker split across a chunk boundary
+    // to still match once the next chunk arrives.
+    terminalCarry = text.length > TERMINAL_CARRY_CHARS ? text.slice(-TERMINAL_CARRY_CHARS) : text;
     if (clientTerminalSeen) {
       streamController.markClientTerminalSeen?.();
     }
