@@ -101,17 +101,39 @@ describe("resolveStreamFlag — global stream default via OMNIROUTE_STREAM_DEFAU
     });
   });
 
-  it("an explicit per-key mode overrides the env default in both directions", () => {
-    withEnv("json", () => {
-      assert.equal(
-        resolveStreamFlag(undefined, "*/*", undefined, { streamDefaultMode: "legacy" }),
-        true
-      );
-    });
+  it("a per-key json mode still wins when no env default is set", () => {
     withEnv(undefined, () => {
       assert.equal(
         resolveStreamFlag(undefined, "*/*", undefined, { streamDefaultMode: "json" }),
         false
+      );
+    });
+  });
+
+  // Every key row is created with stream_default_mode = "legacy" (POST /api/keys), so a
+  // stored "legacy" is indistinguishable from "unset". Honouring it as an explicit
+  // opt-out made the env var dead code on any real database — the deployment default
+  // must reach keys carrying that creation-time value.
+  it("a stored legacy mode does not veto the env default", () => {
+    withEnv("json", () => {
+      assert.equal(
+        resolveStreamFlag(undefined, "*/*", undefined, { streamDefaultMode: "legacy" }),
+        false
+      );
+    });
+  });
+
+  it("a per-request SSE opt-in still wins over the env default for such a key", () => {
+    withEnv("json", () => {
+      assert.equal(
+        resolveStreamFlag(true, "*/*", undefined, { streamDefaultMode: "legacy" }),
+        true
+      );
+      assert.equal(
+        resolveStreamFlag(undefined, "text/event-stream", undefined, {
+          streamDefaultMode: "legacy",
+        }),
+        true
       );
     });
   });

@@ -42,8 +42,12 @@ const STREAM_DEFAULT_MODE_ENV_VAR = "OMNIROUTE_STREAM_DEFAULT_MODE";
  */
 export function normalizeStreamDefaultMode(value: unknown): StreamDefaultMode {
   if (value === "json") return "json";
-  if (value === "legacy") return "legacy";
 
+  // `legacy` is NOT treated as an explicit opt-out: every key row is created with
+  // stream_default_mode = "legacy" (see POST /api/keys), so it is indistinguishable from
+  // "unset" and honouring it would make the deployment-wide env var dead code on any
+  // real database. A caller that genuinely needs SSE still opts in per request with
+  // `stream: true` or `Accept: text/event-stream` — both outrank this default.
   return process.env[STREAM_DEFAULT_MODE_ENV_VAR] === "json" ? "json" : "legacy";
 }
 
