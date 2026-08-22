@@ -102,7 +102,50 @@ Beyond the misreported success rate, the same defect zeroed `tokens.in`/`tokens.
 the largest ~5% of requests, which is what ai-router's `lib/omniroute-call-log-sync.ts`
 aggregates into quota and `/limits`.
 
-Sources: `open-sse/utils/streamHandler.ts`. Tests: `tests/unit/stream-handler.test.ts`.
+Sources: `open-sse/utils/streamHandler.ts`. Tests: `tests/unit/stream-handler.test.ts`,
+`tests/unit/stream-handler-terminal-marker.test.ts`.
+
+Owned fix for `response_format` dropped on the Kiro route (fork.8):
+
+| Change                                                | Upstream PR | What                                                                                                                                                                                                                                             |
+| ----------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| fix(kiro): carry response_format into the Kiro prompt | —           | fork-only: `buildKiroPayload` never read `body.response_format`. Kiro has no Structured Output parameter, so the field was dropped with no trace and the model answered with invented property names — every strict-schema caller failed closed. |
+
+`openai-to-claude.ts` and `DefaultExecutor.applyJsonSchemaFallback()` already
+describe the schema in the prompt when the upstream cannot enforce it. Kiro had
+neither: `KiroExecutor extends BaseExecutor`, not `DefaultExecutor`, so the
+fallback was unreachable, and `register(FORMATS.OPENAI, FORMATS.KIRO, …)` is the
+single request path into the provider. The contract is now appended to the final
+user message as a `<system-reminder>` (Kiro has no `system` role) — at the tail,
+where output-format instructions hold best.
+
+Measured on `kr/claude-haiku-4.5` and `kr/claude-sonnet-4.5` against a 19-field
+strict schema before the fix: both answered with their own field names
+(`match_score`, `concerns`, `interview_topics`), while a 2-field schema passed
+only because those two names appeared verbatim in the prompt.
+
+This is best-effort JSON, not constrained decoding, and it cannot become one on
+this route: Kiro's only schema-carrying channel is a tool schema, and
+`kiroSanitizer` must strip `additionalProperties`, `$ref`/`$defs` and `anyOf`
+(Kiro 400s `Improperly formed request` otherwise) — exactly the keywords a
+strict schema is built from. `tool_choice` is not forwarded either, so a tool
+call cannot be forced. Callers that need enforcement must route to a provider
+with native Structured Output.
+
+Sources: `open-sse/translator/request/openai-to-kiro/responseFormat.ts`,
+`open-sse/translator/request/openai-to-kiro.ts`,
+`open-sse/translator/request/openai-to-kiro/messageHelpers.ts` (gained
+`wrapSystemReminder`, moved out of the frozen translator file).
+Tests: `tests/unit/kiro-response-format.test.ts`.
+
+Quality gates (fork.8): `check:file-size` froze `openai-to-kiro.ts` at 912 lines,
+so the helper lives in a sibling module (`openai-to-kiro/responseFormat.ts`,
+alongside `messageHelpers.ts` / `adaptiveThinking.ts`) and the translator ends at
+907 — no baseline was touched. Extracting it also dropped `complexity` to 2059
+against a 2060 baseline. `check:test-file-size` was red from fork.7
+(`stream-handler.test.ts` at 873 > cap 800); its six terminal-marker tests moved
+to `stream-handler-terminal-marker.test.ts`, leaving 665 + 237 with the same 27
+tests passing.
 
 Quality gates (fork.5):
 

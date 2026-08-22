@@ -10,8 +10,10 @@ import {
   parseToolInput,
   normalizeKiroToolSchema,
   serializeToolResultContent,
+  wrapSystemReminder,
 } from "./openai-to-kiro/messageHelpers.ts";
 import { supportsKiroAdaptiveThinking } from "./openai-to-kiro/adaptiveThinking.ts";
+import { appendKiroJsonFormatInstruction } from "./openai-to-kiro/responseFormat.ts";
 
 /**
  * Anthropic's direct-provider `[1m]` context-1m beta suffix. Kiro is AWS
@@ -32,15 +34,6 @@ export function hasUnsupportedKiroContextSuffix(model: unknown): boolean {
   return (
     typeof model === "string" && model.toLowerCase().includes(KIRO_UNSUPPORTED_CONTEXT_1M_SUFFIX)
   );
-}
-
-/**
- * Wrap system-prompt content in <system-reminder> tags before it is merged into
- * a Kiro user message. Kiro/CodeWhisperer has no `system` role, so without this
- * the system prompt would appear as raw user text (issue #2306).
- */
-function wrapSystemReminder(text: string): string {
-  return `<system-reminder>\n${text}\n</system-reminder>`;
 }
 
 /**
@@ -758,6 +751,9 @@ export function buildKiroPayload(model, body, stream, credentials) {
   if (toolDocs) {
     finalContent = `# Tool Documentation\n\n${toolDocs}\n\n---\n\n${finalContent}`;
   }
+
+  // Appended last: output-format instructions hold far better at the prompt tail.
+  finalContent = appendKiroJsonFormatInstruction(finalContent, body.response_format);
 
   const payload: {
     conversationState: {

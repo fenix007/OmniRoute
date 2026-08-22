@@ -1,6 +1,15 @@
 // Pure message/tool helpers for the OpenAI -> Kiro request translator.
 // Extracted verbatim from openai-to-kiro.ts (no host imports).
 
+/**
+ * Wrap system-prompt content in <system-reminder> tags before it is merged into
+ * a Kiro user message. Kiro/CodeWhisperer has no `system` role, so without this
+ * the system prompt would appear as raw user text (issue #2306).
+ */
+export function wrapSystemReminder(text: string): string {
+  return `<system-reminder>\n${text}\n</system-reminder>`;
+}
+
 export function parseToolInput(value: unknown) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value;
