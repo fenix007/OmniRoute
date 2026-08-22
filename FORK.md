@@ -138,6 +138,30 @@ Sources: `open-sse/translator/request/openai-to-kiro/responseFormat.ts`,
 `wrapSystemReminder`, moved out of the frozen translator file).
 Tests: `tests/unit/kiro-response-format.test.ts`.
 
+Gap in that fix, found verifying fork.8 on production (fork.9):
+
+| Change                                                                   | Upstream PR | What                                                                                                                                                                             |
+| ------------------------------------------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fix(kiro): strip the JSON code fence when response_format asked for JSON | —           | fork-only: Claude on Kiro honours the prompt-level schema but wraps the object in a ```json fence anyway, so `JSON.parse(message.content)` still failed for a conforming client. |
+
+fork.8 was probed live against a strict schema whose property names never appear
+in the prompt. Both `kr/claude-haiku-4.5` and `kr/claude-sonnet-4.5` returned
+exactly `residual_gap_score` / `evidence_kind` / `rationale` — the contract
+works — and both fenced the object, on every attempt, despite the instruction
+forbidding it. Kiro has no `response_format` to enforce, so the fence is
+unwrappable only on our side.
+
+`KiroExecutor.execute` now pipes its SSE through `stripJsonFenceFromSse` when the
+request carries `response_format: json_schema | json_object`. The stripper
+rewrites `delta.content` only — tool-call and reasoning deltas pass through — and
+holds back a trailing run of whitespace/backticks so a closing fence can be told
+from real content, releasing it as its own chunk just before the finishing chunk.
+A normal chat answer keeps its code blocks: without a JSON `response_format` the
+wrapper is never installed.
+
+Sources: `open-sse/executors/kiro/jsonFence.ts`, `open-sse/executors/kiro.ts`.
+Tests: `tests/unit/kiro-json-fence.test.ts`.
+
 Quality gates (fork.8): `check:file-size` froze `openai-to-kiro.ts` at 912 lines,
 so the helper lives in a sibling module (`openai-to-kiro/responseFormat.ts`,
 alongside `messageHelpers.ts` / `adaptiveThinking.ts`) and the translator ends at
@@ -179,6 +203,16 @@ mounts deadlock in a single multi-platform build) and publishes
 
 ai-router side: set `OMNIROUTE_IMAGE=ghcr.io/fenix007/omniroute` and
 `OMNIROUTE_VERSION=3.8.48-fork.N` in `.env`, then `make omniroute-update`.
+
+Each release pulls another ~1.8 GB image and the VPS keeps every one of them.
+Pulling fork.8 filled `/` to 100% on 217.65.79.232, and OmniRoute crash-looped on
+`Unable to inspect existing database at /app/data/storage.sqlite: disk I/O error`
+until the old images were removed. Check `df -h /` before updating and drop the
+tags older than the current one plus its rollback:
+
+```bash
+docker rmi ghcr.io/fenix007/omniroute:3.8.48-fork.<old>
+```
 
 ## Taking a newer upstream release later
 
