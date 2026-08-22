@@ -1,6 +1,14 @@
 // OpenAI `response_format` support for the OpenAI -> Kiro request translator.
 import { wrapSystemReminder } from "./messageHelpers.ts";
 
+/**
+ * Marker the Kiro executor detects to learn that this request carries a JSON
+ * contract. chatCore hands the executor the already-translated Kiro payload, so
+ * `response_format` is no longer readable there — the prompt is the only channel
+ * left, the same one `<thinking_mode>enabled</thinking_mode>` travels on.
+ */
+export const KIRO_JSON_CONTRACT_MARKER = "<response_format>json</response_format>";
+
 /** The subset of OpenAI's `response_format` that asks for a JSON-only reply. */
 type KiroResponseFormat = {
   type?: unknown;
@@ -35,6 +43,7 @@ export function buildKiroJsonFormatInstruction(responseFormat: unknown): string 
     const schema = fmt.json_schema?.schema;
     if (!schema || typeof schema !== "object") return null;
     return (
+      `${KIRO_JSON_CONTRACT_MARKER}\n` +
       "You must respond with valid JSON that strictly follows this JSON schema:\n" +
       "```json\n" +
       JSON.stringify(schema, null, 2) +
@@ -46,7 +55,7 @@ export function buildKiroJsonFormatInstruction(responseFormat: unknown): string 
   }
 
   if (fmt.type === "json_object") {
-    return `You must respond with valid JSON. ${jsonOnly}`;
+    return `${KIRO_JSON_CONTRACT_MARKER}\nYou must respond with valid JSON. ${jsonOnly}`;
   }
 
   return null;

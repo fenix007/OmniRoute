@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { stripJsonFenceFromSse, wantsJsonOnlyContent } =
+const { stripJsonFenceFromSse, kiroPayloadWantsJsonOnly } =
   await import("../../open-sse/executors/kiro/jsonFence.ts");
+const { buildKiroPayload } = await import("../../open-sse/translator/request/openai-to-kiro.ts");
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -148,18 +149,41 @@ test("non-data lines and unparseable payloads pass through untouched", async () 
   assert.ok(sse.includes("data: not-json"));
 });
 
-test("wantsJsonOnlyContent recognises only the JSON response formats", () => {
-  assert.equal(wantsJsonOnlyContent({ response_format: { type: "json_schema" } }), true);
-  assert.equal(wantsJsonOnlyContent({ response_format: { type: "json_object" } }), true);
-  for (const body of [
-    { response_format: { type: "text" } },
-    { response_format: null },
-    { response_format: "json_object" },
-    {},
-    null,
-    undefined,
-    [{ response_format: { type: "json_object" } }],
-  ]) {
-    assert.equal(wantsJsonOnlyContent(body), false, JSON.stringify(body));
+/**
+ * The executor is handed the already-translated Kiro payload, not the OpenAI
+ * request, so this decision must be made against real translator output — a
+ * check written against `{ response_format }` compiles, passes, and never fires
+ * in production.
+ */
+function payloadFor(responseFormat?: unknown): unknown {
+  return buildKiroPayload(
+    "claude-haiku-4.5",
+    {
+      messages: [{ role: "user", content: "Score this candidate." }],
+      ...(responseFormat === undefined ? {} : { response_format: responseFormat }),
+    },
+    false,
+    {}
+  );
+}
+
+test("a translated payload built from a JSON response_format is detected", () => {
+  const schema = { type: "object", properties: { a: { type: "integer" } } };
+  assert.equal(
+    kiroPayloadWantsJsonOnly(payloadFor({ type: "json_schema", json_schema: { schema } })),
+    true
+  );
+  assert.equal(kiroPayloadWantsJsonOnly(payloadFor({ type: "json_object" })), true);
+});
+
+test("a translated payload without a JSON contract is not detected", () => {
+  for (const format of [undefined, { type: "text" }, { type: "json_schema" }]) {
+    assert.equal(kiroPayloadWantsJsonOnly(payloadFor(format)), false, JSON.stringify(format));
+  }
+});
+
+test("kiroPayloadWantsJsonOnly tolerates malformed payloads", () => {
+  for (const value of [null, undefined, {}, { conversationState: {} }, "payload", 42]) {
+    assert.equal(kiroPayloadWantsJsonOnly(value), false, JSON.stringify(value));
   }
 });

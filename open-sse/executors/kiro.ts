@@ -18,7 +18,7 @@ import {
   flushPendingThinking,
   type KiroThinkingState,
 } from "./kiroThinking.ts";
-import { stripJsonFenceFromSse, wantsJsonOnlyContent } from "./kiro/jsonFence.ts";
+import { kiroPayloadWantsJsonOnly, stripJsonFenceFromSse } from "./kiro/jsonFence.ts";
 import { ByteQueue, TEXT_ENCODER, parseEventFrame } from "./kiro/eventstream.ts";
 import { kiroRuntimeHost, resolveKiroRuntimeRegion } from "../services/kiroRegion.ts";
 
@@ -311,7 +311,7 @@ export class KiroExecutor extends BaseExecutor {
     // Kiro has no response_format, so the JSON contract only lives in the prompt
     // and Claude still fences the object it returns. Unwrap it for the clients
     // that asked for JSON — see executors/kiro/jsonFence.ts.
-    if (wantsJsonOnlyContent(body) && transformedResponse.body) {
+    if (kiroPayloadWantsJsonOnly(transformedBody) && transformedResponse.body) {
       transformedResponse = new Response(stripJsonFenceFromSse(transformedResponse.body), {
         status: transformedResponse.status,
         statusText: transformedResponse.statusText,

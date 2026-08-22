@@ -162,6 +162,30 @@ wrapper is never installed.
 Sources: `open-sse/executors/kiro/jsonFence.ts`, `open-sse/executors/kiro.ts`.
 Tests: `tests/unit/kiro-json-fence.test.ts`.
 
+Gap in that fix, found verifying fork.9 on production (fork.10):
+
+| Change                                                        | Upstream PR | What                                                                                                                                                                                                          |
+| ------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fix(kiro): detect the JSON contract on the translated payload | —           | fork-only: fork.9 asked `body.response_format`, but chatCore hands the executor the already-built Kiro payload — the condition was never true and the stripper never installed. Verified inert on production. |
+
+`KiroExecutor.execute` receives `body` **after** the registry translated it
+through `buildKiroPayload`, which is why the executor already reads its
+`thinkingExpected` hint out of `transformedBody.conversationState`. fork.9's
+`wantsJsonOnlyContent(body)` looked for `response_format` on that payload, found
+nothing, and left every response fenced — the live probe on fork.9 returned the
+same fenced JSON as fork.8.
+
+The translator now leaves `KIRO_JSON_CONTRACT_MARKER`
+(`<response_format>json</response_format>`) at the head of the contract it
+appends, and `kiroPayloadWantsJsonOnly` looks for it in the built prompt — the
+same channel `<thinking_mode>enabled</thinking_mode>` already travels on. The
+tests now drive that decision with real `buildKiroPayload` output instead of a
+synthetic OpenAI body, which is the gap that let fork.9 ship green.
+
+Sources: `open-sse/executors/kiro/jsonFence.ts`, `open-sse/executors/kiro.ts`,
+`open-sse/translator/request/openai-to-kiro/responseFormat.ts`.
+Tests: `tests/unit/kiro-json-fence.test.ts`.
+
 Quality gates (fork.8): `check:file-size` froze `openai-to-kiro.ts` at 912 lines,
 so the helper lives in a sibling module (`openai-to-kiro/responseFormat.ts`,
 alongside `messageHelpers.ts` / `adaptiveThinking.ts`) and the translator ends at

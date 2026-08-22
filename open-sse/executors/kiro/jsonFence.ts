@@ -13,6 +13,8 @@
  * json_object`; a normal chat answer keeps its code blocks untouched.
  */
 
+import { KIRO_JSON_CONTRACT_MARKER } from "../../translator/request/openai-to-kiro/responseFormat.ts";
+
 const TEXT_DECODER = new TextDecoder();
 const TEXT_ENCODER = new TextEncoder();
 
@@ -31,13 +33,20 @@ export function createJsonFenceState(): JsonFenceState {
   return { pending: "", prefixResolved: false };
 }
 
-/** True when the request asked for a JSON-only reply. */
-export function wantsJsonOnlyContent(body: unknown): boolean {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
-  const format = (body as { response_format?: unknown }).response_format;
-  if (!format || typeof format !== "object" || Array.isArray(format)) return false;
-  const type = (format as { type?: unknown }).type;
-  return type === "json_schema" || type === "json_object";
+/**
+ * True when the built Kiro payload carries a JSON contract.
+ *
+ * The executor is handed the already-translated payload, so `response_format`
+ * is gone by then; the translator leaves `KIRO_JSON_CONTRACT_MARKER` in the
+ * prompt for exactly this lookup.
+ */
+export function kiroPayloadWantsJsonOnly(transformedBody: unknown): boolean {
+  const record = transformedBody as
+    | { conversationState?: { currentMessage?: { userInputMessage?: { content?: unknown } } } }
+    | null
+    | undefined;
+  const content = record?.conversationState?.currentMessage?.userInputMessage?.content;
+  return typeof content === "string" && content.includes(KIRO_JSON_CONTRACT_MARKER);
 }
 
 /**
