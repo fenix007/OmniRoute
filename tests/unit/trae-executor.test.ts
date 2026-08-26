@@ -43,10 +43,12 @@ function installMockFetch({
   sessionBody,
   frames,
   sessionStatus = 200,
+  eventsStatus = 200,
 }: {
   sessionBody?: unknown;
   frames?: Array<{ event: string; data: unknown }>;
   sessionStatus?: number;
+  eventsStatus?: number;
 } = {}) {
   const calls: { sessionBody?: any; sessionHeaders?: Record<string, string>; eventsUrl?: string } =
     {};
@@ -55,6 +57,9 @@ function installMockFetch({
     const url = typeof input === "string" ? input : input.url;
     if (url.includes("/chat_sessions") && url.includes("/events")) {
       calls.eventsUrl = url;
+      if (eventsStatus !== 200) {
+        return jsonResponse({ code: 1001, message: "unauthorized" }, eventsStatus);
+      }
       return sseResponse(frames ?? [{ event: "done", data: { status: "completed" } }]);
     }
     if (url.endsWith("/chat_sessions")) {
@@ -252,8 +257,8 @@ test("upstream error event surfaces as 502 (non-stream)", async () => {
   }
 });
 
-test("session create failure returns 502", async () => {
-  const { restore } = installMockFetch({ sessionBody: "nope", sessionStatus: 500 });
+test("session create failure propagates the upstream HTTP status", async () => {
+  const { restore } = installMockFetch({ sessionBody: "unauthorized", sessionStatus: 401 });
   try {
     const ex = new TraeExecutor();
     const { response } = await ex.execute({
@@ -262,7 +267,23 @@ test("session create failure returns 502", async () => {
       stream: false,
       credentials: CREDS,
     });
-    assert.equal(response.status, 502);
+    assert.equal(response.status, 401);
+  } finally {
+    restore();
+  }
+});
+
+test("events stream failure propagates the upstream HTTP status", async () => {
+  const { restore } = installMockFetch({ eventsStatus: 401 });
+  try {
+    const ex = new TraeExecutor();
+    const { response } = await ex.execute({
+      model: "auto",
+      body: { messages: [{ role: "user", content: "hi" }] },
+      stream: false,
+      credentials: CREDS,
+    });
+    assert.equal(response.status, 401);
   } finally {
     restore();
   }

@@ -26,6 +26,20 @@ type ChatMessage = { role?: string; content?: unknown };
 
 const STREAM_TIMEOUT_MS = parseInt(process.env.TRAE_STREAM_TIMEOUT_MS || "300000", 10);
 
+class TraeUpstreamError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "TraeUpstreamError";
+  }
+}
+
+function upstreamErrorStatus(error: unknown): number {
+  return error instanceof TraeUpstreamError ? error.status : 502;
+}
+
 function flattenQuery(messages: ChatMessage[]): string {
   const parts: string[] = [];
   for (const m of messages) {
@@ -151,7 +165,7 @@ export class TraeExecutor extends BaseExecutor {
       signal: signal || undefined,
     });
     const text = await res.text();
-    if (!res.ok) throw new Error(`[${res.status}] ${text}`);
+    if (!res.ok) throw new TraeUpstreamError(`[${res.status}] ${text}`, res.status);
     const json = JSON.parse(text);
     if (json?.code !== 0) throw new Error(`Trae create_session: ${JSON.stringify(json)}`);
     return { sessionId: json.data.chat_session_id, messageId: json.data.message_id };
@@ -178,7 +192,8 @@ export class TraeExecutor extends BaseExecutor {
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
     try {
       const res = await fetch(url, { method: "GET", headers, signal: ctrl.signal });
-      if (!res.ok || !res.body) throw new Error(`[${res.status}] events stream failed`);
+      if (!res.ok) throw new TraeUpstreamError(`[${res.status}] events stream failed`, res.status);
+      if (!res.body) throw new Error("Trae events stream response has no body");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
@@ -242,7 +257,10 @@ export class TraeExecutor extends BaseExecutor {
       );
     } catch (err) {
       return {
-        response: errResponse(502, err instanceof Error ? err.message : String(err)),
+        response: errResponse(
+          upstreamErrorStatus(err),
+          err instanceof Error ? err.message : String(err)
+        ),
         url: this.base(),
         headers,
         transformedBody: body,
@@ -384,7 +402,10 @@ export class TraeExecutor extends BaseExecutor {
       );
     } catch (err) {
       return {
-        response: errResponse(502, err instanceof Error ? err.message : String(err)),
+        response: errResponse(
+          upstreamErrorStatus(err),
+          err instanceof Error ? err.message : String(err)
+        ),
         url: this.base(),
         headers,
         transformedBody: body,
