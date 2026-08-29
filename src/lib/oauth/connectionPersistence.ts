@@ -19,12 +19,55 @@ import { syncToCloud } from "@/lib/cloudSync";
  * Constant-time string comparison to prevent timing-oracle attacks (CWE-208).
  * Handles null/undefined safely and different-length strings.
  */
-function safeEqual(a: string | null | undefined, b: string | null | undefined): boolean {
+export function safeEqual(a: string | null | undefined, b: string | null | undefined): boolean {
   if (a == null || b == null) return a === b;
   const ba = Buffer.from(String(a));
   const bb = Buffer.from(String(b));
   if (ba.length !== bb.length) return false;
   return timingSafeEqual(ba, bb);
+}
+
+/**
+ * Decide whether two Codex OAuth payloads identify the same account. Team
+ * accounts are keyed by workspace; personal accounts without a workspace must
+ * agree on ChatGPT user id because email alone is not a unique account key.
+ */
+function isSameCodexAccount(
+  existingProviderData: Record<string, any> | null | undefined,
+  incomingProviderData: Record<string, any> | null | undefined
+): boolean {
+  const incomingWorkspace = incomingProviderData?.workspaceId;
+  const existingWorkspace = existingProviderData?.workspaceId;
+  if (incomingWorkspace || existingWorkspace) {
+    return safeEqual(existingWorkspace, incomingWorkspace);
+  }
+
+  const incomingUserId = incomingProviderData?.chatgptUserId;
+  const existingUserId = existingProviderData?.chatgptUserId;
+  return Boolean(incomingUserId) && safeEqual(existingUserId, incomingUserId);
+}
+
+/**
+ * Find the OAuth connection that should receive refreshed credentials. An
+ * explicit connection id remains authoritative; otherwise matching falls back
+ * to provider-specific account identity rules.
+ */
+export function findExistingOAuthConnectionMatch(
+  existing: Array<Record<string, any>>,
+  provider: string,
+  tokenData: Record<string, any>,
+  connectionId?: string
+): Record<string, any> | undefined {
+  return existing.find((connection) => {
+    if (connection.id && safeEqual(connectionId, connection.id)) return true;
+    if (!safeEqual(connection.email, tokenData.email) || connection.authType !== "oauth") {
+      return false;
+    }
+    if (provider === "codex") {
+      return isSameCodexAccount(connection.providerSpecificData, tokenData.providerSpecificData);
+    }
+    return true;
+  });
 }
 
 /**
@@ -69,7 +112,8 @@ async function syncToCloudIfEnabled(): Promise<void> {
 export async function persistOAuthConnection(
   provider: string,
   tokenData: any,
-  connectionId?: string
+  connectionId?: string,
+  options: { allowImplicitMatch?: boolean } = {}
 ) {
   // Normalize: if name is missing, use email or displayName as fallback label.
   if (!tokenData.name && (tokenData.email || tokenData.displayName)) {
@@ -83,16 +127,12 @@ export async function persistOAuthConnection(
   let connection: any;
   if (tokenData.email) {
     const existing = await getProviderConnections({ provider });
-    const match = existing.find((c: any) => {
-      if (c.id && safeEqual(connectionId, c.id)) return true;
-      if (!safeEqual(c.email, tokenData.email) || c.authType !== "oauth") return false;
-      // For Codex, also check workspaceId to avoid overwriting a different workspace.
-      if (provider === "codex" && tokenData.providerSpecificData?.workspaceId) {
-        const existingWorkspace = c.providerSpecificData?.workspaceId;
-        return safeEqual(existingWorkspace, tokenData.providerSpecificData.workspaceId);
-      }
-      return true;
-    });
+    const match =
+      options.allowImplicitMatch === false
+        ? existing.find((candidate: any) =>
+            candidate.id ? safeEqual(connectionId, candidate.id) : false
+          )
+        : findExistingOAuthConnectionMatch(existing, provider, tokenData, connectionId);
     const matchId = typeof match?.id === "string" ? match.id : null;
     if (matchId) {
       connection = await updateProviderConnection(matchId, {
@@ -105,7 +145,8 @@ export async function persistOAuthConnection(
   }
   if (!connection) {
     connection = await createProviderConnection(
-      buildOAuthConnectionCreatePayload(provider, tokenData, expiresAt)
+      buildOAuthConnectionCreatePayload(provider, tokenData, expiresAt),
+      { skipOAuthDedup: options.allowImplicitMatch === false }
     );
   }
 

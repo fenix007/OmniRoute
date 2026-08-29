@@ -186,6 +186,36 @@ Sources: `open-sse/executors/kiro/jsonFence.ts`, `open-sse/executors/kiro.ts`,
 `open-sse/translator/request/openai-to-kiro/responseFormat.ts`.
 Tests: `tests/unit/kiro-json-fence.test.ts`.
 
+Selected release/v3.8.50 and open-PR fixes adapted for our traffic (fork.11):
+
+| Change                                                              | Upstream PR | What                                                                                                                                                                                                               |
+| ------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| fix(combo): derive Responses stickiness from `input`                | #7277       | adapted in both standard and round-robin dispatch while retaining the fork.3 `combo.name` namespace                                                                                                                |
+| fix(resilience): treat client aborts as local lifecycle failures    | #7908/#8011 | adapted across raw-string/DOM abort status mapping, connection cooldown and provider breakers; fork.3 network/queue exclusions and HALF_OPEN recovery remain intact                                                |
+| fix(oauth): keep same-email Codex accounts distinct                 | #7825       | shared matcher across every OAuth completion path; workspace identity wins, otherwise a non-empty `chatgptUserId` must match, while an explicit `connectionId` remains authoritative                               |
+| fix(codex): use the catalog's real maximum context window           | #11179      | prefer `max_context_window` and advertise GPT-5.6 Codex as 872K input/context plus 128K output                                                                                                                     |
+| fix(sse): fail completed streams that emitted no model content      | #8732       | safety adaptation: a bounded frame gate suppresses the successful terminal and emits the protocol-native error first for OpenAI, Responses and Claude; split and 512-KiB completed events preserve fork.7 behavior |
+| fix(sse): do not fabricate plaintext for encrypted reasoning        | #8807       | removes placeholder summary mutation while preserving `encrypted_content` in output-item and completed snapshots                                                                                                   |
+| fix(kiro): preserve prose interleaved through parallel tool results | #8931       | defers assistant prose until the result batch is complete, without changing the fork.8–10 JSON contract/marker path                                                                                                |
+
+Sources: `open-sse/services/combo/sessionStickiness.ts`,
+`src/shared/utils/circuitBreaker.ts`, `src/lib/oauth/connectionPersistence.ts`,
+`src/app/api/providers/[id]/models/discovery/codex.ts`,
+`open-sse/utils/streamTerminalGuard.ts`, `open-sse/utils/stream.ts`, and
+`open-sse/translator/request/openai-to-kiro/toolResultGrouping.ts`.
+
+The #8732 upstream implementation was not copied literally: it appended an error
+after `finish_reason: stop`, `[DONE]`, `response.completed`, or `message_stop`.
+Clients are allowed to stop at those markers, so fork.11 withholds only the
+terminal frame and guarantees that an empty stream's error is the first terminal
+event. Complete keepalives and lifecycle frames continue streaming immediately;
+the unfinished-frame buffer is capped at 1 MiB and fails open above the cap.
+
+Quality gates (fork.11): new Kiro and SSE logic was extracted into leaf modules,
+so the frozen translator and the 800-line production-file cap remain green without
+changing the file-size baseline. The nightly mutation test list also records six
+fork tests that had drifted out of `stryker.conf.json`, plus the new abort suite.
+
 Quality gates (fork.8): `check:file-size` froze `openai-to-kiro.ts` at 912 lines,
 so the helper lives in a sibling module (`openai-to-kiro/responseFormat.ts`,
 alongside `messageHelpers.ts` / `adaptiveThinking.ts`) and the translator ends at

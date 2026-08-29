@@ -24,6 +24,7 @@ import type { StickyConnectionHealth } from "../../open-sse/services/combo/sessi
 
 const mod = await import("../../open-sse/services/combo/sessionStickiness.ts");
 const {
+  normalizeStickinessMessages,
   deriveMessageHash,
   applySessionStickiness,
   recordStickyBinding,
@@ -80,6 +81,34 @@ test.after(() => {
 });
 
 // ─── deriveMessageHash ───────────────────────────────────────────────────────
+
+test("normalizeStickinessMessages: supports Chat Completions and Responses inputs", () => {
+  assert.deepEqual(normalizeStickinessMessages({ messages: [{ role: "user", content: "chat" }] }), [
+    { role: "user", content: "chat" },
+  ]);
+  assert.deepEqual(normalizeStickinessMessages({ input: "responses" }), [
+    { role: "user", content: "responses" },
+  ]);
+  assert.deepEqual(normalizeStickinessMessages({ input: ["first", "second"] }), [
+    { role: "user", content: "first" },
+    { role: "user", content: "second" },
+  ]);
+  assert.deepEqual(
+    normalizeStickinessMessages({
+      input: [{ role: "user", content: [{ type: "input_text", text: "structured" }] }],
+    }),
+    [{ role: "user", content: [{ type: "input_text", text: "structured" }] }]
+  );
+  assert.equal(normalizeStickinessMessages({}), null);
+});
+
+test("normalizeStickinessMessages: messages takes precedence over input", () => {
+  const normalized = normalizeStickinessMessages({
+    messages: [{ role: "user", content: "chat" }],
+    input: "responses",
+  });
+  assert.deepEqual(normalized, [{ role: "user", content: "chat" }]);
+});
 
 test("deriveMessageHash: returns 16-char hex for a plain user message", () => {
   const hash = deriveMessageHash([{ role: "user", content: "Hello world" }]);

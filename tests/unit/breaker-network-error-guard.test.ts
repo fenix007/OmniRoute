@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
+import { shouldTripProviderBreakerForResult } from "../../src/sse/handlers/chatPredicates.ts";
 import {
   recordProviderFailure,
   clearProviderFailure,
@@ -13,22 +13,26 @@ import { PROVIDER_PROFILES } from "../../open-sse/config/constants.ts";
 // saw the request, so it may be perfectly healthy while only the network path is
 // broken (single-model path; the combo same-provider dead-proxy case is #8376's
 // contract and stays untouched).
-test("chat.ts keeps network and queue-capacity codes out of the provider breaker", () => {
-  // The predicate this fix guards lives inline in chat.ts on this base (upstream
-  // extracted it into chatPredicates.ts in a later 3.8.50 refactor), so assert on
-  // the guard at its dispatch site.
-  const src = fs.readFileSync(new URL("../../src/sse/handlers/chat.ts", import.meta.url), "utf8");
+test("single-model predicate keeps network and queue-capacity codes out of the provider breaker", () => {
   for (const code of ["proxy_unreachable", "RATE_LIMIT_QUEUE_TIMEOUT", "RATE_LIMIT_QUEUE_WEDGED"]) {
-    assert.match(
-      src,
-      new RegExp(`result\\.errorCode !== "${code}"`),
+    assert.equal(
+      shouldTripProviderBreakerForResult(
+        { status: 502, errorCode: code, error: "local failure" },
+        false,
+        false
+      ),
+      false,
       `${code} must be excluded from the provider-breaker trip`
     );
   }
-  assert.match(
-    src,
-    /!isNetworkError &&\s*\n\s*!isQueueTimeout/,
-    "the allRateLimited breaker trip must skip network errors and queue timeouts"
+  assert.equal(
+    shouldTripProviderBreakerForResult(
+      { status: 502, errorCode: null, error: "upstream bad gateway" },
+      false,
+      false
+    ),
+    true,
+    "genuine upstream 502s must still trip the provider breaker"
   );
 });
 

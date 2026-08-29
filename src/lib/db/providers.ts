@@ -133,7 +133,10 @@ function findExistingCookieConnection(
   return null;
 }
 
-export async function createProviderConnection(data: JsonRecord) {
+export async function createProviderConnection(
+  data: JsonRecord,
+  options: { skipOAuthDedup?: boolean } = {}
+) {
   const db = getDbInstance() as unknown as DbLike;
   const now = new Date().toISOString();
   const normalizedProviderSpecificData = normalizeProviderSpecificData(
@@ -146,7 +149,7 @@ export async function createProviderConnection(data: JsonRecord) {
   // We need to check for workspace uniqueness, not just email
   let existing: JsonRecord | null = null;
 
-  if (data.authType === "oauth" && data.email) {
+  if (!options.skipOAuthDedup && data.authType === "oauth" && data.email) {
     // For Codex, check for existing connection with same workspace
     const providerSpecificData = toRecord(data.providerSpecificData);
     const workspaceId = toStringOrNull(providerSpecificData.workspaceId);
@@ -617,8 +620,9 @@ export async function clearConnectionErrorIfUnchanged(
   }
 ): Promise<boolean> {
   const db = getDbInstance() as unknown as DbLike;
-  const result = db.prepare(
-    `
+  const result = db
+    .prepare(
+      `
     UPDATE provider_connections SET
       test_status = 'active',
       last_error = NULL,
@@ -634,13 +638,14 @@ export async function clearConnectionErrorIfUnchanged(
       AND IFNULL(last_error_at, '') = ?
       AND IFNULL(rate_limited_until, '') = ?
     `
-  ).run(
-    new Date().toISOString(),
-    id,
-    expected.testStatus ?? "",
-    expected.lastErrorAt ?? "",
-    expected.rateLimitedUntil ?? ""
-  );
+    )
+    .run(
+      new Date().toISOString(),
+      id,
+      expected.testStatus ?? "",
+      expected.lastErrorAt ?? "",
+      expected.rateLimitedUntil ?? ""
+    );
   const applied = (result.changes ?? 0) > 0;
   if (applied) {
     backupDbFile("pre-write");

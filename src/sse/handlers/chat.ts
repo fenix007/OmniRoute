@@ -22,9 +22,8 @@ import { resolveBareModelToConnectionDefault } from "@omniroute/open-sse/service
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { getImageModelEntry } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
-import { isSelfInflictedUpstreamTimeout } from "@omniroute/open-sse/handlers/chatCore/cooldownClassification.ts";
 import { applyNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias.ts";
-import { handleComboChat } from "@omniroute/open-sse/services/combo.ts";
+import { handleComboChat, shouldSkipConnDisable } from "@omniroute/open-sse/services/combo.ts";
 import { resolveRequestAutoControls } from "@omniroute/open-sse/services/autoCombo/requestControls.ts";
 import { resolveComboConfig } from "@omniroute/open-sse/services/comboConfig.ts";
 import { injectHandoffIntoBody } from "@omniroute/open-sse/services/contextHandoff.ts";
@@ -137,6 +136,10 @@ import {
 } from "../services/sameAccountTransportRetry";
 import { constrainConnectionsToQuota, resolveQuotaKeyScope } from "../../lib/quota/quotaKey";
 import { checkConnectionCapacity } from "../utils/backpressure";
+import {
+  PROVIDER_BREAKER_FAILURE_STATUSES,
+  shouldTripProviderBreakerForResult,
+} from "./chatPredicates";
 
 registerCodexQuotaFetcher();
 
@@ -209,8 +212,9 @@ function intersectAllowedConnectionIds(primary: unknown, secondary: unknown): st
   return first || second || null;
 }
 
-const PROVIDER_BREAKER_FAILURE_STATUSES = new Set([408, 500, 502, 503, 504]);
 const comboPromoteDeps = { updateCombo, info: log.info, warn: log.warn };
+
+export { shouldTripProviderBreakerForResult } from "./chatPredicates";
 
 /**
  * Handle chat completion request
@@ -1776,13 +1780,7 @@ async function handleSingleModelChat(
         ((credentials.providerSpecificData?.extraApiKeys as string[] | undefined) ?? []).length >
           0 || connectionHasExtraKeys(credentials.connectionId);
       const is401 = result.status === 401;
-      // Our own timeout fired on a slow upstream; don't cool down a healthy account.
-      const skipConnectionDisable =
-        result.status === 499 ||
-        result.errorCode === "client_disconnected" ||
-        result.errorType === "client_disconnected" ||
-        (is401 && hasExtraKeys) ||
-        isSelfInflictedUpstreamTimeout(result.status, result.errorType, provider);
+      const skipConnectionDisable = shouldSkipConnDisable(result, is401, hasExtraKeys, provider);
 
       const { shouldFallback, cooldownMs } = skipConnectionDisable
         ? { shouldFallback: false, cooldownMs: 0 }
@@ -1832,17 +1830,7 @@ async function handleSingleModelChat(
         continue;
       }
 
-      if (
-        !forceLiveComboTest &&
-        !isCombo &&
-        // Network-layer errors (ECONNREFUSED, ETIMEDOUT) never reached the provider —
-        // the provider may be healthy, only the network path is broken. OmniRoute's own
-        // rate-limit queue timeouts are backpressure we applied, not a provider failure.
-        result.errorCode !== "proxy_unreachable" &&
-        result.errorCode !== "RATE_LIMIT_QUEUE_TIMEOUT" &&
-        result.errorCode !== "RATE_LIMIT_QUEUE_WEDGED" &&
-        PROVIDER_BREAKER_FAILURE_STATUSES.has(Number(result.status))
-      ) {
+      if (shouldTripProviderBreakerForResult(result, isCombo, forceLiveComboTest)) {
         breaker._onFailure();
       }
 

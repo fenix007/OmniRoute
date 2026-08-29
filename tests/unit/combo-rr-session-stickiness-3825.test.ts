@@ -39,17 +39,53 @@ function rrCombo(name: string) {
     strategy: "round-robin",
     config: { maxRetries: 0 },
     models: [
-      { kind: "model", provider: "codex", providerId: "codex", model: "m-a", connectionId: "conn-A", id: `${name}-0` },
-      { kind: "model", provider: "codex", providerId: "codex", model: "m-b", connectionId: "conn-B", id: `${name}-1` },
-      { kind: "model", provider: "glm-cn", providerId: "glm-cn", model: "m-c", connectionId: "conn-C", id: `${name}-2` },
+      {
+        kind: "model",
+        provider: "codex",
+        providerId: "codex",
+        model: "m-a",
+        connectionId: "conn-A",
+        id: `${name}-0`,
+      },
+      {
+        kind: "model",
+        provider: "codex",
+        providerId: "codex",
+        model: "m-b",
+        connectionId: "conn-B",
+        id: `${name}-1`,
+      },
+      {
+        kind: "model",
+        provider: "glm-cn",
+        providerId: "glm-cn",
+        model: "m-c",
+        connectionId: "conn-C",
+        id: `${name}-2`,
+      },
     ],
   };
 }
 
-async function dispatchConnection(combo: Record<string, unknown>, firstMessage: string): Promise<string> {
+async function dispatchConnection(
+  combo: Record<string, unknown>,
+  firstMessage: string,
+  api: "chat" | "responses" = "chat"
+): Promise<string> {
   let conn = "?";
   await handleComboChat({
-    body: { model: combo.name, messages: [{ role: "user", content: firstMessage }], stream: false },
+    body:
+      api === "responses"
+        ? {
+            model: combo.name,
+            input: [{ role: "user", content: [{ type: "input_text", text: firstMessage }] }],
+            stream: false,
+          }
+        : {
+            model: combo.name,
+            messages: [{ role: "user", content: firstMessage }],
+            stream: false,
+          },
     combo,
     allCombos: [combo],
     isModelAvailable: async () => true,
@@ -100,11 +136,38 @@ test("round-robin: a sessionless conversation re-pins to its turn-1 connection a
   assert.equal(conns[1], conns[0], "turn 2 must reuse turn 1's connection");
 });
 
+test("round-robin: a Responses conversation re-pins within its combo namespace (#7277)", async () => {
+  const combo = rrCombo("rr-responses-stick-a");
+  await dispatchConnection(combo, "Warm up the first combo counter", "responses");
+
+  const conns: string[] = [];
+  for (let turn = 0; turn < 4; turn++) {
+    conns.push(await dispatchConnection(combo, "Same Responses conversation", "responses"));
+  }
+
+  assert.equal(new Set(conns).size, 1, `Responses turns must stay pinned: ${conns.join(", ")}`);
+
+  const otherCombo = rrCombo("rr-responses-stick-b");
+  const otherComboFirstConnection = await dispatchConnection(
+    otherCombo,
+    "Same Responses conversation",
+    "responses"
+  );
+  assert.notEqual(
+    otherComboFirstConnection,
+    conns[0],
+    "a Responses pin learned by one combo must not reorder a different combo"
+  );
+});
+
 test("round-robin: DISTINCT conversations still spread across connections on turn 1 (#3825 spreading guard)", async () => {
   const combo = rrCombo("rr-spread");
   const hist: Record<string, number> = {};
   for (let i = 0; i < 6; i++) {
-    const conn = await dispatchConnection(combo, `conversation number ${i} — distinct first message`);
+    const conn = await dispatchConnection(
+      combo,
+      `conversation number ${i} — distinct first message`
+    );
     hist[conn] = (hist[conn] || 0) + 1;
   }
   // Round-robin distribution must be preserved across conversations: more than one

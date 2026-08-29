@@ -164,14 +164,16 @@ function buildCodexDiscoveryModel(record: JsonRecord): CodexDiscoveryModel | nul
     apiFormat: "responses",
     supportedEndpoints: ["responses"],
   };
+  // The live Codex catalog may report both a lower pricing-tier window and the
+  // actual usable maximum. Prefer max_context_window whenever it is available.
   const inputTokenLimit = firstPositiveNumber(
     record.inputTokenLimit,
     record.maxInputTokens,
     record.max_input_tokens,
     record.contextLength,
     record.context_length,
-    record.context_window,
     record.max_context_window,
+    record.context_window,
     topProvider.context_length,
     limits.input_tokens,
     limits.inputTokenLimit,

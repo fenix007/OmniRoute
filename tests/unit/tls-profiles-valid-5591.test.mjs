@@ -33,7 +33,7 @@ const SOURCES = [
 // Strip comments before scanning — explanatory comments may name the bad
 // profile ("chrome_149 absent in 2.3.1") without it ever reaching wreq-js.
 function stripComments(line) {
-  return line.replace(/\/\*.*?\*\//g, "").replace(/\/\/.*$/, "");
+  return line.replace(/\/\*.*?\*\//g, "").replace(/\/\/[^\r\n]*/, "");
 }
 
 test("#5591 all configured chrome_* TLS profiles exist in wreq-js", () => {

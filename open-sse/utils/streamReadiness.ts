@@ -25,9 +25,12 @@ function hasUsefulValue(value: unknown): boolean {
   for (const key of [
     "content",
     "text",
+    "output_text",
     "delta",
     "reasoning_content",
     "reasoning",
+    "summary",
+    "encrypted_content",
     // Mistral/Magistral thinking arrays and StepFun/OpenRouter reasoning_details are
     // valid model output — without these a reasoning-only stream was misclassified as
     // "no useful content" and turned into a spurious 502 (#2520).
@@ -54,6 +57,7 @@ function hasUsefulValue(value: unknown): boolean {
     "function_call",
     "function_call_output",
     "output",
+    "item",
     "content_block",
     "response",
     "choices",
@@ -109,6 +113,129 @@ export function hasUsefulStreamContent(text: string): boolean {
   }
 
   return false;
+}
+
+const LEGIT_EMPTY_TERMINAL_REASONS = new Set([
+  "length",
+  "tool_calls",
+  "content_filter",
+  "max_tokens",
+  "max_output_tokens",
+  "tool_use",
+]);
+
+const TERMINAL_REASON_PATTERN = /"(?:finish_reason|stop_reason)"\s*:\s*"([^"]+)"/g;
+const INCOMPLETE_REASON_PATTERN = /"incomplete_details"\s*:\s*\{[^{}]*"reason"\s*:\s*"([^"]+)"/g;
+const SSE_FIELD_LINE = /(?:^|\r?\n)\s*(?:data|event):/;
+
+function isSubstantiveErrorValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (hasNonEmptyString(record.message)) return true;
+    return Object.keys(record).length > 0;
+  }
+  return value === true;
+}
+
+function dataLineHasStructuredStreamError(line: string, eventType: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data:")) return false;
+  const data = trimmed.slice(5).trim();
+  if (!data || data === "[DONE]") return false;
+
+  try {
+    const parsed: unknown = JSON.parse(data);
+    if (!isRecord(parsed)) return false;
+    const type = getPayloadType(parsed, eventType);
+    if (type === "error" || type === "response.failed" || eventType === "response.failed") {
+      return true;
+    }
+    if (isSubstantiveErrorValue(parsed.error)) return true;
+    const response = isRecord(parsed.response) ? parsed.response : null;
+    return response?.status === "failed" && response.error != null;
+  } catch {
+    return false;
+  }
+}
+
+export function frameHasStructuredStreamError(frame: string): boolean {
+  const lines = frame.split(/\r?\n/);
+  const eventLine = lines.find((line) => line.trim().startsWith("event:"));
+  const eventType = eventLine?.trim().slice(6).trim() ?? "";
+  if (/^error$/i.test(eventType)) return true;
+  return lines.some((line) => dataLineHasStructuredStreamError(line, eventType));
+}
+
+export type StreamContentWatcher = {
+  note: (text: string) => void;
+  finish: () => void;
+  sawContent: () => boolean;
+  sawLegitEmptyTerminal: () => boolean;
+  sawSseFrame: () => boolean;
+  sawError: () => boolean;
+};
+
+/**
+ * Incrementally classifies client-facing SSE without confusing lifecycle and
+ * keepalive frames with model output. Complete frames are inspected together,
+ * so JSON split across transport chunks remains valid.
+ */
+export function createStreamContentWatcher(): StreamContentWatcher {
+  const MAX_BUFFERED = 64 * 1024;
+  let pending = "";
+  let content = false;
+  let legitEmpty = false;
+  let sse = false;
+  let error = false;
+
+  const inspect = (frame: string): void => {
+    if (!frame) return;
+    if (!sse && SSE_FIELD_LINE.test(frame)) sse = true;
+    if (!error && frameHasStructuredStreamError(frame)) error = true;
+    if (!content && hasUsefulStreamContent(frame)) content = true;
+    if (legitEmpty) return;
+    for (const match of frame.matchAll(TERMINAL_REASON_PATTERN)) {
+      if (LEGIT_EMPTY_TERMINAL_REASONS.has(match[1])) {
+        legitEmpty = true;
+        return;
+      }
+    }
+    for (const match of frame.matchAll(INCOMPLETE_REASON_PATTERN)) {
+      if (LEGIT_EMPTY_TERMINAL_REASONS.has(match[1])) {
+        legitEmpty = true;
+        return;
+      }
+    }
+  };
+
+  return {
+    note(text: string): void {
+      if (!text) return;
+      pending += text;
+      for (;;) {
+        const boundary = pending.search(/\r?\n\r?\n/);
+        if (boundary === -1) break;
+        const separator = pending.slice(boundary).match(/^\r?\n\r?\n/)?.[0] ?? "\n\n";
+        const frameEnd = boundary + separator.length;
+        inspect(pending.slice(0, frameEnd));
+        pending = pending.slice(frameEnd);
+      }
+      if (pending.length > MAX_BUFFERED) {
+        inspect(pending);
+        pending = "";
+      }
+    },
+    finish(): void {
+      inspect(pending);
+      pending = "";
+    },
+    sawContent: () => content,
+    sawLegitEmptyTerminal: () => legitEmpty,
+    sawSseFrame: () => sse,
+    sawError: () => error,
+  };
 }
 
 type StreamReadinessSignalState = {

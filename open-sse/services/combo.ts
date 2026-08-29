@@ -68,6 +68,7 @@ import { estimateTokens } from "./contextManager.ts";
 import { getSessionConnection } from "./sessionManager.ts";
 import {
   applySessionStickiness,
+  normalizeStickinessMessages,
   recordStickyBinding,
   clearStickyBinding,
   peekStickyConnectionId,
@@ -134,6 +135,7 @@ import {
   clampComboDepth,
   shouldSkipForPredictedTtft,
   shouldRecordProviderBreakerFailure,
+  shouldSkipConnDisable,
   resolveDelayMs,
   comboModelNotFoundResponse,
   isStreamReadinessFailureErrorBody,
@@ -195,7 +197,12 @@ export { QUOTA_SOFT_DEPRIORITIZE_FACTOR, setCandidateQuotaSoftPenalty };
 export { scoreAutoTargets, expandAutoComboCandidatePool };
 export type { SingleModelTarget, ResolvedComboTarget };
 export { validateResponseQuality };
-export { clampComboDepth, shouldSkipForPredictedTtft, shouldRecordProviderBreakerFailure };
+export {
+  clampComboDepth,
+  shouldSkipForPredictedTtft,
+  shouldRecordProviderBreakerFailure,
+  shouldSkipConnDisable,
+};
 export { resolveShadowTargets, scheduleShadowRouting };
 export { preScreenTargets };
 export { resolveComboRuntimeUnits, resolveComboTargets, filterTargetsByRequestCompatibility };
@@ -1205,7 +1212,7 @@ export async function handleComboChat({
     ? ({ targets: orderedTargets, messageHash: null, stuck: false } as const)
     : await applySessionStickiness(
         orderedTargets,
-        body.messages as Array<{ role?: string; content?: unknown }>,
+        normalizeStickinessMessages(body as { messages?: unknown; input?: unknown }),
         combo.name
       );
   orderedTargets = _sticky.targets;
@@ -2687,7 +2694,7 @@ async function handleRoundRobinCombo({
     ? ({ targets: filteredTargets, messageHash: null, stuck: false } as const)
     : await applySessionStickiness(
         filteredTargets,
-        body?.messages as Array<{ role?: string; content?: unknown }>,
+        normalizeStickinessMessages(body as { messages?: unknown; input?: unknown }),
         combo.name
       );
   let rrStartIndex = startIndex;

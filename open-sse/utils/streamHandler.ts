@@ -2,6 +2,7 @@ import { trackPendingRequest } from "@/lib/usageDb";
 import { STREAM_IDLE_TIMEOUT_MS } from "../config/constants.ts";
 import { FORMATS } from "../translator/formats.ts";
 import { PENDING_REQUEST_CLEARED_MARKER } from "./stream.ts";
+import { createStreamTerminalGate } from "./streamTerminalGuard.ts";
 
 // Stream handler with disconnect detection - shared for all providers
 
@@ -191,7 +192,8 @@ function hasClientTerminalSseMarker(text: string, clientResponseFormat?: string 
   if (isResponsesClientFormat(clientResponseFormat)) {
     return (
       /(?:^|\r?\n)event:\s*response\.completed\s*(?:\r?\n|$)/.test(text) ||
-      /"type"\s*:\s*"response\.completed"/.test(text)
+      /(?:^|\r?\n)event:\s*response\.incomplete\s*(?:\r?\n|$)/.test(text) ||
+      /"type"\s*:\s*"response\.(?:completed|incomplete)"/.test(text)
     );
   }
 
@@ -203,6 +205,20 @@ function hasClientTerminalSseMarker(text: string, clientResponseFormat?: string 
   }
 
   return false;
+}
+
+function isClientTerminalSseFrame(frame: string, clientResponseFormat?: string | null): boolean {
+  if (hasClientTerminalSseMarker(frame, clientResponseFormat)) return true;
+
+  // Some clients stop reading as soon as the completion reason arrives, before
+  // the trailing [DONE]/message_stop frame. Inspect that frame before it is
+  // published so a contentless "stop" cannot masquerade as success (#8649).
+  if (clientResponseFormat === FORMATS.CLAUDE) {
+    return /"stop_reason"\s*:\s*"[^"]+"/.test(frame);
+  }
+
+  const finishReason = frame.match(/"finish_reason"\s*:\s*"([^"]+)"/)?.[1];
+  return !!finishReason && finishReason !== "error";
 }
 
 /**
@@ -464,6 +480,10 @@ export function createDisconnectAwareStream(transformStream, streamController) {
   const terminalDecoder = new TextDecoder();
   let terminalCarry = "";
   let clientTerminalSeen = false;
+  let emptyTerminalErrorEmitted = false;
+  const terminalGate = createStreamTerminalGate((frame) =>
+    isClientTerminalSseFrame(frame, streamController.clientResponseFormat)
+  );
 
   const noteClientChunk = (chunk: unknown) => {
     if (clientTerminalSeen) return;
@@ -484,6 +504,43 @@ export function createDisconnectAwareStream(transformStream, streamController) {
     }
   };
 
+  const forwardChunk = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    chunk: Uint8Array
+  ) => {
+    controller.enqueue(chunk);
+    noteClientChunk(chunk);
+  };
+
+  const emitEmptyContentError = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
+    if (emptyTerminalErrorEmitted) return;
+    emptyTerminalErrorEmitted = true;
+    const message = "Provider returned empty content";
+    const error = Object.assign(new Error(message), { statusCode: 502 });
+    streamController.handleError(error);
+    for (const chunk of buildStreamErrorChunks(
+      message,
+      502,
+      streamController.clientResponseFormat
+    )) {
+      controller.enqueue(chunk);
+    }
+    clientTerminalSeen = true;
+    streamController.markClientTerminalSeen?.();
+  };
+
+  const enqueueGateResult = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    result: ReturnType<typeof terminalGate.note>
+  ): { emitted: boolean; stopped: boolean } => {
+    for (const chunk of result.chunks) forwardChunk(controller, chunk);
+    if (result.emptyTerminal) {
+      emitEmptyContentError(controller);
+      return { emitted: true, stopped: true };
+    }
+    return { emitted: result.chunks.length > 0, stopped: false };
+  };
+
   return new ReadableStream(
     {
       async pull(controller) {
@@ -493,14 +550,44 @@ export function createDisconnectAwareStream(transformStream, streamController) {
         }
 
         try {
-          const { done, value } = await reader.read();
-          if (done) {
-            streamController.handleComplete();
-            controller.close();
-            return;
+          // Keep reading until at least one complete SSE frame can be emitted.
+          // Returning from pull() after buffering only a split frame can leave
+          // consumers waiting forever because no enqueue happened to schedule
+          // another pull.
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) {
+              const gated = enqueueGateResult(controller, terminalGate.finish());
+              if (gated.stopped) {
+                try {
+                  controller.close();
+                } catch {}
+                return;
+              }
+              if (!emptyTerminalErrorEmitted) {
+                streamController.handleComplete();
+              }
+              try {
+                controller.close();
+              } catch {}
+              return;
+            }
+
+            if (!(value instanceof Uint8Array)) continue;
+            const gated = enqueueGateResult(controller, terminalGate.note(value));
+            if (gated.stopped) {
+              try {
+                controller.close();
+              } catch {}
+              void Promise.allSettled([
+                reader.cancel("empty_content_terminal"),
+                writer.abort("empty_content_terminal"),
+              ]);
+              return;
+            }
+
+            if (gated.emitted) return;
           }
-          controller.enqueue(value);
-          noteClientChunk(value);
         } catch (error) {
           if (!streamController.isConnected()) {
             try {

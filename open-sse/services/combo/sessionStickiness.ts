@@ -200,6 +200,34 @@ const stickyMap = new Map<string, StickyEntry>();
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
+ * Normalize the two OpenAI request shapes into the message view used to derive
+ * session stickiness. Chat Completions carries turns in `messages`; Responses
+ * carries them in `input`, which may be a string, message objects, or strings.
+ *
+ * Combo routing happens before per-target translation, so this normalization
+ * must happen here. `messages` retains precedence for backward compatibility.
+ */
+export function normalizeStickinessMessages(
+  body: { messages?: unknown; input?: unknown } | null | undefined
+): Array<{ role?: string; content?: unknown }> | null {
+  if (!body || typeof body !== "object") return null;
+
+  const { messages, input } = body;
+  if (Array.isArray(messages) && messages.length > 0) {
+    return messages as Array<{ role?: string; content?: unknown }>;
+  }
+  if (typeof input === "string" && input.length > 0) {
+    return [{ role: "user", content: input }];
+  }
+  if (Array.isArray(input) && input.length > 0) {
+    return input.map((item) =>
+      typeof item === "string" ? { role: "user", content: item } : item
+    ) as Array<{ role?: string; content?: unknown }>;
+  }
+  return null;
+}
+
+/**
  * Derive a stable 16-hex-char session key from the first user message content.
  * Returns null when the message cannot be extracted (fail-open).
  */

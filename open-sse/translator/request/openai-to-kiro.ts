@@ -14,6 +14,7 @@ import {
 } from "./openai-to-kiro/messageHelpers.ts";
 import { supportsKiroAdaptiveThinking } from "./openai-to-kiro/adaptiveThinking.ts";
 import { appendKiroJsonFormatInstruction } from "./openai-to-kiro/responseFormat.ts";
+import { createToolResultGrouping } from "./openai-to-kiro/toolResultGrouping.ts";
 
 /**
  * Anthropic's direct-provider `[1m]` context-1m beta suffix. Kiro is AWS
@@ -36,10 +37,6 @@ export function hasUnsupportedKiroContextSuffix(model: unknown): boolean {
   );
 }
 
-/**
- * Convert OpenAI messages to Kiro format
- * Rules: system/tool/user -> user role, merge consecutive same roles
- */
 function convertMessages(messages, tools, model) {
   let history = [];
   let currentMessage = null;
@@ -51,12 +48,18 @@ function convertMessages(messages, tools, model) {
   let currentRole = null;
   let toolsAttached = false;
 
-  // Only Claude models support images in Kiro. Kiro also routes non-Claude
-  // models (deepseek, minimax, glm, qwen3-coder-next) that do not accept image
-  // attachments — gate image extraction behind a Claude check so we never
-  // attach images those models would reject.
+  // Only Claude models accept image attachments through Kiro.
   const supportsImages = typeof model === "string" && model.toLowerCase().includes("claude");
-
+  const grouping = createToolResultGrouping(messages);
+  const pushCurrentMessage = (message) => {
+    history.push(message);
+    currentMessage = message;
+  };
+  const resetPendingUser = () => {
+    pendingUserContent = [];
+    pendingToolResults = [];
+    pendingImages = [];
+  };
   const flushPending = () => {
     if (currentRole === "user") {
       // Kiro accepts an empty user `content` when the turn carries toolResults or
@@ -144,11 +147,9 @@ function convertMessages(messages, tools, model) {
         toolsAttached = true;
       }
 
-      history.push(userMsg);
-      currentMessage = userMsg;
-      pendingUserContent = [];
-      pendingToolResults = [];
-      pendingImages = [];
+      pushCurrentMessage(userMsg);
+      resetPendingUser();
+      grouping.flushInto(history);
     } else if (currentRole === "assistant") {
       const content = pendingAssistantContent.join("\n\n").trim() || "(empty)";
       const assistantMsg = {
@@ -159,6 +160,7 @@ function convertMessages(messages, tools, model) {
       history.push(assistantMsg);
       pendingAssistantContent = [];
     }
+    currentRole = null;
   };
 
   for (let i = 0; i < messages.length; i++) {
@@ -170,6 +172,7 @@ function convertMessages(messages, tools, model) {
       role = "user";
     }
 
+    if (grouping.handle(msg, i, currentRole, pendingToolResults.length, flushPending)) continue;
     // If role changes, flush pending
     if (role !== currentRole && currentRole !== null) {
       flushPending();

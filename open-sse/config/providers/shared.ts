@@ -295,16 +295,18 @@ export const GPT_5_6_API_CAPABILITIES = {
   maxOutputTokens: 128000,
 } as const;
 
-// Codex's live catalog reports a 372K usable input budget for GPT-5.6.
-// Keep the reserved 128K output budget explicit, matching the GPT-5.5 catalog contract.
+// Codex OAuth catalog limits. The live OAuth `/codex/models` endpoint reports
+// `context_window` (~272K, the first pricing tier) alongside
+// `max_context_window` (~872K, the real usable window). Prefer and advertise
+// the usable window so discovery does not cap routing at the pricing tier.
 export const GPT_5_6_CODEX_CAPABILITIES = {
   targetFormat: "openai-responses",
   toolCalling: true,
   supportsReasoning: true,
   supportsVision: true,
   supportsXHighEffort: true,
-  contextLength: 500000,
-  maxInputTokens: 372000,
+  contextLength: 872000,
+  maxInputTokens: 872000,
   maxOutputTokens: 128000,
 } as const;
 

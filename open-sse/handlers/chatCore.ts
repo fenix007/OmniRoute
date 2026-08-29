@@ -304,6 +304,7 @@ import {
   stripMarkdownCodeFence,
 } from "../utils/aiSdkCompat.ts";
 import { generateRequestId } from "@/shared/utils/requestId";
+import { classifyLocalAbortFailure } from "@/sse/handlers/chatPredicates";
 import { extractFacts } from "@/lib/memory/extraction";
 import { handleToolCallExecution } from "@/lib/skills/interception";
 import { OMNIROUTE_RESPONSE_HEADERS } from "@/shared/constants/headers";
@@ -2920,18 +2921,17 @@ export async function handleChatCore({
         errorCode: error.code,
       };
     }
-    const failureStatus =
-      error.name === "AbortError"
-        ? 499
-        : error.name === "TimeoutError" || error.name === "BodyTimeoutError"
-          ? HTTP_STATUS.GATEWAY_TIMEOUT
-          : error.status && typeof error.status === "number"
-            ? error.status
-            : HTTP_STATUS.BAD_GATEWAY;
-    const failureMessage =
-      error.name === "AbortError"
-        ? "Request aborted"
-        : formatProviderError(error, provider, model, failureStatus);
+    const localAbortFailure = classifyLocalAbortFailure(error, streamController.signal.aborted);
+    const failureStatus = localAbortFailure
+      ? localAbortFailure.status
+      : error.name === "TimeoutError" || error.name === "BodyTimeoutError"
+        ? HTTP_STATUS.GATEWAY_TIMEOUT
+        : error.status && typeof error.status === "number"
+          ? error.status
+          : HTTP_STATUS.BAD_GATEWAY;
+    const failureMessage = localAbortFailure
+      ? localAbortFailure.message
+      : formatProviderError(error, provider, model, failureStatus);
     const upstreamErrorCode = getUpstreamErrorIdentifier(error);
     // Tag our own deadline timeouts (fetch-start TimeoutError / body BodyTimeoutError,
     // both surfaced as a 504) as "upstream_timeout" so the cooldown layer can tell a
@@ -2960,7 +2960,7 @@ export async function handleChatCore({
       claudeCacheMeta: claudePromptCacheLogMeta,
       cacheSource: "upstream",
     });
-    if (error.name === "AbortError") {
+    if (localAbortFailure) {
       streamController.handleError(error);
       return createErrorResult(499, "Request aborted");
     }
@@ -3339,7 +3339,13 @@ export async function handleChatCore({
           // otherwise degenerate into a 429 rate-limit storm). Connection stays
           // active since only the specific model is unavailable. (#6827)
           const notFoundCooldownMs = COOLDOWN_MS.notFound;
-          lockModel(provider, errorConnectionId, currentModel, "model_not_found", notFoundCooldownMs);
+          lockModel(
+            provider,
+            errorConnectionId,
+            currentModel,
+            "model_not_found",
+            notFoundCooldownMs
+          );
           console.warn(
             `[provider] Node ${errorConnectionId} model not found (${statusCode}) for ${currentModel} - locking model for ${Math.ceil(notFoundCooldownMs / 1000)}s (connection stays active)`
           );

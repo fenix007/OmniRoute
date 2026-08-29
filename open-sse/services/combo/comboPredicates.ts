@@ -7,6 +7,7 @@
  */
 
 import { errorResponse } from "../../utils/error.ts";
+import { isSelfInflictedUpstreamTimeout } from "../../handlers/chatCore/cooldownClassification.ts";
 import { parseModel } from "../model.ts";
 import type { ResolvedComboTarget } from "./types.ts";
 
@@ -142,6 +143,7 @@ const PROVIDER_BREAKER_FAILURE_STATUSES = new Set([408, 500, 502, 503, 504]);
  * - G-02 / #2743: when the fallback result carries `skipProviderBreaker` (an embedded
  *   service supervisor outage signalled via `X-Omni-Fallback-Hint: connection_cooldown`)
  *   apply connection cooldown ONLY — never trip the whole-provider breaker.
+ * - Client aborts have already been normalized to 499 before this predicate.
  *
  * Pure predicate so the breaker decision is unit-testable without the full combo harness.
  */
@@ -156,6 +158,27 @@ export function shouldRecordProviderBreakerFailure(args: {
     PROVIDER_BREAKER_FAILURE_STATUSES.has(args.status) &&
     !args.sameProviderNext &&
     !args.skipProviderBreaker
+  );
+}
+
+/** Local/request-scoped failures must not cool down a healthy provider account. */
+export function shouldSkipConnDisable(
+  result: {
+    status: number;
+    errorCode?: string | null;
+    errorType?: string | null;
+    error?: unknown;
+  },
+  is401: boolean,
+  hasExtraKeys: boolean,
+  provider: string
+): boolean {
+  return (
+    result.status === 499 ||
+    result.errorCode === "client_disconnected" ||
+    result.errorType === "client_disconnected" ||
+    (is401 && hasExtraKeys) ||
+    isSelfInflictedUpstreamTimeout(result.status, result.errorType, provider)
   );
 }
 

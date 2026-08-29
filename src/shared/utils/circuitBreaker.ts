@@ -32,11 +32,19 @@ import type { FailureKind } from "./classify429";
  * own ReadableStream controller). It carries no `statusCode`, so it defaults to
  * HTTP 502 and would otherwise trip the provider circuit breaker — blacklisting
  * the entire Codex provider for a bug that lives in our bridge, not upstream.
- * Use this with the breaker's `isFailure` option so the bridge error is ignored
- * by the provider breaker while genuine upstream 5xx failures still count.
+ * Client-side aborts follow the same policy when they carry the platform's
+ * AbortError identity. Raw provider-controlled text is deliberately not enough
+ * to suppress health accounting; request-signal-aware call sites classify
+ * internal string abort reasons before they reach the breaker.
+ *
+ * Use this with the breaker's `isFailure` option so local lifecycle errors are
+ * ignored by the provider breaker while genuine upstream 5xx failures still count.
  */
 export function isLocalStreamLifecycleError(error: unknown): boolean {
   if (!error) return false;
+  const name =
+    typeof (error as { name?: unknown }).name === "string" ? (error as { name: string }).name : "";
+  if (name === "AbortError") return true;
   const message =
     typeof error === "string"
       ? error

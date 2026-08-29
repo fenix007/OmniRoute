@@ -40,7 +40,11 @@ test("createDisconnectAwareStream treats errors after OpenAI DONE as successful 
       pull(controller) {
         pullCount += 1;
         if (pullCount === 1) {
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.enqueue(
+            encoder.encode(
+              'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}\n\ndata: [DONE]\n\n'
+            )
+          );
           return;
         }
         controller.error(new Error("terminated"));
@@ -65,9 +69,10 @@ test("createDisconnectAwareStream treats errors after OpenAI DONE as successful 
   );
   const text = await readStreamText(stream);
 
-  assert.equal(text, "data: [DONE]\n\n");
+  assert.match(text, /"content":"ok"/);
+  assert.match(text, /data: \[DONE\]/);
   assert.equal(errorHandled, false);
-  assert.doesNotMatch(text, /finish_reason/);
+  assert.doesNotMatch(text, /"finish_reason":"error"/);
   assert.doesNotMatch(text, /terminated/);
 });
 
@@ -76,7 +81,11 @@ test("createDisconnectAwareStream treats cancel after OpenAI DONE as successful 
   const transformStream = {
     readable: new ReadableStream({
       start(controller) {
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.enqueue(
+          encoder.encode(
+            'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}\n\ndata: [DONE]\n\n'
+          )
+        );
       },
     }),
     writable: {
@@ -97,8 +106,10 @@ test("createDisconnectAwareStream treats cancel after OpenAI DONE as successful 
     })
   );
   const reader = stream.getReader();
-  const first = await reader.read();
-  assert.equal(decoder.decode(first.value), "data: [DONE]\n\n");
+  const content = await reader.read();
+  assert.match(decoder.decode(content.value), /"content":"ok"/);
+  const terminal = await reader.read();
+  assert.equal(decoder.decode(terminal.value), "data: [DONE]\n\n");
   await reader.cancel("request_signal_aborted");
 
   assert.equal(disconnectHandled, false);
@@ -110,7 +121,9 @@ test("createDisconnectAwareStream treats cancel after Responses completed as suc
     readable: new ReadableStream({
       start(controller) {
         controller.enqueue(
-          encoder.encode('event: response.completed\ndata: {"type":"response.completed"}\n\n')
+          encoder.encode(
+            'event: response.completed\ndata: {"type":"response.completed","response":{"output_text":"ok"}}\n\n'
+          )
         );
       },
     }),
@@ -135,6 +148,38 @@ test("createDisconnectAwareStream treats cancel after Responses completed as suc
   const reader = stream.getReader();
   const first = await reader.read();
   assert.match(decoder.decode(first.value), /response\.completed/);
+  await reader.cancel("request_signal_aborted");
+
+  assert.equal(disconnectHandled, false);
+});
+
+test("createDisconnectAwareStream treats cancel after legitimate Responses incomplete as successful completion", async () => {
+  let disconnectHandled = false;
+  const transformStream = {
+    readable: new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'event: response.incomplete\ndata: {"type":"response.incomplete","response":{"status":"incomplete","output":[],"incomplete_details":{"reason":"max_output_tokens"}}}\n\n'
+          )
+        );
+      },
+    }),
+    writable: createNoopAbortWritable(),
+  };
+
+  const stream = createDisconnectAwareStream(
+    transformStream,
+    createStreamController({
+      clientResponseFormat: FORMATS.OPENAI_RESPONSES,
+      onDisconnect() {
+        disconnectHandled = true;
+      },
+    })
+  );
+  const reader = stream.getReader();
+  const terminal = await reader.read();
+  assert.match(decoder.decode(terminal.value), /response\.incomplete/);
   await reader.cancel("request_signal_aborted");
 
   assert.equal(disconnectHandled, false);
@@ -185,8 +230,13 @@ test("createDisconnectAwareStream detects a Responses terminal marker split acro
   const transformStream = {
     readable: new ReadableStream({
       start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+          )
+        );
         controller.enqueue(encoder.encode("event: response.comp"));
-        controller.enqueue(encoder.encode('leted\ndata: {"type":"x"}\n\n'));
+        controller.enqueue(encoder.encode('leted\ndata: {"type":"response.completed"}\n\n'));
       },
     }),
     writable: createNoopAbortWritable(),
@@ -202,8 +252,12 @@ test("createDisconnectAwareStream detects a Responses terminal marker split acro
     })
   );
   const reader = stream.getReader();
-  await reader.read();
-  await reader.read();
+  let delivered = "";
+  while (!delivered.includes("response.completed")) {
+    const result = await reader.read();
+    assert.equal(result.done, false);
+    delivered += decoder.decode(result.value);
+  }
   await reader.cancel("request_signal_aborted");
 
   assert.equal(disconnectHandled, false);
