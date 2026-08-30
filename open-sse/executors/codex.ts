@@ -1215,13 +1215,12 @@ export class CodexExecutor extends BaseExecutor {
         "TOKEN_REFRESH",
         `Codex: token refresh failed (${result.error}) — re-authentication required`
       );
-      // Return null (not the error-only object): base.ts spreads any truthy
-      // result onto activeCredentials and persists it via onCredentialsRefreshed.
-      // Spreading `{ error }` would keep the stale/expired accessToken in place
-      // and write garbage to the connection. Returning null leaves the original
-      // credentials untouched so the upstream 401/403 drives the proper
-      // re-auth / mark-expired path instead.
-      return null;
+      // Preserve the sentinel so refreshWithRetry can stop immediately instead
+      // of repeating a permanently failed refresh. BaseExecutor explicitly
+      // recognizes this shape and does not spread it into active credentials;
+      // the reactive chatCore path uses it to mark the confirmed-bad connection
+      // expired after an upstream 401/403.
+      return result;
     }
     return result;
   }

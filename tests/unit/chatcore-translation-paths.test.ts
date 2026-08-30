@@ -1363,6 +1363,48 @@ test("chatCore refreshes GitHub credentials after 401 and retries with the refre
   assert.equal(payload.choices[0].message.content, "retry succeeded after refresh");
 });
 
+test("chatCore expires an explicitly invalidated Codex OAuth connection without refresh retries", async () => {
+  const refreshUpdates = [];
+  const { calls, result } = await invokeChatCore({
+    provider: "codex",
+    model: "gpt-5.6-sol",
+    endpoint: "/v1/responses",
+    credentials: {
+      accessToken: "expired-access-token",
+      refreshToken: "must-not-be-used",
+      connectionId: "codex-invalidated-connection",
+      providerSpecificData: { workspaceId: "workspace-test" },
+    },
+    connectionId: "codex-invalidated-connection",
+    body: {
+      model: "gpt-5.6-sol",
+      stream: false,
+      input: "fail over immediately",
+    },
+    onCredentialsRefreshed(updated) {
+      refreshUpdates.push(updated);
+    },
+    responseFactory() {
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: "Encountered invalidated oauth token for user, failing request",
+          },
+        }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    },
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 401);
+  assert.equal(calls.length, 1, "must not call the OAuth token endpoint or retry upstream");
+  assert.deepEqual(refreshUpdates, [{ testStatus: "expired", isActive: false }]);
+});
+
 test("chatCore uses the native executor when no upstream proxy mode is enabled", async () => {
   const { call } = await invokeChatCore({
     provider: "openai",

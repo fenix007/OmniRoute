@@ -26,6 +26,7 @@ import {
   isStripReasoningRequested,
 } from "./chatCore/headers.ts";
 import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
+import { isTerminalCodexOAuthFailure } from "./chatCore/codexAuthFailure.ts";
 import { isCodexOriginatedHeaders } from "../config/codexIdentity.ts";
 import { trackDevice, extractIpFromHeaders } from "../services/deviceTracker.ts";
 import { getCombosCached } from "./chatCore/comboContextCache.ts";
@@ -2990,14 +2991,20 @@ export async function handleChatCore({
       upstreamErrorType
     );
   }
-  // We need to peek at the error text if it's 400 for Qwen
+  // Peek before refresh when the provider exposes a terminal auth signal in
+  // the response body. Qwen needs this for its non-standard 400 expiration;
+  // Codex needs it to avoid spending ~90s refreshing an explicitly invalidated
+  // OAuth credential before combo routing can fail over.
   let upstreamErrorParsed = false;
   let parsedStatusCode = providerResponse.status;
   let parsedMessage = "";
   let parsedRetryAfterMs: number | null = null;
   let upstreamErrorBody: unknown = null;
 
-  if (provider === "qwen" && providerResponse.status === HTTP_STATUS.BAD_REQUEST) {
+  if (
+    (provider === "qwen" && providerResponse.status === HTTP_STATUS.BAD_REQUEST) ||
+    (provider === "codex" && providerResponse.status === HTTP_STATUS.UNAUTHORIZED)
+  ) {
     const errorDetails = await parseUpstreamError(providerResponse, provider);
     parsedStatusCode = errorDetails.statusCode;
     parsedMessage = errorDetails.message;
@@ -3023,6 +3030,23 @@ export async function handleChatCore({
     parsedStatusCode === HTTP_STATUS.BAD_REQUEST &&
     parsedMessage?.toLowerCase().includes("session has expired");
 
+  const isTerminalCodexOAuthError = isTerminalCodexOAuthFailure({
+    provider,
+    status: providerResponse.status,
+    message: parsedMessage,
+    responseBody: upstreamErrorBody,
+  });
+
+  if (isTerminalCodexOAuthError) {
+    log?.warn?.(
+      "TOKEN",
+      "CODEX | upstream reported an invalidated OAuth token; expiring the connection without refresh retries"
+    );
+    if (onCredentialsRefreshed) {
+      await onCredentialsRefreshed({ testStatus: "expired", isActive: false });
+    }
+  }
+
   // Track whether stream_options was present and stripped — if so, 401/403 after
   // that may be from the modification rather than a genuine auth failure, so we
   // skip the credential refresh attempt in that case.
@@ -3037,7 +3061,8 @@ export async function handleChatCore({
     (providerResponse.status === HTTP_STATUS.UNAUTHORIZED ||
       providerResponse.status === HTTP_STATUS.FORBIDDEN ||
       isQwenExpiredError) &&
-    !hadStreamOptions // Skip refresh if failure may be from stream_options removal, not auth
+    !hadStreamOptions && // Skip refresh if failure may be from stream_options removal, not auth
+    !isTerminalCodexOAuthError
   ) {
     // Fix A: wrap refreshCredentials in runWithOnPersist so the persist callback
     // executes INSIDE the per-connection mutex held by getAccessToken. This makes
