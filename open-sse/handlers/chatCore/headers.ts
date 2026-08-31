@@ -16,6 +16,18 @@ export function getHeaderValueCaseInsensitive(
 }
 
 /**
+ * Bypass cache-like response reuse for this request. The semantic response cache
+ * already honors this header; in-flight request deduplication must honor it too.
+ */
+export function isNoCacheRequested(
+  headers: Record<string, unknown> | Headers | null | undefined
+): boolean {
+  return (
+    (getHeaderValueCaseInsensitive(headers, "x-omniroute-no-cache") || "").toLowerCase() === "true"
+  );
+}
+
+/**
  * Per-request opt-out of memory (and skills) injection via the
  * `x-omniroute-no-memory` header. Mirrors the existing `x-omniroute-no-cache`
  * convention. Truthy values: `true` / `1` / `yes` (case-insensitive). Clients that

@@ -1,0 +1,1 @@
+- **fix(sse):** make `X-OmniRoute-No-Cache: true` bypass concurrent request deduplication and prevent in-flight HTTP errors or empty bodies from being reused by waiting requests

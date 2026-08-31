@@ -1598,3 +1598,124 @@ test("chat pipeline deduplicates concurrent identical non-stream requests", asyn
   assert.equal(jsonA.choices[0].message.content, "Deduplicated response");
   assert.equal(jsonB.choices[0].message.content, "Deduplicated response");
 });
+
+test("X-OmniRoute-No-Cache bypasses concurrent request deduplication", async () => {
+  clearProviderFailure("codex");
+  await seedConnection("codex", { apiKey: "sk-codex-no-cache-dedup" });
+  let fetchCount = 0;
+  const upstreamBodies: Array<{ text?: { format?: { strict?: boolean } } }> = [];
+
+  globalThis.fetch = async (_url, init: RequestInit = {}) => {
+    const callNumber = ++fetchCount;
+    upstreamBodies.push(JSON.parse(String(init.body)));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return buildOpenAIResponsesSSE({
+      model: "gpt-5.6-sol",
+      text: JSON.stringify({ result: `independent-${callNumber}` }),
+    });
+  };
+
+  const requests = Array.from({ length: 3 }, () =>
+    buildRequest({
+      headers: { "X-OmniRoute-No-Cache": "true" },
+      body: {
+        model: "cx/gpt-5.6-sol",
+        stream: false,
+        temperature: 0,
+        messages: [{ role: "user", content: "Do not deduplicate this request" }],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "dedup_probe",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: { result: { type: "string" } },
+              required: ["result"],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+    })
+  );
+
+  const responses = await Promise.all(requests.map((request) => handleChat(request)));
+  const payloads = (await Promise.all(responses.map((response) => response.json()))) as Array<{
+    choices: Array<{ message: { content: string } }>;
+  }>;
+
+  assert.equal(fetchCount, requests.length);
+  assert.equal(upstreamBodies.length, requests.length);
+  assert.ok(upstreamBodies.every((body) => body.text?.format?.strict === true));
+  assert.deepEqual(
+    new Set(payloads.map((payload) => payload.choices[0].message.content)).size,
+    requests.length
+  );
+});
+
+test("concurrent request deduplication does not reuse an upstream error", async () => {
+  clearProviderFailure("openai");
+  await seedConnection("openai", { apiKey: "sk-openai-error-dedup" });
+  let fetchCount = 0;
+
+  globalThis.fetch = async () => {
+    const callNumber = ++fetchCount;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (callNumber === 1) {
+      return new Response(JSON.stringify({ error: { message: "upstream rejected request" } }), {
+        status: 422,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return buildOpenAIResponse(`Recovered upstream response ${callNumber}`);
+  };
+
+  const requests = Array.from({ length: 3 }, () =>
+    buildRequest({
+      body: {
+        model: "openai/gpt-4o-mini",
+        stream: false,
+        temperature: 0,
+        messages: [{ role: "user", content: "Do not share an upstream error" }],
+      },
+    })
+  );
+
+  const responses = await Promise.all(requests.map((request) => handleChat(request)));
+
+  assert.equal(fetchCount, requests.length);
+  assert.ok(responses.filter((response) => response.status === 422).length <= 1);
+  assert.ok(responses.filter((response) => response.status === 200).length >= requests.length - 1);
+});
+
+test("concurrent request deduplication does not reuse an empty upstream body", async () => {
+  clearProviderFailure("openai");
+  await seedConnection("openai", { apiKey: "sk-openai-empty-dedup" });
+  let fetchCount = 0;
+
+  globalThis.fetch = async () => {
+    const callNumber = ++fetchCount;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (callNumber === 1) {
+      return buildOpenAIResponse("");
+    }
+    return buildOpenAIResponse(`Recovered upstream response ${callNumber}`);
+  };
+
+  const requests = Array.from({ length: 3 }, () =>
+    buildRequest({
+      body: {
+        model: "openai/gpt-4o-mini",
+        stream: false,
+        temperature: 0,
+        messages: [{ role: "user", content: "Do not share an empty upstream body" }],
+      },
+    })
+  );
+
+  const responses = await Promise.all(requests.map((request) => handleChat(request)));
+
+  assert.equal(fetchCount, requests.length);
+  assert.ok(responses.filter((response) => response.status !== 200).length <= 1);
+});

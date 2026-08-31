@@ -21,6 +21,7 @@ import { assembleStreamingPipeline } from "./chatCore/streamingPipeline.ts";
 import { sanitizeChatRequestBody } from "./chatCore/sanitization.ts";
 import {
   getHeaderValueCaseInsensitive,
+  isNoCacheRequested,
   isNoMemoryRequested,
   resolveCompressionHeader,
   isStripReasoningRequested,
@@ -43,6 +44,7 @@ import {
 } from "./chatCore/passthroughHelpers.ts";
 import {
   buildStreamingResponseHeaders,
+  isReusableDeduplicatedExecutionResult,
   materializeDeduplicatedExecutionResult,
   stripNextMiddlewareControlHeaders,
   stripStaleForwardingHeaders,
@@ -2270,8 +2272,9 @@ export async function handleChatCore({
   });
 
   const dedupRequestBody = { ...translatedBody, model: `${provider}/${model}`, stream };
-  const dedupEnabled = shouldDeduplicate(dedupRequestBody);
-  const dedupHash = dedupEnabled ? computeRequestHash(dedupRequestBody) : null;
+  const dedupEnabled =
+    !isNoCacheRequested(clientRawRequest?.headers) && shouldDeduplicate(dedupRequestBody);
+  const dedupHash = dedupEnabled ? computeRequestHash(dedupRequestBody, apiKeyInfo?.id) : null;
 
   const executeProviderRequest = async (modelToCall = effectiveModel, allowDedup = false) => {
     const execute = async () => {
@@ -2770,6 +2773,13 @@ export async function handleChatCore({
       const dedupResult = await deduplicate(dedupHash, execute);
       if (dedupResult.wasDeduplicated) {
         log?.debug?.("DEDUP", `Joined in-flight request hash=${dedupHash}`);
+        if (!isReusableDeduplicatedExecutionResult(dedupResult.result)) {
+          log?.warn?.(
+            "DEDUP",
+            `In-flight request hash=${dedupHash} returned an error or empty body; executing waiter independently`
+          );
+          return execute();
+        }
       }
       return materializeDeduplicatedExecutionResult(dedupResult.result);
     }

@@ -3,6 +3,9 @@ import {
   buildOmniRouteResponseMetaHeaders,
 } from "@/domain/omnirouteResponseMeta";
 import { OMNIROUTE_RESPONSE_HEADERS } from "@/shared/constants/headers";
+import { isEmptyContentResponse } from "../../services/errorClassifier.ts";
+import { detectMalformedNonStream } from "../../utils/diagnostics.ts";
+import { parseNonStreamingSSEPayload } from "./nonStreamingSse.ts";
 
 const STREAMING_RESPONSE_HEADER_DENYLIST = new Set([
   "content-type",
@@ -30,6 +33,61 @@ const STREAMING_RESPONSE_HEADER_DENYLIST = new Set([
  * See issue #5849.
  */
 const NEXTJS_MIDDLEWARE_HEADER_PREFIX = "x-middleware-";
+
+interface DeduplicatedExecutionSnapshot {
+  status: number;
+  statusText: string;
+  headers: [string, string][];
+  payload: string;
+}
+
+function getDeduplicatedExecutionSnapshot(
+  result: Record<string, unknown> | null | undefined
+): DeduplicatedExecutionSnapshot | undefined {
+  return result && typeof result === "object"
+    ? (result._dedupSnapshot as DeduplicatedExecutionSnapshot | undefined)
+    : undefined;
+}
+
+function getSnapshotContentType(snapshot: DeduplicatedExecutionSnapshot): string {
+  return (
+    snapshot.headers.find(([name]) => name.toLowerCase() === "content-type")?.[1] || ""
+  ).toLowerCase();
+}
+
+function parseSnapshotPayload(snapshot: DeduplicatedExecutionSnapshot): unknown {
+  const contentType = getSnapshotContentType(snapshot);
+  const looksLikeSSE =
+    contentType.includes("text/event-stream") || /(^|\n)\s*(event|data):/m.test(snapshot.payload);
+
+  if (looksLikeSSE) {
+    return parseNonStreamingSSEPayload(snapshot.payload, "", "")?.body ?? null;
+  }
+
+  try {
+    return JSON.parse(snapshot.payload);
+  } catch {
+    return null;
+  }
+}
+
+function hasUnusableCompletionPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return true;
+
+  const body = payload as Record<string, unknown>;
+  const hasStructuredCompletionShape =
+    body.object === "response" ||
+    Array.isArray(body.choices) ||
+    (body.type === "message" && Array.isArray(body.content));
+  if (hasStructuredCompletionShape) {
+    return detectMalformedNonStream(body) !== null;
+  }
+
+  const hasRecognizedCompletionShape = typeof body.text === "string" || "content" in body;
+  if (!hasRecognizedCompletionShape) return true;
+
+  return isEmptyContentResponse(body);
+}
 
 /**
  * True when `headerName` is a Next.js internal middleware control header that
@@ -85,17 +143,7 @@ export function buildStreamingResponseHeaders(
 export function materializeDeduplicatedExecutionResult<T extends Record<string, unknown>>(
   result: T
 ): T {
-  const snapshot =
-    result && typeof result === "object"
-      ? ((result as Record<string, unknown>)._dedupSnapshot as
-          | {
-              status: number;
-              statusText: string;
-              headers: [string, string][];
-              payload: string;
-            }
-          | undefined)
-      : undefined;
+  const snapshot = getDeduplicatedExecutionSnapshot(result);
 
   if (!snapshot) return result;
 
@@ -107,6 +155,22 @@ export function materializeDeduplicatedExecutionResult<T extends Record<string, 
       headers: snapshot.headers,
     }),
   } as T;
+}
+
+/**
+ * Only successful, non-empty upstream bodies are safe to fan out to requests that
+ * joined an in-flight execution. A waiter must execute independently when the owner
+ * received an HTTP error or an empty body, so one bad response cannot poison a burst.
+ */
+export function isReusableDeduplicatedExecutionResult(
+  result: Record<string, unknown> | null | undefined
+): boolean {
+  const snapshot = getDeduplicatedExecutionSnapshot(result);
+  if (!snapshot) return false;
+  if (snapshot.status < 200 || snapshot.status >= 300 || snapshot.payload.trim().length === 0) {
+    return false;
+  }
+  return !hasUnusableCompletionPayload(parseSnapshotPayload(snapshot));
 }
 
 /**

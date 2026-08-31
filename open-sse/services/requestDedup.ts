@@ -32,26 +32,44 @@ export interface DedupResult<T> {
 
 const inflight = new Map<string, Promise<unknown>>();
 
+const NON_OUTPUT_TOP_LEVEL_FIELDS = new Set(["stream", "user", "metadata"]);
+
+function stableCanonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableCanonicalize);
+  if (!value || typeof value !== "object") return value;
+
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .filter((key) => record[key] !== undefined)
+      .map((key) => [key, stableCanonicalize(record[key])])
+  );
+}
+
 /**
  * Compute a deterministic hash for a request body.
- * Includes: model, messages, temperature, tools, tool_choice, max_tokens, response_format
- * Excludes: stream, user, metadata (don't affect LLM output)
+ * Hashes the complete translated upstream body except top-level transport/client
+ * metadata that cannot affect model output. The handler calls this after translation,
+ * where prompt-bearing fields vary by provider (`messages`, `input`, `contents`, and
+ * nested envelopes); projecting only Chat Completions fields can therefore collide
+ * different prompts or structured-output schemas onto one shared response.
+ *
+ * `tenantId` namespaces the hash because a shared in-flight execution uses the
+ * owner's provider connection, policy, and billing context. Anonymous local mode
+ * keeps the un-namespaced form.
  */
-export function computeRequestHash(requestBody: unknown): string {
-  const body = requestBody as Record<string, unknown>;
-  const canonical = {
-    model: body.model ?? null,
-    messages: body.messages ?? null,
-    temperature: typeof body.temperature === "number" ? body.temperature : 1.0,
-    tools: body.tools ?? null,
-    tool_choice: body.tool_choice ?? null,
-    max_tokens: body.max_tokens ?? null,
-    response_format: body.response_format ?? null,
-    top_p: body.top_p ?? null,
-    frequency_penalty: body.frequency_penalty ?? null,
-    presence_penalty: body.presence_penalty ?? null,
-  };
-  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 16);
+export function computeRequestHash(requestBody: unknown, tenantId?: string | null): string {
+  const body =
+    requestBody && typeof requestBody === "object" && !Array.isArray(requestBody)
+      ? (requestBody as Record<string, unknown>)
+      : {};
+  const outputAffectingBody = Object.fromEntries(
+    Object.entries(body).filter(([key]) => !NON_OUTPUT_TOP_LEVEL_FIELDS.has(key))
+  );
+  const canonical = JSON.stringify(stableCanonicalize(outputAffectingBody));
+  const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+  return tenantId ? `${tenantId}.${digest}` : digest;
 }
 
 /** Determine whether a request should be deduplicated */
@@ -82,8 +100,15 @@ export async function deduplicate<T>(
 
   const existing = inflight.get(hash);
   if (existing) {
-    const result = (await existing) as T;
-    return { result, wasDeduplicated: true, hash };
+    try {
+      const result = (await existing) as T;
+      return { result, wasDeduplicated: true, hash };
+    } catch {
+      // The owner failed before producing a response (fetch rejection, timeout,
+      // abort, etc.). A waiter must make its own attempt instead of inheriting
+      // the same transport failure.
+      return { result: await fn(), wasDeduplicated: false, hash };
+    }
   }
 
   if (inflight.size >= MAX_INFLIGHT) {
@@ -91,12 +116,7 @@ export async function deduplicate<T>(
     if (oldestKey !== undefined) inflight.delete(oldestKey);
   }
 
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const sharedPromise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
+  const sharedPromise = Promise.resolve().then(fn);
   inflight.set(hash, sharedPromise as Promise<unknown>);
 
   const timer = setTimeout(() => {
@@ -104,12 +124,8 @@ export async function deduplicate<T>(
   }, config.timeoutMs);
 
   try {
-    const result = await fn();
-    resolve(result);
+    const result = await sharedPromise;
     return { result, wasDeduplicated: false, hash };
-  } catch (err) {
-    reject(err);
-    throw err;
   } finally {
     clearTimeout(timer);
     if (inflight.get(hash) === sharedPromise) inflight.delete(hash);
