@@ -1,0 +1,1 @@
+- **fix(codex):** translate buffered Responses API `response.incomplete` terminals into Chat Completions `finish_reason: "length"` instead of reporting truncated output as a successful `stop`

@@ -819,6 +819,9 @@ export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
     }),
     usage: picked.usage || null,
     status: picked.status || statusFallback,
+    ...(picked.incomplete_details && typeof picked.incomplete_details === "object"
+      ? { incomplete_details: picked.incomplete_details }
+      : {}),
     created_at: picked.created_at || Math.floor(Date.now() / 1000),
     metadata: picked.metadata || {},
   };

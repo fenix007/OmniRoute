@@ -122,6 +122,17 @@ function findBestMessageText(output: unknown[]): {
   return { text: "", selectedMessageIndex: -1, messageItems: [] };
 }
 
+function resolveResponsesFinishReason(
+  response: JsonRecord,
+  hasToolCalls: boolean
+): "stop" | "length" | "content_filter" | "tool_calls" {
+  if (toString(response.status).toLowerCase() === "incomplete") {
+    const incompleteReason = toString(toRecord(response.incomplete_details).reason).toLowerCase();
+    return incompleteReason === "content_filter" ? "content_filter" : "length";
+  }
+  return hasToolCalls ? "tool_calls" : "stop";
+}
+
 /**
  * Translate non-streaming response to OpenAI format
  * Handles different provider response formats (Gemini, Claude, etc.)
@@ -233,7 +244,7 @@ export function translateNonStreamingResponse(
 
     const createdAt = toNumber(response.created_at, Math.floor(Date.now() / 1000));
     const model = toString(response.model || responseRoot.model, "openai-responses");
-    const finishReason = toolCalls.length > 0 ? "tool_calls" : "stop";
+    const finishReason = resolveResponsesFinishReason(response, toolCalls.length > 0);
 
     const result: JsonRecord = {
       id: `chatcmpl-${toString(response.id, String(Date.now()))}`,

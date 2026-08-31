@@ -1719,3 +1719,70 @@ test("concurrent request deduplication does not reuse an empty upstream body", a
   assert.equal(fetchCount, requests.length);
   assert.ok(responses.filter((response) => response.status !== 200).length <= 1);
 });
+
+test("chat pipeline maps buffered Codex response.incomplete to finish_reason length", async () => {
+  clearProviderFailure("codex");
+  await seedConnection("codex", { apiKey: "sk-codex-incomplete-finish-reason" });
+  const partialProfile = JSON.stringify({ requirements: [], domain: null });
+
+  globalThis.fetch = async () =>
+    new Response(
+      [
+        "event: response.incomplete",
+        `data: ${JSON.stringify({
+          type: "response.incomplete",
+          response: {
+            id: "resp_incomplete_profile",
+            object: "response",
+            model: "gpt-5.6-sol",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: partialProfile }],
+              },
+            ],
+          },
+        })}`,
+        "",
+      ].join("\n"),
+      { status: 200, headers: { "Content-Type": "text/event-stream" } }
+    );
+
+  const response = await handleChat(
+    buildRequest({
+      headers: { "X-OmniRoute-No-Cache": "true" },
+      body: {
+        model: "cx/gpt-5.6-sol",
+        stream: false,
+        temperature: 0,
+        messages: [{ role: "user", content: "Extract this vacancy" }],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "vacancy_profile",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                requirements: { type: "array", items: { type: "string" } },
+                domain: { type: ["string", "null"] },
+              },
+              required: ["requirements", "domain"],
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+    })
+  );
+  const payload = (await response.json()) as {
+    choices: Array<{ finish_reason: string; message: { content: string } }>;
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.choices[0].message.content, partialProfile);
+  assert.equal(payload.choices[0].finish_reason, "length");
+});
