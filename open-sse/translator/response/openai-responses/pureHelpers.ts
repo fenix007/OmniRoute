@@ -129,28 +129,44 @@ export function normalizeUpstreamFailure(data, fallbackType = "server_error") {
         : "Upstream failure";
 
   // Preserve upstream error semantics:
+  // - invalid_prompt / usage-policy rejection → 400 (request content is not accepted)
   // - context_length_exceeded → 400 (client can retry with smaller context)
   // - rate_limit_exceeded → 429 (client should back off)
   // - Everything else → 502 (upstream failure)
-  const isContextOverflow = code === "context_length_exceeded";
-  const isRateLimit = code === "rate_limit_exceeded" || code === "rate_limited";
+  const normalizedCode = code.toLowerCase();
+  const normalizedMessage = message.toLowerCase();
+  const isInvalidPrompt =
+    normalizedCode === "invalid_prompt" ||
+    normalizedCode === "content_policy_violation" ||
+    (normalizedMessage.includes("prompt was flagged") &&
+      normalizedMessage.includes("usage policy"));
+  const isContextOverflow = normalizedCode === "context_length_exceeded";
+  const isRateLimit = normalizedCode === "rate_limit_exceeded" || normalizedCode === "rate_limited";
   let status: number;
   let type: string;
+  let fallbackCode: string;
   if (isRateLimit) {
     status = 429;
     type = "rate_limit_error";
+    fallbackCode = "rate_limit_exceeded";
+  } else if (isInvalidPrompt) {
+    status = 400;
+    type = "invalid_request_error";
+    fallbackCode = "invalid_prompt";
   } else if (isContextOverflow) {
     status = 400;
     type = "invalid_request_error";
+    fallbackCode = "context_length_exceeded";
   } else {
     status = 502;
     type = fallbackType;
+    fallbackCode = "bad_gateway";
   }
 
   return {
     status,
     type,
-    code: code || (isRateLimit ? "rate_limit_exceeded" : "bad_gateway"),
+    code: code || fallbackCode,
     message,
   };
 }
