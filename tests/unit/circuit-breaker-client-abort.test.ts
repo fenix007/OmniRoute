@@ -41,6 +41,15 @@ test("known client-abort shapes are local lifecycle errors", () => {
     status: 499,
     message: "Request aborted",
   });
+  assert.deepEqual(classifyLocalAbortFailure(new Error("combo-per-model-timeout"), true), {
+    status: 499,
+    message: "Request aborted",
+  });
+  assert.deepEqual(classifyLocalAbortFailure(new Error("hedge-cancelled"), true), {
+    status: 499,
+    message: "Request aborted",
+  });
+  assert.equal(classifyLocalAbortFailure(new Error("combo-per-model-timeout"), false), null);
   assert.equal(classifyLocalAbortFailure("request_signal_aborted", false), null);
   assert.equal(classifyLocalAbortFailure(new Error("502 Bad Gateway")), null);
 });

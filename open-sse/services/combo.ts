@@ -785,7 +785,7 @@ export async function handleComboChat({
           );
         } else {
           const pinnedStatus = pinnedResult.status || 500;
-          if (![408, 429, 500, 502, 503, 504].includes(pinnedStatus)) {
+          if (![408, 429, 500, 502, 503, 504, 524].includes(pinnedStatus)) {
             return pinnedResult;
           }
           log.warn(
@@ -2178,7 +2178,7 @@ export async function handleComboChat({
           const isTransient =
             !isStreamReadinessFailure &&
             !isTokenLimitBreach &&
-            [408, 429, 500, 502, 503, 504].includes(result.status);
+            [408, 429, 500, 502, 503, 504, 524].includes(result.status);
           // failoverBeforeRetry means what it says: prefer the next sibling
           // target over hammering this one again. Without this check, a
           // transient error always re-hit the SAME model up to maxRetries
@@ -3153,7 +3153,7 @@ async function handleRoundRobinCombo({
         const isTransient =
           !isStreamReadinessFailure &&
           !isTokenLimitBreach &&
-          [408, 429, 500, 502, 503, 504].includes(result.status);
+          [408, 429, 500, 502, 503, 504, 524].includes(result.status);
         // See the same guard's comment in the "auto" strategy loop above —
         // failoverBeforeRetry must prevent this same-model retry too, not
         // just the lower-level skipUpstreamRetry mechanism. Only skip when

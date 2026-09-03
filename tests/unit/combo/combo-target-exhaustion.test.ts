@@ -363,3 +363,17 @@ test("gemini 524 DOES exhaust connection (cloudflare timeout)", () => {
   });
   assert.equal(s.exhaustedConnections.has("gemini:gemini-key-abc"), true);
 });
+
+test("synthetic combo target 524 does not exhaust the whole provider without a connection id", () => {
+  const s = sets();
+  applyComboTargetExhaustion(target({ provider: "codex" }), {
+    ...baseOpts,
+    result: { status: 524 },
+    fallbackResult: {},
+    errorText: "Model codex/gpt-5.6-terra-medium timed out",
+    rawModel: "gpt-5.6-terra-medium",
+    sets: s,
+  });
+  assert.equal(s.exhaustedProviders.has("codex"), false);
+  assert.equal(s.exhaustedConnections.size, 0);
+});

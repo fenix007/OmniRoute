@@ -1,4 +1,8 @@
 import { isLocalStreamLifecycleError } from "../../shared/utils/circuitBreaker";
+import {
+  COMBO_HEDGE_CANCELLED_REASON,
+  COMBO_PER_MODEL_TIMEOUT_REASON,
+} from "../../../open-sse/services/combo/comboAbortReasons";
 
 export const PROVIDER_BREAKER_FAILURE_STATUSES = new Set([408, 500, 502, 503, 504]);
 
@@ -16,7 +20,9 @@ export function classifyLocalAbortFailure(
         : "";
   const isSignalAbortReason =
     requestSignalAborted &&
-    /request_signal_aborted|client disconnected|operation was aborted/i.test(message);
+    (/request_signal_aborted|client disconnected|operation was aborted/i.test(message) ||
+      message === COMBO_PER_MODEL_TIMEOUT_REASON ||
+      message === COMBO_HEDGE_CANCELLED_REASON);
   return isLocalStreamLifecycleError(error) || isSignalAbortReason
     ? { status: 499, message: "Request aborted" }
     : null;

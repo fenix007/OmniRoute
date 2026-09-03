@@ -199,4 +199,9 @@ test("the dispatch seam evicts when a dispatch is abandoned", () => {
     /evictSessionAffinityOnComboTimeout\(/,
     "chatDispatch.ts must call the eviction"
   );
+  assert.match(
+    src,
+    /modelAbortSignal:\s*runtimeOptions\.modelAbortSignal/,
+    "chatDispatch.ts must pass the timeout signal into the upstream dispatch"
+  );
 });

@@ -354,6 +354,7 @@ import { isSmallEnoughForSemanticCache } from "../utils/estimateSize.ts";
  * @param {string} options.comboStrategy - Combo routing strategy (e.g., 'priority', 'cost-optimized')
  * @param {boolean} options.isCombo - Whether this request is from a combo
  * @param {string} options.connectionId - Connection ID for settings lookup
+ * @param {AbortSignal} options.upstreamAbortSignal - Orchestration cancellation signal
  */
 
 // extractSystemRoleMessages extracted to chatCore/claudeSystemRole.ts (#3501); re-exported above so
@@ -382,6 +383,7 @@ export async function handleChatCore({
   createPiiTransform = null,
   correlationId = null,
   modelPinned = false,
+  upstreamAbortSignal = null,
 }) {
   let { provider, model, extendedContext } = modelInfo;
   // ── Memory pressure guard ────────────────────────────────────────────
@@ -2269,6 +2271,7 @@ export async function handleChatCore({
     connectionId,
     clientResponseFormat,
     clientAbortSignal: clientRawRequest?.signal,
+    upstreamAbortSignal,
   });
 
   const dedupRequestBody = { ...translatedBody, model: `${provider}/${model}`, stream };

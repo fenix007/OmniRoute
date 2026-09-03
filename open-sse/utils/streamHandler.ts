@@ -36,6 +36,11 @@ type StreamControllerOptions = {
   connectionId?: string | null;
   clientResponseFormat?: string | null;
   clientAbortSignal?: AbortSignal | null;
+  /**
+   * Request-scoped orchestration cancellation (for example, a combo target timeout).
+   * Unlike clientAbortSignal this aborts provider work without recording a client disconnect.
+   */
+  upstreamAbortSignal?: AbortSignal | null;
 };
 
 type StreamController = ReturnType<typeof createStreamController>;
@@ -238,6 +243,7 @@ export function createStreamController({
   connectionId,
   clientResponseFormat,
   clientAbortSignal,
+  upstreamAbortSignal,
 }: StreamControllerOptions = {}) {
   const abortController = new AbortController();
   const startTime = Date.now();
@@ -245,6 +251,7 @@ export function createStreamController({
   let clientTerminalSeen = false;
   let pendingRequestCleared = false;
   let cleanupClientAbortSignal: (() => void) | null = null;
+  let cleanupUpstreamAbortSignal: (() => void) | null = null;
 
   const logStream = (status) => {
     const duration = Date.now() - startTime;
@@ -278,6 +285,17 @@ export function createStreamController({
     cleanupClientAbortSignal = null;
   };
 
+  const cleanupUpstreamAbortListener = () => {
+    if (!cleanupUpstreamAbortSignal) return;
+    cleanupUpstreamAbortSignal();
+    cleanupUpstreamAbortSignal = null;
+  };
+
+  const cleanupAbortListeners = () => {
+    cleanupClientAbortListener();
+    cleanupUpstreamAbortListener();
+  };
+
   const getClientAbortReason = () => {
     const reason = clientAbortSignal?.reason;
     if (typeof reason === "string" && reason.trim().length > 0) {
@@ -303,7 +321,7 @@ export function createStreamController({
         return;
       }
       disconnected = true;
-      cleanupClientAbortListener();
+      cleanupAbortListeners();
 
       logStream(`disconnect: ${reason}`);
 
@@ -320,7 +338,7 @@ export function createStreamController({
     handleComplete: () => {
       if (disconnected) return;
       disconnected = true;
-      cleanupClientAbortListener();
+      cleanupAbortListeners();
 
       logStream("complete");
     },
@@ -331,7 +349,7 @@ export function createStreamController({
 
     // Call on error
     handleError: (error: unknown) => {
-      cleanupClientAbortListener();
+      cleanupAbortListeners();
 
       // A client disconnect is not a provider failure. If the client already went away
       // (disconnected) or the error is a client abort / "Controller is already closed",
@@ -375,9 +393,9 @@ export function createStreamController({
       logStream("error: unknown");
     },
 
-    abort: () => {
-      cleanupClientAbortListener();
-      abortController.abort();
+    abort: (reason?: unknown) => {
+      cleanupAbortListeners();
+      abortController.abort(reason);
     },
     clientResponseFormat,
   };
@@ -392,6 +410,20 @@ export function createStreamController({
       clientAbortSignal.addEventListener("abort", handleClientAbort, { once: true });
       cleanupClientAbortSignal = () => {
         clientAbortSignal.removeEventListener("abort", handleClientAbort);
+      };
+    }
+  }
+
+  if (upstreamAbortSignal && typeof upstreamAbortSignal.addEventListener === "function") {
+    const handleUpstreamAbort = () => {
+      controller.abort(upstreamAbortSignal.reason);
+    };
+    if (upstreamAbortSignal.aborted) {
+      queueMicrotask(handleUpstreamAbort);
+    } else {
+      upstreamAbortSignal.addEventListener("abort", handleUpstreamAbort, { once: true });
+      cleanupUpstreamAbortSignal = () => {
+        upstreamAbortSignal.removeEventListener("abort", handleUpstreamAbort);
       };
     }
   }

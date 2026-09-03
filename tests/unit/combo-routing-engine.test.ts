@@ -2708,6 +2708,31 @@ test("handleComboChat round-robin retries a transient failure on the same model 
   assert.deepEqual(calls, ["model-a", "model-a"]);
 });
 
+test("handleComboChat retries a synthetic target timeout when it is the only model", async () => {
+  const calls: string[] = [];
+
+  const result = await handleComboChat({
+    body: {},
+    combo: {
+      name: "priority-timeout-retry",
+      models: ["codex/model-a"],
+      config: { maxRetries: 1, retryDelayMs: 1 },
+    },
+    handleSingleModel: async (_body, modelStr) => {
+      calls.push(modelStr);
+      if (calls.length === 1) return errorResponse(524, `Model ${modelStr} timed out`);
+      return okResponse();
+    },
+    isModelAvailable: async () => true,
+    log: createLog(),
+    settings: null,
+    allCombos: null,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, ["codex/model-a", "codex/model-a"]);
+});
+
 test("handleComboChat round-robin: failoverBeforeRetry skips the same-model retry and goes straight to the sibling", async () => {
   // #2417's whole point: failoverBeforeRetry should prefer a sibling model
   // over hammering a rate-limited one again. Same shape as the test above

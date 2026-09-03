@@ -38,6 +38,11 @@ function isEmptyContentFailure(status: number, errorText: string): boolean {
   return status === 502 && /empty content/i.test(errorText);
 }
 
+/** A local combo deadline, not an upstream/provider-wide 524 response. */
+function isComboTargetTimeout(status: number, errorText: string): boolean {
+  return status === 524 && /^Model .+ timed out$/i.test(errorText.trim());
+}
+
 export type ComboExhaustionSets = {
   exhaustedProviders: Set<string>;
   exhaustedConnections: Set<string>;
@@ -130,6 +135,10 @@ function markConnectionLevelExhaustion(
     provider === "unknown" ||
     !CONNECTION_LEVEL_ERROR_STATUSES.includes(result.status) ||
     isProviderCircuitOpenResult(result, errorText) ||
+    // The combo timeout runner generated this locally and separately aborts the selected
+    // connection. Without a response header we do not know its connection id, so treating it
+    // as provider-wide exhaustion would prevent the configured same-model retry/fallback.
+    isComboTargetTimeout(result.status, errorText) ||
     // #5085: empty-content 502 is a healthy connection returning no body — model-level, not
     // connection-level. Don't exhaust the provider; let the remaining legs (incl. same-provider)
     // be tried in-request.

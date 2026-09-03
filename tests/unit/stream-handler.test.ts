@@ -389,6 +389,25 @@ test("createStreamController aborts after delayed disconnect and tolerates abort
   assert.equal(errorOnlyController.signal.aborted, false);
 });
 
+test("createStreamController propagates orchestration abort without reporting a client disconnect", async () => {
+  const upstream = new AbortController();
+  let disconnectCalled = false;
+  const controller = createStreamController({
+    upstreamAbortSignal: upstream.signal,
+    onDisconnect() {
+      disconnectCalled = true;
+    },
+  });
+  const reason = new Error("combo_per_model_timeout");
+
+  upstream.abort(reason);
+  await Promise.resolve();
+
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(controller.signal.reason, reason);
+  assert.equal(disconnectCalled, false);
+});
+
 test("pipeWithDisconnect pipes transformed bytes and marks the controller complete", async () => {
   const source = new ReadableStream({
     start(controller) {

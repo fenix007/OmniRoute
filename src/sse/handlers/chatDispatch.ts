@@ -49,7 +49,10 @@ export async function dispatchChatWithAffinityEviction(
 
   let dispatched: Awaited<ReturnType<typeof executeChatWithBreaker>>;
   try {
-    dispatched = await executeChatWithBreaker(args as any);
+    dispatched = await executeChatWithBreaker({
+      ...args,
+      modelAbortSignal: runtimeOptions.modelAbortSignal ?? null,
+    } as any);
   } catch (dispatchErr) {
     evict();
     throw dispatchErr;
