@@ -48,16 +48,26 @@ export function findModelName(aliasOrId: string, modelId: string): string {
 }
 
 export function getModelTargetFormat(aliasOrId: string, modelId: string): string | null {
-  const models = PROVIDER_MODELS[aliasOrId];
+  const alias = PROVIDER_ID_TO_ALIAS[aliasOrId] || aliasOrId;
+  const models = PROVIDER_MODELS[alias] || PROVIDER_MODELS[aliasOrId];
   const found = models?.find((m) => m.id === modelId);
   if (found?.targetFormat) return found.targetFormat;
+  // OpenCode Go discovers models dynamically, while its three endpoint families
+  // are not wire-compatible. Keep a provider-scoped family fallback so a newly
+  // released GPT/Grok/Muse or MiniMax/Qwen model cannot silently fall through to
+  // /chat/completions before the static catalog catches up. This resolver is
+  // shared by chatCore (body translation) and OpencodeExecutor (URL selection).
+  if (alias === "opencode-go") {
+    if (/^(?:gpt-|grok-|muse-spark-)/i.test(modelId)) return "openai-responses";
+    if (/^(?:minimax-|qwen3\.)/i.test(modelId)) return "claude";
+  }
   // #5842: OpenAI "*-pro" reasoning models (o1-pro, gpt-5.x-pro) are only served by
   // the native /v1/responses endpoint — /v1/chat/completions 404s ("only supported
   // in v1/responses"). Curated catalog entries are tagged explicitly; this heuristic
   // covers dynamically-synced ids that post-date the catalog (same spirit as the gh
   // executor's /codex/i routing, 9router#102). Scoped to the openai alias so other
   // providers shipping *-pro ids keep their own endpoint semantics.
-  if (aliasOrId === "openai" && /-pro$/i.test(modelId)) return "openai-responses";
+  if (alias === "openai" && /-pro$/i.test(modelId)) return "openai-responses";
   return null;
 }
 

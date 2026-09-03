@@ -8,7 +8,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolveChatCoreTargetFormat } from "../../open-sse/handlers/chatCore/targetFormat.ts";
-import { PROVIDER_ID_TO_ALIAS, getModelTargetFormat } from "../../open-sse/config/providerModels.ts";
+import {
+  PROVIDER_ID_TO_ALIAS,
+  getModelTargetFormat,
+} from "../../open-sse/config/providerModels.ts";
 import { getTargetFormat } from "../../open-sse/services/provider.ts";
 import { FORMATS } from "../../open-sse/translator/formats.ts";
 
@@ -24,7 +27,9 @@ function expected(
   const targetFormat =
     apiFormat === "responses"
       ? FORMATS.OPENAI_RESPONSES
-      : modelTargetFormat || customModelTargetFormat || getTargetFormat(provider, providerSpecificData);
+      : modelTargetFormat ||
+        customModelTargetFormat ||
+        getTargetFormat(provider, providerSpecificData);
   return { alias, targetFormat };
 }
 
@@ -49,6 +54,18 @@ test("delegates byte-identically for a normal model (no apiFormat / no custom ov
     providerSpecificData: undefined,
   });
   assert.deepEqual(r, expected("openai", "gpt-4o", undefined, undefined, undefined));
+});
+
+test("OpenCode Go Luna selects Responses translation before executor dispatch", () => {
+  const r = resolveChatCoreTargetFormat({
+    provider: "opencode-go",
+    resolvedModel: "gpt-5.6-luna",
+    apiFormat: undefined,
+    customModelTargetFormat: undefined,
+    providerSpecificData: undefined,
+  });
+  assert.equal(r.alias, "opencode-go");
+  assert.equal(r.targetFormat, FORMATS.OPENAI_RESPONSES);
 });
 
 test("customModelTargetFormat is used when the model has no registry target format", () => {

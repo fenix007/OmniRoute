@@ -1,53 +1,70 @@
-/**
- * OpenCode Go model catalog alignment with the official Go docs.
- *
- * Port of decolua/9router 8efacc114 (thanks @nguyenha935): the official Go API
- * advertises `glm-5.2` and routes Kimi chat traffic through `kimi-k2.7-code`
- * (the live API rejects the plain `kimi-k2.7` alias for `/chat/completions`
- * even though the public docs example uses it). OmniRoute previously shipped
- * the older registry without these IDs.
- */
-
 import test from "node:test";
 import assert from "node:assert/strict";
 
+const { getModelTargetFormat } = await import("../../open-sse/config/providerModels.ts");
 const { opencode_goProvider } =
   await import("../../open-sse/config/providers/registry/opencode/go/index.ts");
 
-function modelIds(): string[] {
-  return (opencode_goProvider.models ?? []).map((m) => m.id);
-}
+const LIVE_MODEL_PROTOCOLS = {
+  "deepseek-v4-flash": "openai",
+  "deepseek-v4-flash-vision-exp": "openai",
+  "deepseek-v4-pro": "openai",
+  "glm-5": "openai",
+  "glm-5.1": "openai",
+  "glm-5.2": "openai",
+  "glm-5.3": "openai",
+  "glm-5.3-flash": "openai",
+  "gpt-5.6-luna": "openai-responses",
+  "grok-4.5": "openai-responses",
+  "grok-4.6": "openai-responses",
+  hy3: "openai",
+  "hy3-preview": "openai",
+  "hy4-preview": "openai",
+  "kimi-k2.5": "openai",
+  "kimi-k2.6": "openai",
+  "kimi-k2.7-code": "openai",
+  "kimi-k3": "openai",
+  "longcat-2.0": "openai",
+  "mimo-v2-omni": "openai",
+  "mimo-v2-pro": "openai",
+  "mimo-v2.5": "openai",
+  "mimo-v2.5-pro": "openai",
+  "minimax-m2.5": "claude",
+  "minimax-m2.7": "claude",
+  "minimax-m3": "claude",
+  "muse-spark-1.2-contributor": "openai-responses",
+  "muse-spark-1.3-contributor": "openai-responses",
+  "qwen3.5-plus": "claude",
+  "qwen3.6-plus": "claude",
+  "qwen3.7-max": "claude",
+  "qwen3.7-plus": "claude",
+  "qwen3.8-flash": "claude",
+  "qwen3.8-max": "claude",
+} as const;
 
-const DEPRECATED_MIMO_V2_MODELS = ["mimo-v2-pro", "mimo-v2-omni"];
+test("opencode-go catalog contains every live upstream model exactly once", () => {
+  const ids = (opencode_goProvider.models ?? []).map((model) => model.id);
+  assert.equal(new Set(ids).size, ids.length, "catalog contains duplicate model ids");
 
-test("opencode-go advertises glm-5.2 (official Go endpoint addition)", () => {
-  assert.ok(
-    modelIds().includes("glm-5.2"),
-    `expected glm-5.2 in opencode-go catalog, got: ${modelIds().join(", ")}`
-  );
-});
-
-test("opencode-go advertises kimi-k2.7-code (live API rejects plain kimi-k2.7 for chat)", () => {
-  assert.ok(
-    modelIds().includes("kimi-k2.7-code"),
-    `expected kimi-k2.7-code in opencode-go catalog, got: ${modelIds().join(", ")}`
-  );
-});
-
-test("opencode-go does not advertise deprecated MiMo V2 models", () => {
-  const ids = modelIds();
-  for (const modelId of DEPRECATED_MIMO_V2_MODELS) {
-    assert.ok(!ids.includes(modelId), `${modelId} is deprecated`);
+  for (const modelId of Object.keys(LIVE_MODEL_PROTOCOLS)) {
+    assert.ok(ids.includes(modelId), `missing live OpenCode Go model: ${modelId}`);
   }
 });
 
-test("opencode-go preserves the pre-existing minimax-m3 and qwen routing via targetFormat=claude", () => {
-  // Routing through the /messages endpoint is OmniRoute's declarative
-  // equivalent of upstream's MESSAGES_FORMAT_MODELS set; the alignment
-  // change must not regress this.
-  const byId = new Map(
-    (opencode_goProvider.models ?? []).map((m) => [m.id, m as Record<string, unknown>])
-  );
-  assert.equal(byId.get("minimax-m3")?.targetFormat, "claude");
-  assert.equal(byId.get("qwen3.7-max")?.targetFormat, "claude");
+test("opencode-go live models use the documented endpoint protocol", () => {
+  for (const [modelId, expectedFormat] of Object.entries(LIVE_MODEL_PROTOCOLS)) {
+    assert.equal(getModelTargetFormat("opencode-go", modelId) ?? "openai", expectedFormat, modelId);
+  }
+});
+
+test("opencode-go family fallback protects dynamically discovered successor models", () => {
+  assert.equal(getModelTargetFormat("opencode-go", "gpt-future"), "openai-responses");
+  assert.equal(getModelTargetFormat("opencode-go", "grok-future"), "openai-responses");
+  assert.equal(getModelTargetFormat("opencode-go", "muse-spark-future"), "openai-responses");
+  assert.equal(getModelTargetFormat("opencode-go", "minimax-future"), "claude");
+  assert.equal(getModelTargetFormat("opencode-go", "qwen3.future"), "claude");
+  assert.equal(getModelTargetFormat("opencode-go", "glm-future"), null);
+
+  assert.equal(getModelTargetFormat("blackbox", "grok-future"), null);
+  assert.equal(getModelTargetFormat("blackbox", "qwen3.future"), null);
 });

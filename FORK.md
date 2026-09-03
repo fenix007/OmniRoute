@@ -22,6 +22,30 @@ this fork instead of `diegosouzapw/omniroute`.
 | fix(api): retry Codex image generation by account                        | #8307 (open)    | port of the functional subset; the model-access matcher also unwraps raw JSON error strings (3.8.48 codex handler has no sanitizeImageProviderError) |
 | ci(fork): fork-image-fenix007.yml                                        | —               | fork-only                                                                                                                                            |
 
+Owned OpenCode Go protocol/catalog alignment (fork.16):
+
+| Change                                                              | Upstream issue | What                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fix(opencode): route every live Go model through its documented API | #12196         | fork-only: sync all 34 live model ids; route GPT/Grok/Muse through Responses and MiniMax/Qwen through Messages; keep DeepSeek on Chat; add provider-scoped family fallbacks for models discovered before the next sync |
+
+Production on the pre-fix `sha-35359a0` image returned HTTP 500 for
+`gpt-5.6-luna` and rejected `grok-4.6` as unsupported for `oa-compat`. The
+executor defaulted every model missing from the static registry to
+`/chat/completions`, while the upstream requires `/responses` for both models.
+The shared fallback lives in `getModelTargetFormat`, so chatCore translates the
+request body to the same format that `OpencodeExecutor` uses to choose the URL.
+
+The `v3.8.50` registry was not copied wholesale: it puts DeepSeek V4 Pro and
+Flash on Responses, but the current official OpenCode Go endpoint table assigns
+both to Chat Completions. Baseline production tests also reached both through
+the Chat endpoint and stopped only at the workspace's explicit China-hosting
+opt-in gate.
+
+Sources: `open-sse/config/providers/registry/opencode/go/index.ts`,
+`open-sse/config/providerModels.ts`. Tests:
+`tests/unit/opencode-go-catalog-alignment.test.ts`,
+`tests/unit/opencode-executor.test.ts`, `tests/unit/chatcore-target-format.test.ts`.
+
 Tier-1 upstream fixes ported from release/v3.8.50 (fork.2):
 
 | Commit                                                                        | Upstream PR | What                                                                                         |

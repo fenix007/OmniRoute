@@ -137,6 +137,22 @@ describe("OpencodeExecutor", () => {
       assert.equal(fetchCalls[0].url, "https://opencode.ai/zen/v1/responses");
     });
 
+    it("routes OpenCode Go Responses models to /responses with bearer auth", async () => {
+      for (const model of [
+        "gpt-5.6-luna",
+        "grok-4.5",
+        "grok-4.6",
+        "muse-spark-1.2-contributor",
+        "muse-spark-1.3-contributor",
+      ]) {
+        const result = await goExecutor.execute(createInput(model));
+        assert.equal(result.url, "https://opencode.ai/zen/go/v1/responses", model);
+        assert.equal(result.headers.Authorization, "Bearer test-key", model);
+        assert.equal(result.headers["x-api-key"], undefined, model);
+        assert.equal(result.headers["anthropic-version"], undefined, model);
+      }
+    });
+
     it("routes gemini streaming requests to streamGenerateContent", async () => {
       registerModel("opencode-zen", {
         id: "gemini-2.5-pro",
@@ -260,6 +276,13 @@ describe("OpencodeExecutor", () => {
       );
       assert.equal(qwen35.url, "https://opencode.ai/zen/go/v1/messages");
       assert.equal(qwen35.headers["anthropic-version"], "2023-06-01");
+
+      const qwen38 = await goExecutor.execute(
+        createInput("qwen3.8-max", true, { apiKey: "claude-key" })
+      );
+      assert.equal(qwen38.url, "https://opencode.ai/zen/go/v1/messages");
+      assert.equal(qwen38.headers["anthropic-version"], "2023-06-01");
+      assert.equal(qwen38.headers.Authorization, undefined);
     });
 
     it("builds bearer auth headers for opencode-go openai models", async () => {
