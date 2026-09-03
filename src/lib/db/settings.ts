@@ -27,6 +27,14 @@ type ProxyResolutionCacheEntry = {
 };
 
 const PROXY_RESOLUTION_CACHE_MAX_ENTRIES = 100;
+const DATABASE_CACHE_SETTING_KEYS = new Set([
+  "semanticCacheEnabled",
+  "semanticCacheMaxSize",
+  "semanticCacheTTL",
+  "promptCacheEnabled",
+  "promptCacheStrategy",
+  "alwaysPreserveClientCache",
+]);
 
 function isTruthyEnvFlag(value: string | undefined): boolean {
   return typeof value === "string" && /^(1|true|yes|on)$/i.test(value.trim());
@@ -205,9 +213,15 @@ export async function updateSettings(updates: Record<string, unknown>) {
   const insert = db.prepare(
     "INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES ('settings', ?, ?)"
   );
+  const insertDatabaseCacheSetting = db.prepare(
+    "INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES ('databaseSettings', ?, ?)"
+  );
   const tx = db.transaction(() => {
     for (const [key, value] of Object.entries(updates)) {
       insert.run(key, JSON.stringify(value));
+      if (DATABASE_CACHE_SETTING_KEYS.has(key)) {
+        insertDatabaseCacheSetting.run(`cache.${key}`, JSON.stringify(value));
+      }
     }
   });
   tx();

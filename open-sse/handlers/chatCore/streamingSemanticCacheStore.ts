@@ -11,6 +11,7 @@
  */
 import {
   generateSignature as defaultGenerateSignature,
+  requestVariantOf,
   setCachedResponse as defaultSetCachedResponse,
   isCacheableForWrite as defaultIsCacheableForWrite,
 } from "@/lib/semanticCache";
@@ -19,6 +20,7 @@ import { isSmallEnoughForSemanticCache as defaultIsSmallEnough } from "../../uti
 type LoggerLike = { debug?: (...args: unknown[]) => void } | null | undefined;
 
 type CacheBody = {
+  [key: string]: unknown;
   messages?: unknown;
   input?: unknown;
   temperature?: unknown;
@@ -47,6 +49,7 @@ interface StreamingCacheArgs {
   headers: unknown;
   model: string;
   apiKeyId?: string | number;
+  signature?: string;
   streamUsage?: Record<string, unknown> | null;
   log?: LoggerLike;
 }
@@ -64,16 +67,22 @@ function writeStreamingCacheEntry(
     const cleanBody = { ...(args.streamResponseBody as Record<string, unknown>) };
     delete cleanBody._streamed;
     if (!deps.isSmallEnoughForSemanticCache(cleanBody)) return;
-    const sig = deps.generateSignature(
-      args.model,
-      args.body.messages ?? args.body.input,
-      args.body.temperature,
-      args.body.top_p,
-      args.apiKeyId ?? undefined
-    );
+    const sig =
+      args.signature ??
+      deps.generateSignature(
+        args.model,
+        args.body.messages ?? args.body.input,
+        args.body.temperature,
+        args.body.top_p,
+        args.apiKeyId == null ? undefined : String(args.apiKeyId),
+        requestVariantOf(args.body)
+      );
     const tokensSaved = streamTokensSaved(args.streamUsage);
     deps.setCachedResponse(sig, args.model, cleanBody, tokensSaved);
-    args.log?.debug?.("CACHE", `Stored streaming response for ${args.model} (${tokensSaved} tokens)`);
+    args.log?.debug?.(
+      "CACHE",
+      `Stored streaming response for ${args.model} (${tokensSaved} tokens)`
+    );
   } catch {
     // Cache write failed — non-critical
   }

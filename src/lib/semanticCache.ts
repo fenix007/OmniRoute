@@ -6,7 +6,7 @@
  * are cached after assembly; cache hits always return JSON.
  * Two-tier: in-memory LRU (fast) + SQLite (persistent across restarts).
  *
- * Cache key = SHA-256(model + normalized messages + temperature + top_p)
+ * Cache key = SHA-256(version + model + complete request identity)
  * Bypass: X-OmniRoute-No-Cache: true
  *
  * @module lib/semanticCache
@@ -17,6 +17,27 @@ import { LRUCache } from "./cacheLayer";
 import { getDbInstance } from "./db/core";
 
 type JsonRecord = Record<string, unknown>;
+
+export interface SemanticCacheRuntimeConfig {
+  maxSize: number;
+  ttlMs: number;
+}
+
+const DEFAULT_SEMANTIC_CACHE_CONFIG: SemanticCacheRuntimeConfig = {
+  maxSize: 100,
+  ttlMs: 1_800_000,
+};
+
+const CACHE_SIGNATURE_VERSION = 2;
+const REQUEST_TRANSPORT_FIELDS = new Set([
+  "model",
+  "messages",
+  "input",
+  "temperature",
+  "top_p",
+  "stream",
+  "stream_options",
+]);
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
@@ -29,6 +50,27 @@ function toNumber(value: unknown, fallback = 0): number {
     return Number.isFinite(parsed) ? parsed : fallback;
   }
   return fallback;
+}
+
+function toPositiveInteger(value: unknown, fallback: number): number {
+  const parsed = toNumber(value, fallback);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => canonicalize(entry));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value as JsonRecord)
+        .sort((left, right) => left.localeCompare(right))
+        .map((key) => [key, canonicalize((value as JsonRecord)[key])])
+    );
+  }
+  return value;
+}
+
+function isoNow(): string {
+  return new Date().toISOString();
 }
 
 function ensureCacheMetricsTable() {
@@ -92,14 +134,41 @@ function getHeaderValue(
 // ─── Singleton ─────────────────
 
 let memoryCache: LRUCache | null = null;
+let configuredCache = { ...DEFAULT_SEMANTIC_CACHE_CONFIG };
+let activeMemoryConfig = "";
+
+function resolvedCacheConfig(): SemanticCacheRuntimeConfig & { maxBytes: number } {
+  return {
+    maxSize: toPositiveInteger(process.env.SEMANTIC_CACHE_MAX_SIZE, configuredCache.maxSize),
+    ttlMs: toPositiveInteger(process.env.SEMANTIC_CACHE_TTL_MS, configuredCache.ttlMs),
+    maxBytes: toPositiveInteger(process.env.SEMANTIC_CACHE_MAX_BYTES, 2 * 1024 * 1024),
+  };
+}
+
+/** Apply dashboard cache settings to the runtime. Environment variables remain explicit overrides. */
+export function configureSemanticCache(config: Partial<SemanticCacheRuntimeConfig>): void {
+  configuredCache = {
+    maxSize: toPositiveInteger(config.maxSize, configuredCache.maxSize),
+    ttlMs: toPositiveInteger(config.ttlMs, configuredCache.ttlMs),
+  };
+}
+
+export function getSemanticCacheRuntimeConfig(): SemanticCacheRuntimeConfig {
+  const { maxSize, ttlMs } = resolvedCacheConfig();
+  return { maxSize, ttlMs };
+}
 
 function getMemoryCache() {
-  if (!memoryCache) {
+  const config = resolvedCacheConfig();
+  const configKey = `${config.maxSize}:${config.maxBytes}:${config.ttlMs}`;
+  if (!memoryCache || activeMemoryConfig !== configKey) {
+    memoryCache?.clear();
     memoryCache = new LRUCache({
-      maxSize: parseInt(process.env.SEMANTIC_CACHE_MAX_SIZE || "50", 10),
-      maxBytes: parseInt(process.env.SEMANTIC_CACHE_MAX_BYTES || String(2 * 1024 * 1024), 10),
-      defaultTTL: parseInt(process.env.SEMANTIC_CACHE_TTL_MS || "1800000", 10),
+      maxSize: config.maxSize,
+      maxBytes: config.maxBytes,
+      defaultTTL: config.ttlMs,
     });
+    activeMemoryConfig = configKey;
     ensureCacheMetricsTable();
   }
   return memoryCache;
@@ -121,14 +190,19 @@ export function generateSignature(
   conversation,
   temperature = 0,
   topP = 1,
-  apiKeyId?: string
+  apiKeyId?: string,
+  requestVariant?: unknown
 ) {
-  const payload = JSON.stringify({
-    model,
-    messages: normalizeConversation(conversation),
-    temperature,
-    top_p: topP,
-  });
+  const payload = JSON.stringify(
+    canonicalize({
+      version: CACHE_SIGNATURE_VERSION,
+      model,
+      messages: normalizeConversation(conversation),
+      temperature,
+      top_p: topP,
+      ...(requestVariant != null ? { request: requestVariant } : {}),
+    })
+  );
   const digest = crypto.createHash("sha256").update(payload).digest("hex");
   // Per-key cache isolation (#3740) namespaces the signature with the apiKeyId as a
   // PLAINTEXT prefix instead of folding it into the digest. The apiKeyId is an internal
@@ -140,13 +214,28 @@ export function generateSignature(
   return apiKeyId ? `${apiKeyId}.${digest}` : digest;
 }
 
-function stringifyForSignature(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
+/**
+ * Capture every non-transport request field that may affect the returned answer.
+ * Unknown future fields are included automatically, preferring harmless misses over
+ * serving a response produced under a different output contract.
+ */
+export function requestVariantOf(body: unknown, context?: Record<string, unknown>): unknown {
+  const record = asRecord(body);
+  const variant: JsonRecord = {
+    conversationField: Array.isArray(record.messages)
+      ? "messages"
+      : record.input !== undefined
+        ? "input"
+        : "none",
+  };
+
+  for (const key of Object.keys(record).sort()) {
+    if (!REQUEST_TRANSPORT_FIELDS.has(key)) variant[key] = record[key];
   }
+  if (context && Object.values(context).some((value) => value != null)) {
+    variant.context = context;
+  }
+  return canonicalize(variant);
 }
 
 /**
@@ -159,10 +248,14 @@ function normalizeConversation(conversation: unknown) {
   }
   if (!Array.isArray(conversation)) return [];
 
-  return conversation.map((item: Record<string, unknown>) => ({
-    role: typeof item?.role === "string" && item.role.trim().length > 0 ? item.role : "user",
-    content: stringifyForSignature(item?.content),
-  }));
+  return conversation.map((item: Record<string, unknown>) => {
+    const normalized = {
+      ...item,
+      role: typeof item?.role === "string" && item.role.trim().length > 0 ? item.role : "user",
+      content: canonicalize(item?.content),
+    };
+    return canonicalize(normalized);
+  });
 }
 
 // ─── Cache Operations ─────────────────
@@ -187,9 +280,9 @@ export function getCachedResponse(signature) {
     const db = getDbInstance();
     const row = db
       .prepare(
-        "SELECT response, tokens_saved FROM semantic_cache WHERE signature = ? AND expires_at > datetime('now')"
+        "SELECT response, tokens_saved FROM semantic_cache WHERE signature = ? AND expires_at > ?"
       )
-      .get(signature);
+      .get(signature, isoNow());
 
     if (row) {
       const record = asRecord(row);
@@ -228,10 +321,10 @@ export function getCachedResponse(signature) {
  * @param {string} model
  * @param {object} response - The API response to cache
  * @param {number} tokensSaved - Estimated tokens saved
- * @param {number} [ttlMs] - TTL in ms (default: 1 hour)
+ * @param {number} [ttlMs] - Optional per-write TTL override
  */
-export function setCachedResponse(signature, model, response, tokensSaved = 0, ttlMs = 3600000) {
-  const ttl = parseInt(process.env.SEMANTIC_CACHE_TTL_MS || String(ttlMs), 10);
+export function setCachedResponse(signature, model, response, tokensSaved = 0, ttlMs?: number) {
+  const ttl = toPositiveInteger(ttlMs, resolvedCacheConfig().ttlMs);
 
   // 1. Memory cache
   getMemoryCache().set(signature, { response, tokensSaved }, ttl);
@@ -241,8 +334,9 @@ export function setCachedResponse(signature, model, response, tokensSaved = 0, t
     const db = getDbInstance();
     const id = crypto.randomUUID();
     const promptHash = signature.slice(0, 16);
-    const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + ttl).toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
+    const expiresAt = new Date(nowMs + ttl).toISOString();
 
     db.prepare(
       `INSERT OR REPLACE INTO semantic_cache (id, signature, model, prompt_hash, response, tokens_saved, hit_count, created_at, expires_at)
@@ -326,8 +420,8 @@ export function getCacheStats() {
   try {
     const db = getDbInstance();
     const row = db
-      .prepare("SELECT COUNT(*) as count FROM semantic_cache WHERE expires_at > datetime('now')")
-      .get();
+      .prepare("SELECT COUNT(*) as count FROM semantic_cache WHERE expires_at > ?")
+      .get(isoNow());
     dbSize = toNumber(asRecord(row).count, 0);
   } catch {
     // DB not available

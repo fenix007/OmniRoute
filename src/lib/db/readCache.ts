@@ -58,6 +58,17 @@ const settingsCache = new TTLCache<Record<string, unknown>>(SETTINGS_TTL_MS);
 const pricingCache = new TTLCache<Record<string, unknown>>(PRICING_TTL_MS);
 const connectionsCache = new TTLCache<unknown[]>(CONNECTIONS_TTL_MS);
 
+export interface CachedDatabaseCacheSettings {
+  semanticCacheEnabled: boolean;
+  semanticCacheMaxSize: number;
+  semanticCacheTTL: number;
+  promptCacheEnabled: boolean;
+  promptCacheStrategy: "auto" | "system-only" | "manual";
+  alwaysPreserveClientCache: "auto" | "always" | "never";
+}
+
+const databaseCacheSettingsCache = new TTLCache<CachedDatabaseCacheSettings>(SETTINGS_TTL_MS);
+
 /**
  * Cached wrapper for getSettings.
  * Invalidated on every updateSettings() call.
@@ -69,6 +80,17 @@ export async function getCachedSettings(): Promise<Record<string, unknown>> {
   const { getSettings } = await import("@/lib/db/settings");
   const value = await getSettings();
   settingsCache.set("settings", value);
+  return value;
+}
+
+/** Cached consolidated cache settings from the database-settings namespace and legacy keys. */
+export async function getCachedDatabaseCacheSettings(): Promise<CachedDatabaseCacheSettings> {
+  const cached = databaseCacheSettingsCache.get("cache");
+  if (cached) return cached;
+
+  const { getUserDatabaseSettings } = await import("@/lib/db/databaseSettings");
+  const value = getUserDatabaseSettings().cache;
+  databaseCacheSettingsCache.set("cache", value);
   return value;
 }
 
@@ -195,8 +217,13 @@ export function getModelCatalogCacheVersion(): number {
  * Invalidate all caches (call after writes to any of: settings, pricing,
  * connections, combos).
  */
-export function invalidateDbCache(scope?: "settings" | "pricing" | "connections" | "combos"): void {
+export function invalidateDbCache(
+  scope?: "settings" | "databaseSettings" | "pricing" | "connections" | "combos"
+): void {
   if (!scope || scope === "settings") settingsCache.invalidate();
+  if (!scope || scope === "settings" || scope === "databaseSettings") {
+    databaseCacheSettingsCache.invalidate();
+  }
   if (!scope || scope === "pricing") pricingCache.invalidate();
   if (!scope || scope === "connections") connectionsCache.invalidate();
   if (!scope || scope === "combos") combosCacheVersion++;

@@ -227,6 +227,10 @@ export function getUserDatabaseSettings(): UserDatabaseSettings {
   }
 
   mergeTopLevelSections(settings, mainSettings);
+  // The legacy cache-config endpoint persisted these as flat keys in the main
+  // settings namespace. Fold them into the canonical section before applying
+  // the newer databaseSettings namespace, which remains authoritative.
+  mergeDatabaseSettingsNamespace(settings, mainSettings);
   mergeDatabaseSettingsNamespace(settings, readNamespace(DATABASE_SETTINGS_NAMESPACE));
   mergeRuntimeLogSettings(settings, mainSettings);
   normalizeOptimizationSettings(settings);
@@ -295,11 +299,17 @@ export function updateDatabaseSettings(
     if (pipelineEnabled !== undefined) {
       settingsInsert.run("call_log_pipeline_enabled", JSON.stringify(Boolean(pipelineEnabled)));
     }
+
+    if (updates.cache !== undefined) {
+      for (const [key, value] of Object.entries(nextSettings.cache)) {
+        settingsInsert.run(key, JSON.stringify(value));
+      }
+    }
   });
   tx();
 
   backupDbFile("pre-write");
-  invalidateDbCache("settings");
+  invalidateDbCache("databaseSettings");
   if (optimizationUpdated) {
     applyDatabaseOptimizationSettings(nextSettings.optimization);
     refreshVacuumScheduler();

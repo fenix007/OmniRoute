@@ -2,6 +2,7 @@ import {
   generateSignature,
   getCachedResponse,
   isCacheableForRead,
+  requestVariantOf,
 } from "@/lib/semanticCache";
 import { calculateCost } from "@/lib/usage/costCalculator";
 import { trackPendingRequest } from "@/lib/usageDb";
@@ -24,6 +25,7 @@ export async function checkSemanticCache({
   log,
   persistAttemptLogs,
   apiKeyId,
+  signature,
 }: {
   semanticCacheEnabled: boolean;
   body: Record<string, unknown>;
@@ -38,16 +40,20 @@ export async function checkSemanticCache({
   log: unknown;
   persistAttemptLogs: (args: unknown) => void;
   apiKeyId?: string | null;
+  signature?: string;
 }) {
   if (semanticCacheEnabled && isCacheableForRead(body, clientRawRequest?.headers)) {
-    const signature = generateSignature(
-      model,
-      body.messages ?? body.input,
-      body.temperature,
-      body.top_p,
-      apiKeyId ?? undefined
-    );
-    const cached = getCachedResponse(signature);
+    const cacheSignature =
+      signature ??
+      generateSignature(
+        model,
+        body.messages ?? body.input,
+        body.temperature,
+        body.top_p,
+        apiKeyId ?? undefined,
+        requestVariantOf(body, { endpoint: clientRawRequest?.endpoint })
+      );
+    const cached = getCachedResponse(cacheSignature);
     if (cached) {
       log?.debug?.("CACHE", `Semantic cache HIT for ${model} (stream=${stream})`);
       reqLogger.logConvertedResponse(cached as Record<string, unknown>);

@@ -14,9 +14,8 @@ const core = await import("../../src/lib/db/core.ts");
 // Seeding the real cache (no mock.module under the Stryker tap-runner) lets us drive the
 // HIT branch deterministically: setCachedResponse populates the in-memory cache that
 // getCachedResponse checks first, so the signature checkSemanticCache rebuilds resolves.
-const { generateSignature, setCachedResponse, clearCache } = await import(
-  "../../src/lib/semanticCache.ts"
-);
+const { generateSignature, requestVariantOf, setCachedResponse, clearCache } =
+  await import("../../src/lib/semanticCache.ts");
 const { OMNIROUTE_RESPONSE_HEADERS } = await import("../../src/shared/constants/headers.ts");
 const { calculateCost } = await import("../../src/lib/usage/costCalculator.ts");
 const { formatOmniRouteCost } = await import("../../src/domain/omnirouteResponseMeta.ts");
@@ -148,7 +147,11 @@ function makeHitArgs(overrides: Record<string, unknown> = {}) {
   const debugCalls: unknown[][] = [];
   const args = {
     semanticCacheEnabled: true,
-    body: { model: "gpt-4o", messages: [{ role: "user", content: "cached query" }], temperature: 0 },
+    body: {
+      model: "gpt-4o",
+      messages: [{ role: "user", content: "cached query" }],
+      temperature: 0,
+    },
     clientRawRequest: { headers: {} },
     model: "gpt-4o",
     provider: "openai",
@@ -182,7 +185,8 @@ function seedHit(args: ReturnType<typeof makeHitArgs>["args"], response: unknown
     args.body.messages ?? (args.body as Record<string, unknown>).input,
     args.body.temperature,
     (args.body as Record<string, unknown>).top_p,
-    args.apiKeyId ?? undefined
+    args.apiKeyId ?? undefined,
+    requestVariantOf(args.body)
   );
   setCachedResponse(signature, args.model, response);
   return signature;
@@ -198,7 +202,11 @@ test("checkSemanticCache returns a non-streaming JSON HIT with cache headers + l
     usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
   };
   const { args, persistCalls, convertedCalls, debugCalls } = makeHitArgs({
-    body: { model: "gpt-4o", messages: [{ role: "user", content: "hit query one" }], temperature: 0 },
+    body: {
+      model: "gpt-4o",
+      messages: [{ role: "user", content: "hit query one" }],
+      temperature: 0,
+    },
     stream: false,
   });
   seedHit(args, cached);
@@ -251,7 +259,11 @@ test("checkSemanticCache returns a streaming SSE HIT (text/event-stream) when st
     usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
   };
   const { args, persistCalls } = makeHitArgs({
-    body: { model: "gpt-4o", messages: [{ role: "user", content: "hit query stream" }], temperature: 0 },
+    body: {
+      model: "gpt-4o",
+      messages: [{ role: "user", content: "hit query stream" }],
+      temperature: 0,
+    },
     stream: true,
   });
   seedHit(args, cached);
@@ -279,7 +291,11 @@ test("checkSemanticCache HITs even when the cached body has no usage (cost falls
   const cached = {
     id: "chatcmpl-cached-no-usage",
     choices: [
-      { index: 0, message: { role: "assistant", content: "no-usage answer" }, finish_reason: "stop" },
+      {
+        index: 0,
+        message: { role: "assistant", content: "no-usage answer" },
+        finish_reason: "stop",
+      },
     ],
   };
   const { args, persistCalls } = makeHitArgs({

@@ -237,7 +237,7 @@ import { deleteSessionAccountAffinity } from "@/lib/db/sessionAccountAffinity";
 import { getCacheControlSettings } from "@/lib/cacheControlSettings";
 import { guardrailRegistry } from "@/lib/guardrails";
 import { shouldPreserveCacheControl } from "../utils/cacheControlPolicy.ts";
-import { getCachedSettings } from "@/lib/db/readCache";
+import { getCachedDatabaseCacheSettings, getCachedSettings } from "@/lib/db/readCache";
 import { applyCodexGlobalFastServiceTier } from "@/lib/providers/codexFastTier";
 import { buildUpstreamHeadersForExecute as buildUpstreamHeadersForExecuteFor } from "./chatCore/upstreamExecuteHeaders.ts";
 import {
@@ -276,11 +276,13 @@ import {
 } from "../services/accountSemaphore.ts";
 import { lockModel, lockModelIfPerModelQuota } from "../services/accountFallback.ts";
 import {
+  configureSemanticCache,
   generateSignature,
   getCachedResponse,
   setCachedResponse,
   isCacheableForRead,
   isCacheableForWrite,
+  requestVariantOf,
 } from "@/lib/semanticCache";
 import { saveIdempotency } from "@/lib/idempotencyLayer";
 import {
@@ -761,6 +763,7 @@ export async function handleChatCore({
   const noLogEnabled = apiKeyInfo?.noLog === true;
   // Consolidate settings reads — fetch once, reuse throughout the request
   const settings = cachedSettings ?? (await getCachedSettings());
+  const databaseCacheSettings = await getCachedDatabaseCacheSettings();
   // Opt-in tool-source diagnostics (#1825): summarize the request's tool definitions
   // (count + MCP/hosted/client source breakdown + first names) as a single debug line.
   if (settings.logToolSources === true) {
@@ -933,7 +936,23 @@ export async function handleChatCore({
   });
   effectiveServiceTier = resolveEffectiveServiceTier(body);
   setGeminiThoughtSignatureMode(settings.antigravitySignatureCacheMode);
-  const semanticCacheEnabled = settings.semanticCacheEnabled !== false;
+  configureSemanticCache({
+    maxSize: databaseCacheSettings.semanticCacheMaxSize,
+    ttlMs: databaseCacheSettings.semanticCacheTTL,
+  });
+  const semanticCacheEnabled = databaseCacheSettings.semanticCacheEnabled !== false;
+  const semanticCacheSignature = generateSignature(
+    model,
+    body.messages ?? body.input,
+    body.temperature,
+    body.top_p,
+    apiKeyInfo?.id ?? undefined,
+    requestVariantOf(body, {
+      endpoint: clientRawRequest?.endpoint,
+      sourceFormat,
+      provider,
+    })
+  );
 
   const reqLogger = await createRequestLogger(sourceFormat, targetFormat, model, {
     enabled: detailedLoggingEnabled,
@@ -972,6 +991,7 @@ export async function handleChatCore({
     log,
     persistAttemptLogs,
     apiKeyId: apiKeyInfo?.id ?? undefined,
+    signature: semanticCacheSignature,
   });
   if (cacheHit) {
     return cacheHit;
@@ -4098,6 +4118,7 @@ export async function handleChatCore({
       apiKeyId: apiKeyInfo?.id ?? undefined,
       usage,
       log,
+      signature: semanticCacheSignature,
     });
 
     // ── Phase 9.2: Save for idempotency ──
@@ -4423,6 +4444,7 @@ export async function handleChatCore({
       apiKeyId: apiKeyInfo?.id ?? undefined,
       streamUsage,
       log,
+      signature: semanticCacheSignature,
     });
   };
 

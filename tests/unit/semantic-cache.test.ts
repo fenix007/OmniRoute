@@ -46,12 +46,12 @@ describe("Semantic Cache", () => {
       assert.notEqual(sig1, sig2);
     });
 
-    it("normalizes messages (strips extra fields)", () => {
+    it("preserves extra conversation fields that may affect provider output", () => {
       const msg1 = [{ role: "user", content: "hello", extra: true }];
       const msg2 = [{ role: "user", content: "hello" }];
       const sig1 = generateSignature("gpt-4", msg1, 0, 1);
       const sig2 = generateSignature("gpt-4", msg2, 0, 1);
-      assert.equal(sig1, sig2);
+      assert.notEqual(sig1, sig2);
     });
 
     it("handles non-string content", () => {

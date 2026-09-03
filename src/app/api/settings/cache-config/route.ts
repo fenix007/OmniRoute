@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
+import { getUserDatabaseSettings, updateDatabaseSettings } from "@/lib/db/databaseSettings";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
 import { z } from "zod";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
 const cacheConfigUpdateSchema = z.object({
   semanticCacheEnabled: z.boolean().optional(),
-  semanticCacheMaxSize: z.number().positive().optional(),
-  semanticCacheTTL: z.number().positive().optional(),
+  semanticCacheMaxSize: z.number().int().min(10).max(1000).optional(),
+  semanticCacheTTL: z.number().int().min(60000).optional(),
   promptCacheEnabled: z.boolean().optional(),
   promptCacheStrategy: z.enum(["auto", "system-only", "manual"]).optional(),
   alwaysPreserveClientCache: z.enum(["auto", "always", "never"]).optional(),
@@ -41,9 +42,13 @@ export async function GET(request: NextRequest) {
 
   try {
     const settings = await getSettings();
+    const databaseCache = getUserDatabaseSettings().cache;
     const config: Record<string, unknown> = {};
     for (const key of CACHE_CONFIG_KEYS) {
-      config[key] = settings[key] ?? DEFAULTS[key];
+      config[key] =
+        key === "idempotencyWindowMs" || key === "alwaysPreserveClientCache"
+          ? (settings[key] ?? DEFAULTS[key])
+          : (databaseCache[key] ?? settings[key] ?? DEFAULTS[key]);
     }
     return NextResponse.json(config);
   } catch (error) {
@@ -69,32 +74,40 @@ export async function PUT(request: NextRequest) {
       return validation.response;
     }
 
-    const updates: Record<string, unknown> = {};
+    const settingsUpdates: Record<string, unknown> = {};
+    const cacheUpdates: Partial<ReturnType<typeof getUserDatabaseSettings>["cache"]> = {};
     const body = validation.data;
 
     if (body.semanticCacheEnabled !== undefined) {
-      updates.semanticCacheEnabled = body.semanticCacheEnabled;
+      cacheUpdates.semanticCacheEnabled = body.semanticCacheEnabled;
     }
     if (body.semanticCacheMaxSize !== undefined) {
-      updates.semanticCacheMaxSize = body.semanticCacheMaxSize;
+      cacheUpdates.semanticCacheMaxSize = body.semanticCacheMaxSize;
     }
     if (body.semanticCacheTTL !== undefined) {
-      updates.semanticCacheTTL = body.semanticCacheTTL;
+      cacheUpdates.semanticCacheTTL = body.semanticCacheTTL;
     }
     if (body.promptCacheEnabled !== undefined) {
-      updates.promptCacheEnabled = body.promptCacheEnabled;
+      cacheUpdates.promptCacheEnabled = body.promptCacheEnabled;
     }
     if (body.promptCacheStrategy !== undefined) {
-      updates.promptCacheStrategy = body.promptCacheStrategy;
+      cacheUpdates.promptCacheStrategy = body.promptCacheStrategy;
     }
     if (body.alwaysPreserveClientCache !== undefined) {
-      updates.alwaysPreserveClientCache = body.alwaysPreserveClientCache;
+      settingsUpdates.alwaysPreserveClientCache = body.alwaysPreserveClientCache;
     }
     if (body.idempotencyWindowMs !== undefined) {
-      updates.idempotencyWindowMs = body.idempotencyWindowMs;
+      settingsUpdates.idempotencyWindowMs = body.idempotencyWindowMs;
     }
 
-    await updateSettings(updates);
+    if (Object.keys(cacheUpdates).length > 0) {
+      updateDatabaseSettings({
+        cache: { ...getUserDatabaseSettings().cache, ...cacheUpdates },
+      });
+    }
+    if (Object.keys(settingsUpdates).length > 0) {
+      await updateSettings(settingsUpdates);
+    }
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

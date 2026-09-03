@@ -10,6 +10,7 @@
  */
 import {
   generateSignature as defaultGenerateSignature,
+  requestVariantOf,
   setCachedResponse as defaultSetCachedResponse,
   isCacheableForWrite as defaultIsCacheableForWrite,
 } from "@/lib/semanticCache";
@@ -18,6 +19,7 @@ import { isSmallEnoughForSemanticCache as defaultIsSmallEnough } from "../../uti
 type LoggerLike = { debug?: (...args: unknown[]) => void } | null | undefined;
 
 type CacheBody = {
+  [key: string]: unknown;
   messages?: unknown;
   input?: unknown;
   temperature?: unknown;
@@ -48,6 +50,7 @@ export function storeSemanticCacheResponse(
     translatedResponse: unknown;
     model: string;
     apiKeyId?: string | number;
+    signature?: string;
     usage?: UsageLike;
     log?: LoggerLike;
   },
@@ -60,13 +63,16 @@ export function storeSemanticCacheResponse(
   ) {
     return;
   }
-  const signature = deps.generateSignature(
-    args.model,
-    args.body.messages ?? args.body.input,
-    args.body.temperature,
-    args.body.top_p,
-    args.apiKeyId ?? undefined
-  );
+  const signature =
+    args.signature ??
+    deps.generateSignature(
+      args.model,
+      args.body.messages ?? args.body.input,
+      args.body.temperature,
+      args.body.top_p,
+      args.apiKeyId == null ? undefined : String(args.apiKeyId),
+      requestVariantOf(args.body)
+    );
   const tokensSaved = args.usage?.prompt_tokens + args.usage?.completion_tokens || 0;
   deps.setCachedResponse(signature, args.model, args.translatedResponse, tokensSaved);
   args.log?.debug?.("CACHE", `Stored response for ${args.model} (${tokensSaved} tokens)`);
