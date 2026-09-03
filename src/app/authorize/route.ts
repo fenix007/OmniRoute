@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderConnection } from "@/models";
+import { consumeTraeCallbackState } from "@/lib/oauth/traeCallbackState";
 import { parseTraeCallbackQuery } from "./parseCallback";
 
 /**
@@ -25,9 +26,10 @@ import { parseTraeCallbackQuery } from "./parseCallback";
  * opening window before closing itself — that's how TraeAuthModal knows
  * the import succeeded.
  *
- * State validation: the caller passes its UUID as `login_trace_id` in the
- * authorize URL; Trae echoes it back as `loginTraceID`. The modal verifies
- * the echoed state before trusting the postMessage.
+ * State validation: the dashboard obtains a short-lived, single-use UUID from
+ * the authenticated callback-state endpoint and passes it as `login_trace_id`.
+ * Trae echoes it back as `loginTraceID`; this handler consumes it atomically
+ * before any credential is persisted.
  */
 function htmlClose(message: Record<string, unknown>): NextResponse {
   // Embedding values: only emit the small/sanitized status payload — never the
@@ -66,6 +68,9 @@ function htmlClose(message: Record<string, unknown>): NextResponse {
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const q = url.searchParams;
+  if (!consumeTraeCallbackState(q.get("loginTraceID"))) {
+    return htmlClose({ success: false, error: "Invalid or expired callback state" });
+  }
   const parsed = parseTraeCallbackQuery(q);
   if (!parsed.ok) {
     return htmlClose({ success: false, error: parsed.error });

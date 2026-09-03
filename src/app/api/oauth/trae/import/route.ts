@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { createProviderConnection } from "@/models";
 import { traeImportSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
 
 /**
  * POST /api/oauth/trae/import
@@ -21,14 +21,8 @@ import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
  *   tenant         — optional, default "marscode"
  *   region         — optional, default "US-East"
  */
-async function requireOAuthImportAuth(request: Request) {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
-
 export async function POST(request: Request) {
-  const authResponse = await requireOAuthImportAuth(request);
+  const authResponse = await requireManagementAuth(request);
   if (authResponse) return authResponse;
 
   let rawBody;
@@ -93,7 +87,7 @@ export async function POST(request: Request) {
  * Returns field metadata so a generic dashboard UI can render the paste form.
  */
 export async function GET(request: Request) {
-  const authResponse = await requireOAuthImportAuth(request);
+  const authResponse = await requireManagementAuth(request);
   if (authResponse) return authResponse;
 
   return NextResponse.json({

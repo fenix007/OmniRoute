@@ -7,15 +7,6 @@ import Input from "./Input";
 
 const TRAE_CLIENT_ID = "en1oxy7wnw8j9n";
 
-function uuid(): string {
-  const c = (globalThis.crypto || (globalThis as any).crypto) as Crypto | undefined;
-  if (c?.randomUUID) return c.randomUUID();
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (ch) => {
-    const r = (Math.random() * 16) | 0;
-    return (ch === "x" ? r : (r & 0x3) | 0x8).toString(16);
-  });
-}
-
 function randomHex(bytes: number): string {
   const buf = new Uint8Array(bytes);
   (globalThis.crypto || (globalThis as any).crypto).getRandomValues(buf);
@@ -139,11 +130,23 @@ export default function TraeAuthModal({
     return () => window.removeEventListener("message", onMessage);
   }, [isOpen, onSuccess, onClose]);
 
-  const handleAuthorizeWithBrowser = () => {
+  const handleAuthorizeWithBrowser = async () => {
     setError(null);
     setAuthorizing(true);
-    const traceId = uuid();
-    traceIdRef.current = traceId;
+    let traceId: string;
+    try {
+      const response = await fetch("/api/oauth/trae/callback-state", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok || typeof data.state !== "string") {
+        throw new Error(typeof data.error === "string" ? data.error : "Unable to start OAuth");
+      }
+      traceId = data.state;
+      traceIdRef.current = traceId;
+    } catch (err) {
+      setAuthorizing(false);
+      setError(err instanceof Error ? err.message : "Unable to start OAuth");
+      return;
+    }
     // Trae's authorize endpoint validates two things about auth_callback_url:
     //  1. host must be a loopback IP (127.0.0.1) — "localhost" hostname gets
     //     rejected with "Login Failed".
