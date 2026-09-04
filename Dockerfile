@@ -102,6 +102,11 @@ ENV OMNIROUTE_MITM_STUB=1
 ARG OMNIROUTE_BUILD_MEMORY_MB=4096
 ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_BUILD_MEMORY_MB}"
 
+# Tagged fork builds expose their release identifier in the client bundle so the
+# admin sidebar can distinguish the frozen upstream base from the deployed patch set.
+ARG OMNIROUTE_FORK_VERSION=""
+ENV NEXT_PUBLIC_OMNIROUTE_FORK_VERSION=${OMNIROUTE_FORK_VERSION}
+
 COPY . ./
 RUN --mount=type=cache,id=next-cache,target=/app/.build/next/cache \
   mkdir -p /app/data && npm run build

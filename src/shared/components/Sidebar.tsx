@@ -520,7 +520,7 @@ export default function Sidebar({
                 <h1 className="text-sm font-semibold tracking-tight text-text-main truncate">
                   {customAppName || APP_CONFIG.name}
                 </h1>
-                <span className="text-[10px] text-text-muted">v{APP_CONFIG.version}</span>
+                <span className="text-[10px] text-text-muted">{APP_CONFIG.versionLabel}</span>
               </div>
             )}
           </Link>

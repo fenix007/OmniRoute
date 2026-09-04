@@ -65,6 +65,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           outputs: type=image,push-by-digest=true,name-canonical=true,push=true
           tags: ${{ env.IMAGE_NAME }}
+          build-args: |
+            OMNIROUTE_FORK_VERSION=${{ github.ref_type == 'tag' && github.ref_name || '' }}
           cache-from: type=gha,scope=fork-${{ matrix.arch }}
           cache-to: type=gha,scope=fork-${{ matrix.arch }},mode=max
 
