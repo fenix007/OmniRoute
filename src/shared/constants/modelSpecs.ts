@@ -91,6 +91,15 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     aliases: ["openai/gpt-5.6-luna"],
   },
 
+  "gpt-6-astra": {
+    maxOutputTokens: 128000,
+    contextWindow: 1050000,
+    supportsThinking: true,
+    supportsTools: true,
+    supportsVision: true,
+    aliases: ["openai/gpt-6-astra"],
+  },
+
   "gpt-5.5": {
     maxOutputTokens: 128000,
     contextWindow: 1050000,

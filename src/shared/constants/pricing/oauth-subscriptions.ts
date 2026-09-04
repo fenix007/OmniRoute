@@ -3,6 +3,7 @@
  * Pure data; merged by default-pricing.ts via spread (god-file decomposition; semantic split).
  */
 import {
+  GPT_6_ASTRA_PRICING,
   GPT_5_3_CODEX_PRICING,
   GPT_5_5_PRICING,
   GPT_5_6_LUNA_PRICING,
@@ -100,6 +101,13 @@ export const DEFAULT_PRICING_OAUTH = {
     "gpt-5.6-luna-high": GPT_5_6_LUNA_PRICING,
     "gpt-5.6-luna-medium": GPT_5_6_LUNA_PRICING,
     "gpt-5.6-luna-low": GPT_5_6_LUNA_PRICING,
+    // GPT-6 Astra (paid Codex tiers only)
+    "gpt-6-astra": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-max": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-xhigh": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-high": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-medium": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-low": GPT_6_ASTRA_PRICING,
     // GPT 5.5
     "gpt-5.5": GPT_5_5_PRICING,
     "gpt5.5": GPT_5_5_PRICING,

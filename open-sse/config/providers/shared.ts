@@ -310,6 +310,35 @@ export const GPT_5_6_CODEX_CAPABILITIES = {
   maxOutputTokens: 128000,
 } as const;
 
+// Public OpenAI API limits for GPT-6 Astra. Mirrors the GPT-5.6 API window: the
+// published profile caps input at the 1.05M window and output at 128K.
+export const GPT_6_ASTRA_API_CAPABILITIES = {
+  toolCalling: true,
+  supportsReasoning: true,
+  supportsVision: true,
+  supportsXHighEffort: true,
+  contextLength: 1050000,
+  maxInputTokens: 922000,
+  maxOutputTokens: 128000,
+} as const;
+
+// Codex OAuth catalog limits for GPT-6 Astra. Unlike gpt-5.6-sol — which the live
+// `/codex/models` catalog widens to ~921K on the Pro tier — Astra reports the same
+// 272K `context_window` on every paid tier (team/plus/pro) and advertises no
+// `max_context_window`, so 272K is the authoritative usable window. Astra is absent
+// from the free tier. Reasoning tops out at `max` (no `ultra`) and `none` is not a
+// supported effort, so the catalog exposes no `-none` variant.
+export const GPT_6_ASTRA_CODEX_CAPABILITIES = {
+  targetFormat: "openai-responses",
+  toolCalling: true,
+  supportsReasoning: true,
+  supportsVision: true,
+  supportsXHighEffort: true,
+  contextLength: 272000,
+  maxInputTokens: 272000,
+  maxOutputTokens: 128000,
+} as const;
+
 export const CHAT_OPENAI_COMPAT_MODELS: Record<string, RegistryModel[]> = {
   deepinfra: buildModels([
     "anthropic/claude-4-opus",

@@ -123,6 +123,10 @@ type EffortLevel = (typeof EFFORT_ORDER)[number];
 const STANDARD_EFFORT_SUFFIXES = ["none", "low", "medium", "high", "xhigh"] as const;
 const GPT_5_6_MAX_ALIAS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 const GPT_5_6_ULTRA_ALIAS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra"]);
+// GPT-6 Astra advertises `max` as its ceiling (no `ultra`), so `-max` is an alias
+// suffix here for the same reason it is on the GPT-5.6 family: `max` is not part of
+// STANDARD_EFFORT_SUFFIXES and would otherwise never split off the model id.
+const GPT_6_MAX_ALIAS_MODELS = new Set(["gpt-6-astra"]);
 const CODEX_FAST_WIRE_VALUE = "priority";
 const CODEX_RESPONSES_WS_URL = "wss://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
@@ -196,6 +200,14 @@ function splitCodexReasoningSuffix(model: unknown): {
     const supportedModels =
       alias === "ultra" ? GPT_5_6_ULTRA_ALIAS_MODELS : GPT_5_6_MAX_ALIAS_MODELS;
     if (supportedModels.has(baseModel)) {
+      return { baseModel, effort: alias as EffortLevel };
+    }
+  }
+
+  const gpt6AliasMatch = /^(gpt-6-astra)-(max)$/.exec(modelId);
+  if (gpt6AliasMatch) {
+    const [, baseModel, alias] = gpt6AliasMatch;
+    if (GPT_6_MAX_ALIAS_MODELS.has(baseModel)) {
       return { baseModel, effort: alias as EffortLevel };
     }
   }
@@ -415,6 +427,7 @@ function normalizeServiceTierValue(value: unknown): string | undefined {
  * Update this table when Codex releases new models with different caps.
  */
 const MAX_EFFORT_BY_MODEL: Record<string, EffortLevel> = {
+  "gpt-6-astra": "max",
   "gpt-5.6-sol": "ultra",
   "gpt-5.6-terra": "ultra",
   "gpt-5.6-luna": "max",

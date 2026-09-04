@@ -1,5 +1,6 @@
 import type { RegistryEntry } from "../../shared.ts";
 import {
+  GPT_6_ASTRA_CODEX_CAPABILITIES,
   GPT_5_6_CODEX_CAPABILITIES,
   GPT_5_5_CODEX_CAPABILITIES,
   getCodexDefaultHeaders,
@@ -123,6 +124,38 @@ export const codexProvider: RegistryEntry = {
       id: "gpt-5.6-luna-low",
       name: "GPT 5.6 Luna (Low)",
       ...GPT_5_6_CODEX_CAPABILITIES,
+    },
+    // GPT-6 Astra: paid Codex tiers only (team/plus/pro), 272K window on every tier.
+    // Effort tops out at `max`; there is no `ultra` alias and no `none` variant.
+    {
+      id: "gpt-6-astra",
+      name: "GPT 6 Astra",
+      ...GPT_6_ASTRA_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-astra-max",
+      name: "GPT 6 Astra (Max)",
+      ...GPT_6_ASTRA_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-astra-xhigh",
+      name: "GPT 6 Astra (xHigh)",
+      ...GPT_6_ASTRA_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-astra-high",
+      name: "GPT 6 Astra (High)",
+      ...GPT_6_ASTRA_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-astra-medium",
+      name: "GPT 6 Astra (Medium)",
+      ...GPT_6_ASTRA_CODEX_CAPABILITIES,
+    },
+    {
+      id: "gpt-6-astra-low",
+      name: "GPT 6 Astra (Low)",
+      ...GPT_6_ASTRA_CODEX_CAPABILITIES,
     },
     // gpt-5.5 codex OAuth backend caps context at 400K (not the public-API
     // 1.05M). Public refs : openai/codex#19208, #19319, #19464 ;

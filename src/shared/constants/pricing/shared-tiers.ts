@@ -17,6 +17,16 @@ export const GPT_5_5_PRICING = {
   cache_creation: 5.0,
 };
 
+// GPT-6 Astra standard tier (USD per 1M tokens). Cache writes are 1.25x input,
+// matching the rest of the OpenAI reasoning lineup.
+export const GPT_6_ASTRA_PRICING = {
+  input: 10.0,
+  output: 50.0,
+  cached: 1.0,
+  reasoning: 50.0,
+  cache_creation: 12.5,
+};
+
 export const GPT_5_6_SOL_PRICING = {
   input: 5.0,
   output: 30.0,
