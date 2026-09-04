@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeManagementSessionRequest } from "../helpers/managementSession.ts";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-codex-reset-credits-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
@@ -14,10 +15,14 @@ const providersDb = await import("../../src/lib/db/providers.ts");
 const resetCredits = await import("../../src/lib/usage/codexResetCredits.ts");
 const resetCreditsRoute =
   await import("../../src/app/api/usage/[connectionId]/codex-reset-credits/route.ts");
+const consumeResetCreditRoute = await import("../../src/app/api/usage/codex-reset-credit/route.ts");
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 const originalFetch = globalThis.fetch;
+const originalInitialPassword = process.env.INITIAL_PASSWORD;
+const originalJwtSecret = process.env.JWT_SECRET;
+const originalRequireApiKey = process.env.REQUIRE_API_KEY;
 type QuotaUsageRecord = Record<string, { used?: unknown } | undefined>;
 
 async function resetStorage() {
@@ -41,6 +46,8 @@ async function createCodexConnection(overrides: Record<string, unknown> = {}) {
 
 test.beforeEach(async () => {
   globalThis.fetch = originalFetch;
+  delete process.env.INITIAL_PASSWORD;
+  delete process.env.REQUIRE_API_KEY;
   await resetStorage();
 });
 
@@ -48,9 +55,16 @@ test.after(async () => {
   globalThis.fetch = originalFetch;
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+
+  if (originalInitialPassword === undefined) delete process.env.INITIAL_PASSWORD;
+  else process.env.INITIAL_PASSWORD = originalInitialPassword;
+  if (originalJwtSecret === undefined) delete process.env.JWT_SECRET;
+  else process.env.JWT_SECRET = originalJwtSecret;
+  if (originalRequireApiKey === undefined) delete process.env.REQUIRE_API_KEY;
+  else process.env.REQUIRE_API_KEY = originalRequireApiKey;
 });
 
-test("consumeCodexResetCredit fetches a credit id, posts it, then refreshes usage", async () => {
+test("consumeCodexResetCredit selects the earliest-expiring credit, then refreshes usage", async () => {
   const connection = (await createCodexConnection()) as { id: string };
   const calls: Array<{ url: string; init: RequestInit }> = [];
 
@@ -61,7 +75,21 @@ test("consumeCodexResetCredit fetches a credit id, posts it, then refreshes usag
       assert.equal(init.method, "GET");
       assert.equal((init.headers as Record<string, string>)["chatgpt-account-id"], "workspace-123");
       return new Response(
-        JSON.stringify({ credits: [{ id: "credit-123", status: "available" }] }),
+        JSON.stringify({
+          credits: [
+            { id: "credit-unknown", status: "available" },
+            {
+              id: "credit-later",
+              status: "available",
+              expires_at: "2099-10-04T04:18:25Z",
+            },
+            {
+              id: "credit-earliest",
+              status: "available",
+              expires_at: "2099-09-21T02:16:00Z",
+            },
+          ],
+        }),
         {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -73,7 +101,7 @@ test("consumeCodexResetCredit fetches a credit id, posts it, then refreshes usag
       assert.equal((init.headers as Record<string, string>)["chatgpt-account-id"], "workspace-123");
       assert.deepEqual(JSON.parse(String(init.body)), {
         redeem_request_id: "redeem-1",
-        credit_id: "credit-123",
+        credit_id: "credit-earliest",
       });
       return new Response(JSON.stringify({ code: "reset" }), {
         status: 200,
@@ -141,6 +169,43 @@ test("consumeCodexResetCredit accepts alreadyRedeemed as success", async () => {
   assert.equal(result.outcome, "alreadyRedeemed");
 });
 
+test("consumeCodexResetCredit refuses to spend a replacement credit", async () => {
+  const connection = (await createCodexConnection()) as { id: string };
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+
+  globalThis.fetch = (async (input, init = {}) => {
+    calls.push({ url: String(input), init });
+    return new Response(
+      JSON.stringify({
+        credits: [
+          {
+            id: "replacement-credit",
+            status: "available",
+            expires_at: "2099-10-04T04:18:25Z",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      resetCredits.consumeCodexResetCredit(
+        connection.id,
+        "redeem-stale-selection",
+        "2099-09-21T02:16:00.000Z"
+      ),
+    (error: unknown) =>
+      error instanceof resetCredits.CodexResetCreditError &&
+      error.status === 409 &&
+      error.code === "credit_changed"
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.init.method, "GET");
+});
+
 test("listCodexResetCredits returns only redeemable credits with normalized expiries", async () => {
   const connection = (await createCodexConnection()) as { id: string };
 
@@ -192,8 +257,8 @@ test("listCodexResetCredits returns only redeemable credits with normalized expi
   assert.deepEqual(result, {
     availableCount: 3,
     credits: [
-      { expiresAt: "2099-10-04T01:18:25.000Z" },
       { expiresAt: "2099-09-21T02:16:00.000Z" },
+      { expiresAt: "2099-10-04T01:18:25.000Z" },
       { expiresAt: null },
     ],
   });
@@ -275,6 +340,54 @@ test("Codex reset-credit expiry route authenticates before reading connection pa
     authIndex < paramsIndex,
     "GET route must authenticate before reading connection params"
   );
+});
+
+test("Codex reset-credit POST rejects unauthenticated malformed requests before reading JSON", async () => {
+  process.env.INITIAL_PASSWORD = "bootstrap-password";
+
+  const response = await consumeResetCreditRoute.POST(
+    new Request("http://localhost/api/usage/codex-reset-credit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{malformed-json",
+    })
+  );
+  const body = (await response.json()) as { error?: { message?: string } };
+
+  assert.equal(response.status, 401);
+  assert.equal(body.error?.message, "Authentication required");
+});
+
+test("Codex reset-credit POST authenticates before body parsing and rejects unknown fields", async () => {
+  const routePath = path.join(repoRoot, "src/app/api/usage/codex-reset-credit/route.ts");
+  const source = fs.readFileSync(routePath, "utf8");
+  const authIndex = source.indexOf("requireManagementAuth(request)");
+  const bodyIndex = source.indexOf("request.json()");
+
+  assert.ok(authIndex >= 0, "POST route must enforce management auth");
+  assert.ok(bodyIndex >= 0, "POST route must parse its JSON body");
+  assert.ok(authIndex < bodyIndex, "POST route must authenticate before reading its JSON body");
+
+  process.env.INITIAL_PASSWORD = "bootstrap-password";
+  const request = await makeManagementSessionRequest(
+    "http://localhost/api/usage/codex-reset-credit",
+    {
+      method: "POST",
+      body: {
+        connectionId: "connection-123",
+        idempotencyKey: "redeem-123",
+        unexpected: true,
+      },
+    }
+  );
+  const response = await consumeResetCreditRoute.POST(request);
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    code: "invalid_request_body",
+    error: "Invalid request body.",
+  });
 });
 
 for (const code of ["noCredit", "nothingToReset"]) {

@@ -145,18 +145,24 @@ function parseAvailableResetCredits(payload: unknown): Array<{
 }> {
   const now = Date.now();
 
-  return getResetCreditCandidates(payload).flatMap((candidate) => {
-    const record = toRecord(candidate);
-    if (Object.keys(record).length === 0 || isUnavailableResetCredit(record)) return [];
+  return getResetCreditCandidates(payload)
+    .flatMap((candidate) => {
+      const record = toRecord(candidate);
+      if (Object.keys(record).length === 0 || isUnavailableResetCredit(record)) return [];
 
-    const id = extractStringField(record, ["credit_id", "creditId", "id"]);
-    if (!id) return [];
+      const id = extractStringField(record, ["credit_id", "creditId", "id"]);
+      if (!id) return [];
 
-    const expiresAt = normalizeExpiry(record);
-    if (expiresAt && Date.parse(expiresAt) <= now) return [];
+      const expiresAt = normalizeExpiry(record);
+      if (expiresAt && Date.parse(expiresAt) <= now) return [];
 
-    return [{ id, expiresAt }];
-  });
+      return [{ id, expiresAt }];
+    })
+    .sort((left, right) => {
+      if (left.expiresAt === null) return right.expiresAt === null ? 0 : 1;
+      if (right.expiresAt === null) return -1;
+      return Date.parse(left.expiresAt) - Date.parse(right.expiresAt);
+    });
 }
 
 function getResetCreditCandidates(payload: unknown): unknown[] {
@@ -179,11 +185,24 @@ function getResetCreditCandidates(payload: unknown): unknown[] {
   return [];
 }
 
-function parseAvailableResetCreditId(payload: unknown): string {
-  const creditId = parseAvailableResetCredits(payload)[0]?.id;
-  if (creditId) return creditId;
+function selectAvailableResetCredit(
+  payload: unknown,
+  expectedCreditExpiresAt?: string
+): { id: string; expiresAt: string | null } {
+  const credit = parseAvailableResetCredits(payload)[0];
+  if (!credit) {
+    throw new CodexResetCreditError(409, "no_credit", "No Codex reset credits are available.");
+  }
 
-  throw new CodexResetCreditError(409, "no_credit", "No Codex reset credits are available.");
+  if (expectedCreditExpiresAt && credit.expiresAt !== expectedCreditExpiresAt) {
+    throw new CodexResetCreditError(
+      409,
+      "credit_changed",
+      "The selected Codex reset credit changed before redemption."
+    );
+  }
+
+  return credit;
 }
 
 async function readResponsePayload(response: Response): Promise<unknown> {
@@ -309,7 +328,8 @@ async function fetchResetCreditsWithAuthRetry(
 
 async function consumeWithAuthRetry(
   connection: CodexConnectionLike,
-  idempotencyKey: string
+  idempotencyKey: string,
+  expectedCreditExpiresAt?: string
 ): Promise<{ connection: CodexConnectionLike; response: Response }> {
   const fetched = await fetchResetCreditsWithAuthRetry(connection);
   let refreshedConnection = fetched.connection;
@@ -325,8 +345,8 @@ async function consumeWithAuthRetry(
     );
   }
 
-  const creditId = parseAvailableResetCreditId(creditsPayload);
-  let response = await postConsumeResetCredit(refreshedConnection, idempotencyKey, creditId);
+  const credit = selectAvailableResetCredit(creditsPayload, expectedCreditExpiresAt);
+  let response = await postConsumeResetCredit(refreshedConnection, idempotencyKey, credit.id);
 
   if (response.status === 401 || response.status === 403) {
     refreshedConnection = await refreshCodexConnectionIfNeeded(refreshedConnection, true);
@@ -340,8 +360,15 @@ async function consumeWithAuthRetry(
         `Codex reset-credit API returned HTTP ${refreshedCreditsResponse.status}.`
       );
     }
-    const refreshedCreditId = parseAvailableResetCreditId(refreshedCreditsPayload);
-    response = await postConsumeResetCredit(refreshedConnection, idempotencyKey, refreshedCreditId);
+    const refreshedCredit = selectAvailableResetCredit(
+      refreshedCreditsPayload,
+      expectedCreditExpiresAt
+    );
+    response = await postConsumeResetCredit(
+      refreshedConnection,
+      idempotencyKey,
+      refreshedCredit.id
+    );
   }
 
   return { connection: refreshedConnection, response };
@@ -382,7 +409,8 @@ export async function listCodexResetCredits(connectionId: string): Promise<Codex
 
 export async function consumeCodexResetCredit(
   connectionId: string,
-  idempotencyKey: string
+  idempotencyKey: string,
+  expectedCreditExpiresAt?: string
 ): Promise<{
   outcome: CodexResetCreditOutcome;
   usage: JsonRecord;
@@ -396,7 +424,11 @@ export async function consumeCodexResetCredit(
 
   try {
     const connection = await loadCodexConnection(connectionId);
-    const { response } = await consumeWithAuthRetry(connection, idempotencyKey.trim());
+    const { response } = await consumeWithAuthRetry(
+      connection,
+      idempotencyKey.trim(),
+      expectedCreditExpiresAt
+    );
     const payload = await readResponsePayload(response);
 
     if (!response.ok) {
