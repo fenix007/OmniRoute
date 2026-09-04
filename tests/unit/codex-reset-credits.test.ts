@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-codex-reset-credits-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
@@ -11,6 +12,10 @@ process.env.API_KEY_SECRET = "test-codex-reset-credits-secret";
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const resetCredits = await import("../../src/lib/usage/codexResetCredits.ts");
+const resetCreditsRoute =
+  await import("../../src/app/api/usage/[connectionId]/codex-reset-credits/route.ts");
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 const originalFetch = globalThis.fetch;
 type QuotaUsageRecord = Record<string, { used?: unknown } | undefined>;
@@ -134,6 +139,142 @@ test("consumeCodexResetCredit accepts alreadyRedeemed as success", async () => {
 
   const result = await resetCredits.consumeCodexResetCredit(connection.id, "redeem-2");
   assert.equal(result.outcome, "alreadyRedeemed");
+});
+
+test("listCodexResetCredits returns only redeemable credits with normalized expiries", async () => {
+  const connection = (await createCodexConnection()) as { id: string };
+
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/rate-limit-reset-credits")) {
+      return new Response(
+        JSON.stringify({
+          available_count: 99,
+          credits: [
+            {
+              id: "credit-snake-case",
+              status: "available",
+              expires_at: "2099-10-04T04:18:25+03:00",
+              title: "must not leak",
+              profile: { email: "secret@example.test" },
+            },
+            {
+              creditId: "credit-camel-case",
+              available: true,
+              expiresAt: "2099-09-21T02:16:00.000Z",
+              token: "must not leak",
+            },
+            {
+              id: "credit-redeemed",
+              status: "redeemed",
+              expires_at: "2099-11-01T00:00:00Z",
+            },
+            {
+              id: "credit-expired",
+              status: "available",
+              expires_at: "2020-01-01T00:00:00Z",
+            },
+            {
+              id: "credit-invalid-expiry",
+              status: "available",
+              expires_at: "not-a-date",
+            },
+            { status: "available", expires_at: "2099-12-01T00:00:00Z" },
+          ],
+        }),
+        { status: 200 }
+      );
+    }
+    return new Response("unexpected", { status: 500 });
+  };
+
+  const result = await resetCredits.listCodexResetCredits(connection.id);
+
+  assert.deepEqual(result, {
+    availableCount: 3,
+    credits: [
+      { expiresAt: "2099-10-04T01:18:25.000Z" },
+      { expiresAt: "2099-09-21T02:16:00.000Z" },
+      { expiresAt: null },
+    ],
+  });
+  assert.equal(JSON.stringify(result).includes("credit-"), false);
+  assert.equal(JSON.stringify(result).includes("secret@example.test"), false);
+  assert.equal(JSON.stringify(result).includes("must not leak"), false);
+});
+
+test("listCodexResetCredits rejects non-Codex connections and sanitizes upstream failures", async () => {
+  const wrongProvider = (await createCodexConnection({
+    provider: "claude",
+    providerSpecificData: {},
+  })) as { id: string };
+
+  await assert.rejects(
+    () => resetCredits.listCodexResetCredits(wrongProvider.id),
+    (error: unknown) =>
+      error instanceof resetCredits.CodexResetCreditError &&
+      error.status === 400 &&
+      error.code === "codex_provider_required"
+  );
+
+  const codex = (await createCodexConnection()) as { id: string };
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ token: "upstream-secret", error: "sensitive detail" }), {
+      status: 429,
+    });
+
+  await assert.rejects(
+    () => resetCredits.listCodexResetCredits(codex.id),
+    (error: unknown) =>
+      error instanceof resetCredits.CodexResetCreditError &&
+      error.status === 502 &&
+      error.code === "codex_reset_credit_upstream_error" &&
+      error.message === "Codex reset-credit API request failed."
+  );
+});
+
+test("Codex reset-credit expiry route returns only the public response contract", async () => {
+  const connection = (await createCodexConnection()) as { id: string };
+
+  globalThis.fetch = async () =>
+    Response.json({
+      credits: [
+        {
+          id: "private-credit-id",
+          status: "available",
+          expires_at: "2099-10-04T04:18:25Z",
+          title: "private-title",
+        },
+      ],
+    });
+
+  const response = await resetCreditsRoute.GET(
+    new Request(`http://localhost/api/usage/${connection.id}/codex-reset-credits`),
+    { params: Promise.resolve({ connectionId: connection.id }) }
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    availableCount: 1,
+    credits: [{ expiresAt: "2099-10-04T04:18:25.000Z" }],
+  });
+});
+
+test("Codex reset-credit expiry route authenticates before reading connection params", () => {
+  const routePath = path.join(
+    repoRoot,
+    "src/app/api/usage/[connectionId]/codex-reset-credits/route.ts"
+  );
+  const source = fs.readFileSync(routePath, "utf8");
+  const authIndex = source.indexOf("requireManagementAuth(request)");
+  const paramsIndex = source.indexOf("await params");
+
+  assert.match(source, /from "@\/lib\/api\/requireManagementAuth"/);
+  assert.ok(authIndex >= 0, "GET route must enforce management auth");
+  assert.ok(paramsIndex >= 0, "GET route must validate the dynamic connection id");
+  assert.ok(
+    authIndex < paramsIndex,
+    "GET route must authenticate before reading connection params"
+  );
 });
 
 for (const code of ["noCredit", "nothingToReset"]) {
