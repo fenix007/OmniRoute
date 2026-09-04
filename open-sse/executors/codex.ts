@@ -1449,6 +1449,10 @@ export class CodexExecutor extends BaseExecutor {
     // both native passthrough and translated requests.
     delete body.truncation;
     delete body.background; // Droid CLI sends this but Codex Responses API rejects it
+    // Codex /responses rejects sampling parameters even when a Responses request
+    // takes the native passthrough path below (#12585).
+    delete body.temperature;
+    delete body.top_p;
 
     // Issue #3317: strip client-only fields the Codex Responses API rejects with
     // 400 "Unsupported parameter" — for BOTH the native passthrough (early return

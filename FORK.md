@@ -20,6 +20,8 @@ this fork instead of `diegosouzapw/omniroute`.
 | fix(api): enforce image generation API key auth                          | #8306 (merged)  | cherry-pick                                                                                                                                          |
 | fix(affinity): evict the sticky session pin on a combo per-model timeout | #10016 (merged) | cherry-pick, adapted (3.8.48 lacks the 3.8.50 dispatch seam context)                                                                                 |
 | fix(api): retry Codex image generation by account                        | #8307 (open)    | port of the functional subset; the model-access matcher also unwraps raw JSON error strings (3.8.48 codex handler has no sanitizeImageProviderError) |
+| fix(codex): strip sampling params from native Responses passthrough      | #12585 (open)   | adapted: delete `temperature` and `top_p` at the existing 3.8.48 passthrough boundary without importing the newer shared param-rule refactor         |
+| fix(chat): reject non-object message entries with HTTP 400               | #12644 (open)   | adapted at the existing 3.8.48 early guard so malformed chat payloads cannot reach translators and surface as HTTP 500                               |
 | ci(fork): fork-image-fenix007.yml                                        | —               | fork-only                                                                                                                                            |
 
 Owned OpenCode Go protocol/catalog alignment (fork.16):

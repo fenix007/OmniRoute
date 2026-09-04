@@ -212,6 +212,12 @@ function intersectAllowedConnectionIds(primary: unknown, secondary: unknown): st
   return first || second || null;
 }
 
+function hasNonObjectMessageEntry(messages: unknown[]): boolean {
+  return messages.some(
+    (message) => message === null || typeof message !== "object" || Array.isArray(message)
+  );
+}
+
 const comboPromoteDeps = { updateCombo, info: log.info, warn: log.warn };
 
 export { shouldTripProviderBreakerForResult } from "./chatPredicates";
@@ -274,6 +280,10 @@ export async function handleChat(
     if (Array.isArray(b.messages) && b.messages.length === 0) {
       log.warn("CHAT", "Rejecting request with empty messages array");
       return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: at least one message is required");
+    }
+    if (Array.isArray(b.messages) && hasNonObjectMessageEntry(b.messages)) {
+      log.warn("CHAT", "Rejecting request with non-object message entries");
+      return errorResponse(HTTP_STATUS.BAD_REQUEST, "messages: Expected array of objects");
     }
     if (!("messages" in b) && !("input" in b)) {
       log.warn("CHAT", "Rejecting request with missing messages");
