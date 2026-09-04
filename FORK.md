@@ -48,6 +48,23 @@ Sources: `open-sse/config/providers/registry/opencode/go/index.ts`,
 `tests/unit/opencode-go-catalog-alignment.test.ts`,
 `tests/unit/opencode-executor.test.ts`, `tests/unit/chatcore-target-format.test.ts`.
 
+OpenCode Go quota API backport (fork.17):
+
+| Change                                              | Upstream PR | What                                                                                                                                                                        |
+| --------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| feat(quota): use the official OpenCode Go usage API | #12124      | adapted: query `/zen/go/v1/usage` with the connection API key, parse rolling/weekly/monthly windows, bind the cache to the key, and remove obsolete Z.AI/dashboard scraping |
+
+The frozen 3.8.48 dispatcher sent OpenCode Go keys to a Z.AI quota endpoint. A valid
+chat/models key therefore rendered an `Unknown` quota card asking for a workspace ID
+and auth cookie. OpenCode now exposes an API-key-authenticated usage endpoint, so the
+provider limits page no longer needs browser credentials. The fetcher remains
+fail-open and keeps the existing 60-second successful-response cache.
+
+Sources: `open-sse/services/opencodeQuotaFetcher.ts`,
+`open-sse/services/usage.ts`, `open-sse/services/opencodeOllamaUsage.ts`. Tests:
+`tests/unit/opencode-quota-fetcher.test.ts`,
+`tests/unit/opencode-go-usage.test.ts`, and the provider modal UI suites.
+
 Tier-1 upstream fixes ported from release/v3.8.50 (fork.2):
 
 | Commit                                                                        | Upstream PR | What                                                                                         |

@@ -7,7 +7,7 @@ import { getDbInstance } from "@/lib/db/core";
 import { fetchBailianQuota, type BailianTripleWindowQuota } from "./bailianQuotaFetcher.ts";
 import { fetchDeepseekQuota, type DeepseekQuota } from "./deepseekQuotaFetcher.ts";
 import { fetchOpencodeQuota, type OpencodeTripleWindowQuota } from "./opencodeQuotaFetcher.ts";
-import { getOllamaCloudUsage, getOpenCodeGoUsage } from "./opencodeOllamaUsage.ts";
+import { getOllamaCloudUsage } from "./opencodeOllamaUsage.ts";
 import { getCodeBuddyCnUsage } from "./usage/codebuddy-cn.ts";
 import {
   extractCodeAssistOnboardTierId,
@@ -372,42 +372,37 @@ async function getOpencodeUsage(connectionId: string, apiKey: string) {
 
     const { window5h, windowWeekly, windowMonthly, limitReached } = quota;
 
-    const quotas: Record<string, UsageQuota> = {};
-
-    // $12 / 5-hour rolling window
-    quotas["window_5h"] = {
-      used: window5h.percentUsed * 12,
-      total: 12,
-      remaining: (1 - window5h.percentUsed) * 12,
-      remainingPercentage: (1 - window5h.percentUsed) * 100,
-      resetAt: window5h.resetAt,
-      unlimited: false,
-      displayName: "$12 / 5-hour",
-      currency: "USD",
-    };
-
-    // $30 / weekly window
-    quotas["window_weekly"] = {
-      used: windowWeekly.percentUsed * 30,
-      total: 30,
-      remaining: (1 - windowWeekly.percentUsed) * 30,
-      remainingPercentage: (1 - windowWeekly.percentUsed) * 100,
-      resetAt: windowWeekly.resetAt,
-      unlimited: false,
-      displayName: "$30 / week",
-      currency: "USD",
-    };
-
-    // $60 / monthly window
-    quotas["window_monthly"] = {
-      used: windowMonthly.percentUsed * 60,
-      total: 60,
-      remaining: (1 - windowMonthly.percentUsed) * 60,
-      remainingPercentage: (1 - windowMonthly.percentUsed) * 100,
-      resetAt: windowMonthly.resetAt,
-      unlimited: false,
-      displayName: "$60 / month",
-      currency: "USD",
+    const quotas: Record<string, UsageQuota> = {
+      session: {
+        used: window5h.percentUsed * 12,
+        total: 12,
+        remaining: (1 - window5h.percentUsed) * 12,
+        remainingPercentage: (1 - window5h.percentUsed) * 100,
+        resetAt: window5h.resetAt,
+        unlimited: false,
+        displayName: "$12 / 5-hour",
+        currency: "USD",
+      },
+      weekly: {
+        used: windowWeekly.percentUsed * 30,
+        total: 30,
+        remaining: (1 - windowWeekly.percentUsed) * 30,
+        remainingPercentage: (1 - windowWeekly.percentUsed) * 100,
+        resetAt: windowWeekly.resetAt,
+        unlimited: false,
+        displayName: "$30 / week",
+        currency: "USD",
+      },
+      mcp_monthly: {
+        used: windowMonthly.percentUsed * 60,
+        total: 60,
+        remaining: (1 - windowMonthly.percentUsed) * 60,
+        remainingPercentage: (1 - windowMonthly.percentUsed) * 100,
+        resetAt: windowMonthly.resetAt,
+        unlimited: false,
+        displayName: "$60 / month",
+        currency: "USD",
+      },
     };
 
     return {
@@ -597,7 +592,7 @@ export async function getUsageForProvider(
         ...(provider === "glm-cn" ? { apiRegion: "china" } : {}),
       });
     case "opencode-go":
-      return await getOpenCodeGoUsage(apiKey || "", providerSpecificData);
+      return await getOpencodeUsage(id || "", apiKey || "");
     case "ollama-cloud":
       return await getOllamaCloudUsage(providerSpecificData);
     case "minimax":

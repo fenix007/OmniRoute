@@ -1662,11 +1662,6 @@
       "count": 6
     }
   },
-  "tests/unit/opencode-quota-fetcher.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "tests/unit/openrouter-vision-sync-4264.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4
