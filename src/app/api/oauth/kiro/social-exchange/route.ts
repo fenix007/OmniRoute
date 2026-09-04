@@ -4,7 +4,7 @@ import { KiroService } from "@/lib/oauth/services/kiro";
 import { createProviderConnection, isCloudEnabled } from "@/models";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { syncToCloud } from "@/lib/cloudSync";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { validateBody, isValidationFailure } from "@/shared/validation/helpers";
 import { KIRO_CONFIG } from "@/lib/oauth/constants/oauth";
 
@@ -20,9 +20,8 @@ const socialExchangeSchema = z.object({
  * Frontend calls this repeatedly until authorization completes.
  */
 export async function POST(request: Request) {
-  if ((await isAuthRequired(request)) && !(await isAuthenticated(request))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const authError = await requireManagementAuth(request, { invalidApiKeyStatus: 401 });
+  if (authError) return authError;
 
   let rawBody;
   try {

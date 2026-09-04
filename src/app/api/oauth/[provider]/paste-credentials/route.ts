@@ -4,7 +4,7 @@ import { persistOAuthConnection } from "@/lib/oauth/connectionPersistence";
 import { parsePastedCredentials } from "@/lib/oauth/pasteCredentials";
 import { oauthPasteCredentialsSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 
 /**
@@ -27,10 +27,8 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ provider: string }> }
 ) {
-  // Creating a connection is owner-only — gate behind dashboard auth.
-  if ((await isAuthRequired(request)) && !(await isAuthenticated(request))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const authError = await requireManagementAuth(request, { invalidApiKeyStatus: 401 });
+  if (authError) return authError;
 
   try {
     const { provider } = await params;

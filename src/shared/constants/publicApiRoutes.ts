@@ -34,6 +34,15 @@ const PUBLIC_READONLY_API_ROUTE_PREFIXES = [
 
 const PUBLIC_READONLY_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+// These routes inspect credentials stored on the OmniRoute host. Exclude them
+// from the broad OAuth public prefix so the management policy can enforce its
+// local-only gate before the handler runs.
+const LOCAL_ONLY_OAUTH_IMPORT_ROUTES = [
+  "/api/oauth/cliproxy-import",
+  "/api/oauth/cursor/auto-import",
+  "/api/oauth/kiro/auto-import",
+];
+
 const PUBLIC_CLOUD_API_ROUTES = [
   { path: "/api/cloud/auth", methods: new Set(["POST", "OPTIONS"]) },
   { path: "/api/cloud/model/resolve", methods: new Set(["POST", "OPTIONS"]) },
@@ -52,6 +61,14 @@ function isPublicCloudApiRoute(pathname: string, method: string): boolean {
 }
 
 export function isPublicApiRoute(pathname: string, method = "GET"): boolean {
+  if (
+    LOCAL_ONLY_OAUTH_IMPORT_ROUTES.some(
+      (route) => pathname === route || pathname.startsWith(`${route}/`)
+    )
+  ) {
+    return false;
+  }
+
   if (isPublicCloudApiRoute(pathname, method)) {
     return true;
   }

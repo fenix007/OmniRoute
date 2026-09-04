@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { homedir } from "os";
 import { join } from "path";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import {
   createProviderConnection,
   getProviderConnections,
@@ -30,11 +30,8 @@ import {
  * 🔒 Auth-guarded: requires JWT cookie or Bearer API key.
  */
 export async function GET(request: Request) {
-  if (await isAuthRequired(request)) {
-    if (!(await isAuthenticated(request))) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const authError = await requireManagementAuth(request, { invalidApiKeyStatus: 401 });
+  if (authError) return authError;
 
   const { searchParams } = new URL(request.url);
   const targetProvider = searchParams.get("targetProvider") === "amazon-q" ? "amazon-q" : "kiro";
@@ -111,8 +108,7 @@ async function tryKiroCliSqlite(): Promise<{
         for (const table of ["auth_kv", "ItemTable", "storage"]) {
           try {
             const row = db.prepare(`SELECT value FROM ${table} WHERE key = ?`).get(key) as
-              | { value: string }
-              | undefined;
+              { value: string } | undefined;
             if (row?.value) {
               try {
                 tokenData = JSON.parse(row.value);
@@ -139,8 +135,7 @@ async function tryKiroCliSqlite(): Promise<{
         for (const table of ["auth_kv", "ItemTable", "storage"]) {
           try {
             const row = db.prepare(`SELECT value FROM ${table} WHERE key = ?`).get(key) as
-              | { value: string }
-              | undefined;
+              { value: string } | undefined;
             if (row?.value) {
               try {
                 regData = JSON.parse(row.value);

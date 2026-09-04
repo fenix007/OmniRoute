@@ -4,7 +4,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 
 const execFileAsync = promisify(execFile);
 
@@ -40,9 +40,7 @@ export interface CursorInstallProbe {
  * Port of decolua/9router#313 — only the linux probe is added; macOS/Windows
  * keep their existing behavior (no install probe).
  */
-export async function verifyLinuxCursorInstalled(
-  probe: CursorInstallProbe = {}
-): Promise<boolean> {
+export async function verifyLinuxCursorInstalled(probe: CursorInstallProbe = {}): Promise<boolean> {
   const exec = probe.execFile ?? execFileAsync;
   const canAccess = probe.access ?? access;
   const home = probe.home ?? homedir();
@@ -330,11 +328,8 @@ async function tryIdeAuth(): Promise<{
  * 🔒 Auth-guarded: requires JWT cookie or Bearer API key (finding #258-4).
  */
 export async function GET(request: Request) {
-  if (await isAuthRequired(request)) {
-    if (!(await isAuthenticated(request))) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const authError = await requireManagementAuth(request, { invalidApiKeyStatus: 401 });
+  if (authError) return authError;
 
   try {
     // Try Cursor IDE first (has both accessToken and machineId)
