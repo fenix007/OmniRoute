@@ -11,6 +11,7 @@ import {
   getCodexClientVersion,
   getCodexDefaultHeaders,
 } from "../../open-sse/config/codexClient.ts";
+import { getReasoningVariantBaseModelId } from "../../src/lib/vscode/reasoningMetadata.ts";
 
 const ASTRA_IDS = [
   "gpt-6-astra",
@@ -120,6 +121,18 @@ test("GPT-6 Astra pricing is wired for both the Codex and OpenAI catalogs", () =
   assert.ok(apiPricing, "missing openai pricing for gpt-6-astra");
   assert.equal(apiPricing.input, expected.input);
   assert.equal(apiPricing.output, expected.output);
+});
+
+test("VS Code discovery splits Astra's extended effort aliases off the base id", () => {
+  // Without this the alias survives as the base id and discovery expands it again
+  // into invalid variants such as `gpt-6-astra-max-high`.
+  assert.equal(getReasoningVariantBaseModelId("gpt-6-astra-max"), "gpt-6-astra");
+  assert.equal(getReasoningVariantBaseModelId("gpt-6-astra-ultra"), "gpt-6-astra");
+  assert.equal(getReasoningVariantBaseModelId("cx/gpt-6-astra-max"), "cx/gpt-6-astra");
+  assert.equal(getReasoningVariantBaseModelId("gpt-6-astra-high"), "gpt-6-astra");
+  assert.equal(getReasoningVariantBaseModelId("gpt-6-astra"), "gpt-6-astra");
+  // The GPT-5.6 family keeps its existing behaviour.
+  assert.equal(getReasoningVariantBaseModelId("gpt-5.6-sol-ultra"), "gpt-5.6-sol");
 });
 
 test("Codex identifies as a client version Astra accepts", () => {

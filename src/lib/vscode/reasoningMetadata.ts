@@ -17,7 +17,11 @@ export type VscodeCatalogModel = {
 };
 
 const STANDARD_EFFORT_SUFFIX_PATTERN = /-(xhigh|high|medium|low|none)$/i;
-const GPT_5_6_EXTENDED_EFFORT_SUFFIX_PATTERN = /^(.*gpt-5\.6-(?:sol|terra|luna))-(max|ultra)$/i;
+// Models whose `max`/`ultra` tiers are real catalog entries rather than standard
+// effort suffixes. Without a match here the base id never splits off, and VS Code
+// discovery expands the alias again into invalid ids like `gpt-6-astra-max-high`.
+const EXTENDED_EFFORT_SUFFIX_PATTERN =
+  /^(.*(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-astra))-(max|ultra)$/i;
 const DEFAULT_REASONING_EFFORT = "none";
 const KNOWN_REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
@@ -41,7 +45,7 @@ export function getCatalogModelName(model: VscodeCatalogModel) {
 }
 
 function matchReasoningEffortSuffix(modelId: string) {
-  const extendedMatch = modelId.match(GPT_5_6_EXTENDED_EFFORT_SUFFIX_PATTERN);
+  const extendedMatch = modelId.match(EXTENDED_EFFORT_SUFFIX_PATTERN);
   if (extendedMatch?.[1] && extendedMatch[2]) {
     return { baseModelId: extendedMatch[1], effort: extendedMatch[2].toLowerCase() };
   }
