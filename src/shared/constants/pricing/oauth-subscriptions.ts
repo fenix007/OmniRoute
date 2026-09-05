@@ -103,6 +103,7 @@ export const DEFAULT_PRICING_OAUTH = {
     "gpt-5.6-luna-low": GPT_5_6_LUNA_PRICING,
     // GPT-6 Astra (paid Codex tiers only)
     "gpt-6-astra": GPT_6_ASTRA_PRICING,
+    "gpt-6-astra-ultra": GPT_6_ASTRA_PRICING,
     "gpt-6-astra-max": GPT_6_ASTRA_PRICING,
     "gpt-6-astra-xhigh": GPT_6_ASTRA_PRICING,
     "gpt-6-astra-high": GPT_6_ASTRA_PRICING,

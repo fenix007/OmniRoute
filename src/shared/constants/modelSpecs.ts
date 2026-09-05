@@ -91,12 +91,9 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
     aliases: ["openai/gpt-5.6-luna"],
   },
 
+  // Public model limits; the Codex registry supplies its smaller OAuth window.
   "gpt-6-astra": {
-    maxOutputTokens: 128000,
-    contextWindow: 1050000,
-    supportsThinking: true,
-    supportsTools: true,
-    supportsVision: true,
+    ...GPT_5_6_MODEL_SPEC,
     aliases: ["openai/gpt-6-astra"],
   },
 

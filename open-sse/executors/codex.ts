@@ -123,10 +123,11 @@ type EffortLevel = (typeof EFFORT_ORDER)[number];
 const STANDARD_EFFORT_SUFFIXES = ["none", "low", "medium", "high", "xhigh"] as const;
 const GPT_5_6_MAX_ALIAS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 const GPT_5_6_ULTRA_ALIAS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra"]);
-// GPT-6 Astra advertises `max` as its ceiling (no `ultra`), so `-max` is an alias
-// suffix here for the same reason it is on the GPT-5.6 family: `max` is not part of
-// STANDARD_EFFORT_SUFFIXES and would otherwise never split off the model id.
-const GPT_6_MAX_ALIAS_MODELS = new Set(["gpt-6-astra"]);
+// GPT-6 Astra takes both alias suffixes. `max` and `ultra` are not part of
+// STANDARD_EFFORT_SUFFIXES, so without this set neither would ever split off the
+// model id. `ultra` is an OmniRoute-side tier that goes out as wire effort `max`
+// while keeping parallel tool calls for sub-agent delegation.
+const GPT_6_ALIAS_MODELS = new Set(["gpt-6-astra"]);
 const CODEX_FAST_WIRE_VALUE = "priority";
 const CODEX_RESPONSES_WS_URL = "wss://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
@@ -158,13 +159,14 @@ function isCodexResponsesLiteRequest(
   );
 }
 
-// GPT-5.6 ultra-tier (sol/terra at "ultra") and luna at "max" coordinate delegation to
+// Astra/Sol/Terra at "ultra" and Luna at "max" coordinate delegation to
 // sub-agents via parallel tool calls (see the effort-clamp comment near clampEffort()).
 // Responses Lite must not strip parallel_tool_calls for those model/effort combos, or
 // delegation silently breaks while the request still returns HTTP 200 (issue #7821).
 function isCodexDelegationDependentModel(model: unknown): boolean {
   const { baseModel, effort } = splitCodexReasoningSuffix(model);
   if (effort === "ultra" && GPT_5_6_ULTRA_ALIAS_MODELS.has(baseModel)) return true;
+  if (effort === "ultra" && GPT_6_ALIAS_MODELS.has(baseModel)) return true;
   if (effort === "max" && baseModel === "gpt-5.6-luna") return true;
   return false;
 }
@@ -204,10 +206,10 @@ function splitCodexReasoningSuffix(model: unknown): {
     }
   }
 
-  const gpt6AliasMatch = /^(gpt-6-astra)-(max)$/.exec(modelId);
+  const gpt6AliasMatch = /^(gpt-6-astra)-(max|ultra)$/.exec(modelId);
   if (gpt6AliasMatch) {
     const [, baseModel, alias] = gpt6AliasMatch;
-    if (GPT_6_MAX_ALIAS_MODELS.has(baseModel)) {
+    if (GPT_6_ALIAS_MODELS.has(baseModel)) {
       return { baseModel, effort: alias as EffortLevel };
     }
   }
@@ -427,7 +429,7 @@ function normalizeServiceTierValue(value: unknown): string | undefined {
  * Update this table when Codex releases new models with different caps.
  */
 const MAX_EFFORT_BY_MODEL: Record<string, EffortLevel> = {
-  "gpt-6-astra": "max",
+  "gpt-6-astra": "ultra",
   "gpt-5.6-sol": "ultra",
   "gpt-5.6-terra": "ultra",
   "gpt-5.6-luna": "max",
