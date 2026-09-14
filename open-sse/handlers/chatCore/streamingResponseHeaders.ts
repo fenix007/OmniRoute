@@ -16,20 +16,27 @@ export function assembleStreamingResponseHeaders(
     providerHeaders: Headers;
     provider: string | null | undefined;
     model: string | null | undefined;
+    requestedModel?: string | null | undefined;
+    comboName?: string | null | undefined;
     pendingRequestId: string;
     compressionResponseMeta?: string | null | undefined;
   },
   buildStreamingResponseHeaders: typeof defaultBuildStreaming = defaultBuildStreaming
 ): Record<string, string> {
   const responseHeaders: Record<string, string> = {
-    ...buildStreamingResponseHeaders(args.providerHeaders, {
-      provider: args.provider,
-      model: args.model,
-      cacheHit: false,
-      latencyMs: 0,
-      usage: null,
-      costUsd: 0,
-    }),
+    ...buildStreamingResponseHeaders(
+      args.providerHeaders,
+      {
+        provider: args.provider,
+        model: args.model,
+        cacheHit: false,
+        latencyMs: 0,
+        usage: null,
+        costUsd: 0,
+      },
+      args.requestedModel,
+      args.comboName
+    ),
     "x-omniroute-request-id": args.pendingRequestId,
   };
   if (args.compressionResponseMeta) {

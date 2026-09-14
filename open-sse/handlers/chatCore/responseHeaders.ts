@@ -29,6 +29,7 @@ const CODEX_ACCOUNT_QUOTA_HEADER_NAMES = new Set([
   "x-codex-plan-type",
   "x-codex-rate-limit-reached-type",
 ]);
+const CODEX_QUOTA_HIDDEN_MODELS = new Set(["coding", "coding-fast", "coding-high", "coding-low"]);
 
 /**
  * Prefix of Next.js internal middleware control headers.
@@ -120,7 +121,23 @@ export function isCodexAccountQuotaHeader(headerName: string): boolean {
   return CODEX_ACCOUNT_QUOTA_HEADER_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
 }
 
-export function stripCodexAccountQuotaHeaders(headers: Headers): void {
+export function shouldHideCodexAccountQuotaHeaders(modelName: string | null | undefined): boolean {
+  return typeof modelName === "string" && CODEX_QUOTA_HIDDEN_MODELS.has(modelName.trim());
+}
+
+function resolveQuotaVisibilityModel(
+  requestedModel: string | null | undefined,
+  comboName: string | null | undefined
+): string | null | undefined {
+  return comboName || requestedModel;
+}
+
+export function stripCodexAccountQuotaHeaders(
+  headers: Headers,
+  modelName: string | null | undefined
+): void {
+  if (!shouldHideCodexAccountQuotaHeaders(modelName)) return;
+
   const toDelete: string[] = [];
   headers.forEach((_value, key) => {
     if (isCodexAccountQuotaHeader(key)) {
@@ -151,14 +168,19 @@ export function stripNextMiddlewareControlHeaders(headers: Headers): void {
 
 export function buildStreamingResponseHeaders(
   providerHeaders: Headers,
-  meta: Parameters<typeof buildOmniRouteResponseMetaHeaders>[0]
+  meta: Parameters<typeof buildOmniRouteResponseMetaHeaders>[0],
+  requestedModel?: string | null,
+  comboName?: string | null
 ): Record<string, string> {
+  const hideCodexAccountQuotaHeaders = shouldHideCodexAccountQuotaHeaders(
+    resolveQuotaVisibilityModel(requestedModel, comboName)
+  );
   const forwardedHeaders: [string, string][] = [];
   providerHeaders.forEach((value, key) => {
     if (
       !STREAMING_RESPONSE_HEADER_DENYLIST.has(key.toLowerCase()) &&
       !isNextMiddlewareControlHeader(key) &&
-      !isCodexAccountQuotaHeader(key)
+      !(hideCodexAccountQuotaHeaders && isCodexAccountQuotaHeader(key))
     ) {
       forwardedHeaders.push([key, value]);
     }

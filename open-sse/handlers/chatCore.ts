@@ -2766,7 +2766,7 @@ export async function handleChatCore({
         const responseHeaders = new Headers(headersObj);
         stripStaleForwardingHeaders(responseHeaders);
         stripNextMiddlewareControlHeaders(responseHeaders);
-        stripCodexAccountQuotaHeaders(responseHeaders);
+        stripCodexAccountQuotaHeaders(responseHeaders, comboName || requestedModel);
         const contentType = (responseHeaders.get("content-type") || "").toLowerCase();
         const payload = await readNonStreamingResponseBody(
           rawResult.response,
@@ -4278,6 +4278,8 @@ export async function handleChatCore({
     providerHeaders: providerResponse.headers,
     provider,
     model,
+    requestedModel,
+    comboName,
     pendingRequestId,
     compressionResponseMeta,
   });

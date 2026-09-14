@@ -6,9 +6,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { assembleStreamingResponseHeaders } = await import(
-  "../../open-sse/handlers/chatCore/streamingResponseHeaders.ts"
-);
+const { assembleStreamingResponseHeaders } =
+  await import("../../open-sse/handlers/chatCore/streamingResponseHeaders.ts");
 
 function makeBuild() {
   const calls: Array<{ headers: unknown; meta: Record<string, unknown> }> = [];
@@ -49,9 +48,28 @@ test("buildStreamingResponseHeaders receives zeroed latency/usage/cost and cache
   assert.equal(calls[0].meta.model, "gpt-x");
 });
 
+test("passes the requested model and combo name to the upstream header filter", () => {
+  const calls: unknown[][] = [];
+  const build = (...args: unknown[]) => {
+    calls.push(args);
+    return {};
+  };
+
+  assembleStreamingResponseHeaders(
+    baseArgs({ requestedModel: "openai/gpt-5.6-sol", comboName: "coding-fast" }),
+    build as Parameters<typeof assembleStreamingResponseHeaders>[1]
+  );
+
+  assert.equal(calls[0][2], "openai/gpt-5.6-sol");
+  assert.equal(calls[0][3], "coding-fast");
+});
+
 test("no compression meta → no compression header", () => {
   const { build } = makeBuild();
-  const h = assembleStreamingResponseHeaders(baseArgs({ compressionResponseMeta: undefined }), build);
+  const h = assembleStreamingResponseHeaders(
+    baseArgs({ compressionResponseMeta: undefined }),
+    build
+  );
   assert.ok(!Object.values(h).includes("engine:z"));
 });
 

@@ -5,6 +5,7 @@ import {
   buildStreamingResponseHeaders,
   isCodexAccountQuotaHeader,
   isNextMiddlewareControlHeader,
+  shouldHideCodexAccountQuotaHeaders,
   stripCodexAccountQuotaHeaders,
   stripNextMiddlewareControlHeaders,
 } from "@omniroute/open-sse/handlers/chatCore/responseHeaders.ts";
@@ -68,7 +69,7 @@ test("non-streaming JSON path: stripNextMiddlewareControlHeaders removes the fam
   assert.equal(headers.get("content-type"), "application/json");
 });
 
-test("Codex account quota headers are not forwarded to multi-account clients", () => {
+test("Codex account quota headers are hidden only for coding profiles", () => {
   const quotaHeaders = [
     "x-codex-primary-used-percent",
     "x-codex-primary-window-minutes",
@@ -84,7 +85,7 @@ test("Codex account quota headers are not forwarded to multi-account clients", (
   });
   for (const name of quotaHeaders) upstream.set(name, "1");
 
-  const streaming = buildStreamingResponseHeaders(upstream, {});
+  const streaming = buildStreamingResponseHeaders(upstream, {}, "coding-high");
   for (const name of quotaHeaders) {
     assert.equal(isCodexAccountQuotaHeader(name), true, name);
     assert.equal(
@@ -96,8 +97,36 @@ test("Codex account quota headers are not forwarded to multi-account clients", (
   assert.equal(streaming["x-codex-turn-state"], "protocol-state");
   assert.equal(streaming["x-request-id"], "req-codex-quota");
 
-  stripCodexAccountQuotaHeaders(upstream);
+  stripCodexAccountQuotaHeaders(upstream, "coding-high");
   for (const name of quotaHeaders) assert.equal(upstream.get(name), null, name);
   assert.equal(upstream.get("x-codex-turn-state"), "protocol-state");
   assert.equal(upstream.get("x-request-id"), "req-codex-quota");
+
+  assert.equal(shouldHideCodexAccountQuotaHeaders("coding"), true);
+  assert.equal(shouldHideCodexAccountQuotaHeaders("coding-low"), true);
+  assert.equal(shouldHideCodexAccountQuotaHeaders("coding-fast"), true);
+  assert.equal(shouldHideCodexAccountQuotaHeaders("coding-high"), true);
+  assert.equal(shouldHideCodexAccountQuotaHeaders("coding-custom"), false);
+  assert.equal(shouldHideCodexAccountQuotaHeaders("gpt-5.6-sol"), false);
+});
+
+test("Codex account quota headers remain visible for non-coding models", () => {
+  const upstream = new Headers({
+    "x-codex-primary-used-percent": "81",
+    "x-codex-turn-state": "protocol-state",
+  });
+
+  const streaming = buildStreamingResponseHeaders(upstream, {}, "gpt-5.6-sol");
+  assert.equal(streaming["x-codex-primary-used-percent"], "81");
+
+  stripCodexAccountQuotaHeaders(upstream, "gpt-5.6-sol");
+  assert.equal(upstream.get("x-codex-primary-used-percent"), "81");
+});
+
+test("coding combo name takes precedence over the resolved target model", () => {
+  const upstream = new Headers({ "x-codex-primary-used-percent": "81" });
+
+  const streaming = buildStreamingResponseHeaders(upstream, {}, "openai/gpt-5.6-sol", "coding");
+
+  assert.equal(streaming["x-codex-primary-used-percent"], undefined);
 });
