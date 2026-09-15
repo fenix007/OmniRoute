@@ -7,6 +7,9 @@ import { maybeHandleWebdav } from "./webdav-handler.mjs";
 import methodGuard from "./http-method-guard.cjs";
 import headResponseGuard from "./head-response-guard.cjs";
 import { resolveTlsOptions, createServerListener } from "./tls-options.mjs";
+import { runRuntimeDiagnostics } from "./runtime-diagnostics.mjs";
+
+void runRuntimeDiagnostics();
 
 const originalCreateServer = http.createServer.bind(http);
 const proxiesByPort = new Map();

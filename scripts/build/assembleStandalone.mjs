@@ -131,6 +131,11 @@ const EXTRA_MODULE_ENTRIES = [
     dest: ["server-ws.mjs"],
   },
   {
+    label: "one-shot runtime diagnostics (server-ws.mjs dependency)",
+    src: ["scripts", "dev", "runtime-diagnostics.mjs"],
+    dest: ["runtime-diagnostics.mjs"],
+  },
+  {
     label: "peer-stamp helper (server-ws.mjs dependency)",
     src: ["scripts", "dev", "peer-stamp.mjs"],
     dest: ["peer-stamp.mjs"],
