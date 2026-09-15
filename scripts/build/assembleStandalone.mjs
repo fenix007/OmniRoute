@@ -149,6 +149,17 @@ const EXTRA_MODULE_ENTRIES = [
     label: "responses-ws-proxy (server-ws.mjs dependency)",
     src: ["scripts", "dev", "responses-ws-proxy.mjs"],
     dest: ["responses-ws-proxy.mjs"],
+    // This sidecar moves two directories up in the standalone bundle.
+    transform: (source) =>
+      source.replaceAll(
+        '"../../open-sse/executors/codex/inputIds.mjs"',
+        '"./open-sse/executors/codex/inputIds.mjs"'
+      ),
+  },
+  {
+    label: "Codex input ID sanitizer (responses-ws-proxy dependency)",
+    src: ["open-sse", "executors", "codex", "inputIds.mjs"],
+    dest: ["open-sse", "executors", "codex", "inputIds.mjs"],
   },
   {
     label: "webdav-handler (server-ws.mjs dependency)",
@@ -298,6 +309,9 @@ async function syncExtraModulesToDir(projectRoot, outDir, fsImpl, log) {
       typeof fsImpl.mkdir === "function" ? fsImpl.mkdir.bind(fsImpl) : fs.mkdir.bind(fs);
     await mkdir(path.dirname(destPath), { recursive: true });
     await fsImpl.cp(sourcePath, destPath, { recursive: true, force: true });
+    if (entry.transform) {
+      await fsImpl.writeFile(destPath, entry.transform(await fsImpl.readFile(sourcePath, "utf8")));
+    }
     log.log(`[assembleStandalone] Synced standalone module: ${entry.label}`);
     changed = true;
   }
@@ -466,6 +480,9 @@ function copyNativeAssetsAndExtraModules(projectRoot, resolvedOutDir) {
     fsSync.mkdirSync(path.dirname(dest), { recursive: true });
     fsSync.cpSync(src, dest, { recursive: true, force: true });
     console.log(`[assembleStandalone] Synced module: ${mod.label}`);
+    if (mod.transform) {
+      fsSync.writeFileSync(dest, mod.transform(fsSync.readFileSync(src, "utf8")));
+    }
   }
 }
 

@@ -82,6 +82,13 @@ jobs:
           cache-from: type=gha,scope=fork-${{ matrix.arch }}
           cache-to: type=gha,scope=fork-${{ matrix.arch }},mode=max
 
+      - name: Verify packaged Responses proxy imports
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker run --rm --entrypoint node "${IMAGE_NAME}@${DIGEST}" \
+            --input-type=module -e 'const proxy = await import("./responses-ws-proxy.mjs"); if (typeof proxy.createResponsesWsProxy !== "function") process.exit(1);'
+
       - name: Export digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

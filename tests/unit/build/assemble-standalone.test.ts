@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   assembleStandalone,
   syncStandaloneNativeAssets,
@@ -58,6 +60,42 @@ function seedSidecarSources(root: string) {
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, `// ${rel}`);
   }
+}
+
+for (const mode of ["async", "sync"]) {
+  test(`${mode} standalone Responses proxy imports without the source tree`, async (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "assemble-responses-"));
+    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    const projectRoot = path.join(tmp, "source");
+    const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
+    for (const rel of [
+      "scripts/dev/responses-ws-proxy.mjs",
+      "open-sse/executors/codex/inputIds.mjs",
+    ]) {
+      const dest = path.join(projectRoot, rel);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(path.join(repoRoot, rel), dest);
+    }
+    const out = path.join(tmp, "bundle");
+    if (mode === "async") {
+      await syncStandaloneExtraModules(projectRoot, fs.promises, { log() {} }, out);
+    } else {
+      const distDir = path.join(projectRoot, ".build/next");
+      fs.mkdirSync(path.join(distDir, "standalone"), { recursive: true });
+      assembleStandalone({ distDir, outDir: out, projectRoot, copyNatives: true });
+    }
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        'const proxy = await import("./responses-ws-proxy.mjs"); if (typeof proxy.createResponsesWsProxy !== "function") process.exit(1);',
+      ],
+      { cwd: out, encoding: "utf8", timeout: 10_000 }
+    );
+    assert.equal(result.status, 0, result.stderr || String(result.error));
+  });
 }
 
 test("assembleStandalone copies standalone + static + public + sidecars into outDir", () => {
