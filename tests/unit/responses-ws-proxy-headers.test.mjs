@@ -15,7 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { writeHttpError } = await import("../../scripts/dev/responses-ws-proxy.mjs");
+const { getAuthHeaders, writeHttpError } = await import("../../scripts/dev/responses-ws-proxy.mjs");
 
 function fakeSocket() {
   return {
@@ -51,7 +51,10 @@ test("writeHttpError strips chunked transfer-encoding + leaked pipeline headers 
 
   // The single most important invariant: never both framing headers.
   assert.ok(lower.includes("content-length:"), "must emit Content-Length");
-  assert.ok(!lower.includes("transfer-encoding"), "must NOT emit Transfer-Encoding alongside Content-Length");
+  assert.ok(
+    !lower.includes("transfer-encoding"),
+    "must NOT emit Transfer-Encoding alongside Content-Length"
+  );
   assert.ok(!lower.includes("keep-alive"), "must not forward the upstream keep-alive Connection");
   // Exactly one Content-Type (no duplicate from a case-mismatched spread).
   assert.equal((lower.match(/content-type:/g) || []).length, 1, "exactly one Content-Type header");
@@ -69,4 +72,18 @@ test("writeHttpError still forwards safe non-framing headers (e.g. retry-after)"
   const lower = sock._head.toLowerCase();
   assert.ok(lower.includes("retry-after: 5"), "safe header forwarded");
   assert.ok(!lower.includes("transfer-encoding"), "framing header still stripped");
+});
+
+test("getAuthHeaders forwards Codex turn state without adding it to logged payloads", () => {
+  const headers = getAuthHeaders("/v1/responses?api_key=local-token", {
+    "x-codex-turn-state": "opaque-turn-state",
+    "x-codex-turn-metadata": "opaque-turn-metadata",
+  });
+
+  assert.equal(headers["x-codex-turn-state"], "opaque-turn-state");
+  assert.equal(headers["x-codex-turn-metadata"], "opaque-turn-metadata");
+  assert.equal(
+    JSON.stringify({ clientRequest: { model: "gpt-5.5" } }).includes("opaque-turn"),
+    false
+  );
 });

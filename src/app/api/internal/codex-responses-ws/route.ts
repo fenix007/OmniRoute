@@ -437,7 +437,14 @@ async function prepare(body: JsonRecord) {
   delete transformed.stream;
   delete transformed.stream_options;
 
-  const headers = normalizeUpstreamHeaders(executor.buildHeaders(refreshedCredentials, true));
+  const clientHeaders = Object.fromEntries(
+    Object.entries(isRecord(body.headers) ? body.headers : {}).flatMap(([key, value]) =>
+      typeof value === "string" ? [[key, value]] : []
+    )
+  );
+  const headers = normalizeUpstreamHeaders(
+    executor.buildHeaders(refreshedCredentials, true, clientHeaders)
+  );
 
   // #5611: apply the configured Global/provider proxy to the upstream Codex
   // Responses WebSocket too. The downstream client→OmniRoute hop works, but the

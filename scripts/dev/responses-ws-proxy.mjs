@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { STATUS_CODES } from "node:http";
+import { sanitizeCodexInputItemIds } from "../../open-sse/executors/codex/inputIds.mjs";
 
 const _wreqRequire = createRequire(import.meta.url);
 
@@ -28,6 +29,16 @@ export const RESPONSES_WS_PUBLIC_PATHS = new Set([
 const INTERNAL_ROUTE = "/api/internal/codex-responses-ws";
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const WS_QUERY_TOKEN_KEYS = ["api_key", "token", "access_token"];
+const CODEX_NATIVE_HEADER_NAMES = [
+  "x-codex-turn-state",
+  "x-codex-turn-metadata",
+  "x-client-request-id",
+  "x-codex-window-id",
+  "thread-id",
+  "session-id",
+  "x-openai-internal-codex-responses-lite",
+  "x-responsesapi-include-timing-metrics",
+];
 const textDecoder = new TextDecoder();
 const DEFAULT_MAX_WS_BUFFER_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_WS_MESSAGE_BYTES = 16 * 1024 * 1024;
@@ -294,7 +305,7 @@ export function writeHttpError(socket, status, body, headers = {}) {
   socket.end(bodyBuffer);
 }
 
-function getAuthHeaders(requestUrl, requestHeaders) {
+export function getAuthHeaders(requestUrl, requestHeaders) {
   const headers = {};
   if (isText(requestHeaders.authorization)) {
     headers.authorization = requestHeaders.authorization;
@@ -313,6 +324,9 @@ function getAuthHeaders(requestUrl, requestHeaders) {
   if (isText(requestHeaders.origin)) headers.origin = requestHeaders.origin;
   if (isText(requestHeaders["x-forwarded-for"])) {
     headers["x-forwarded-for"] = requestHeaders["x-forwarded-for"];
+  }
+  for (const name of CODEX_NATIVE_HEADER_NAMES) {
+    if (isText(requestHeaders[name])) headers[name] = requestHeaders[name].trim();
   }
   return headers;
 }
@@ -335,6 +349,13 @@ function getResponseCreatePayload(message) {
   }
   const { type, ...payload } = message;
   return payload;
+}
+
+function sanitizeResponseCreateMessage(message) {
+  const responseBody = getResponseCreatePayload(message);
+  if (responseBody === null) return message;
+  sanitizeCodexInputItemIds(responseBody);
+  return withPreparedResponseCreate(message, responseBody);
 }
 
 function withPreparedResponseCreate(message, preparedBody) {
@@ -677,11 +698,12 @@ class ResponsesWsSession {
   async forwardClientMessage(message) {
     try {
       if (!this.upstream) {
-        const { upstream, firstMessage } = await this.ensureUpstream(message);
+        const sanitizedMessage = sanitizeResponseCreateMessage(message);
+        const { upstream, firstMessage } = await this.ensureUpstream(sanitizedMessage);
         upstream.send(jsonStringifySafe(firstMessage));
         return;
       }
-      this.upstream.send(jsonStringifySafe(message));
+      this.upstream.send(jsonStringifySafe(sanitizeResponseCreateMessage(message)));
     } catch (error) {
       const code = error?.code || "upstream_websocket_connect_failed";
       const messageText = error instanceof Error ? error.message : String(error);

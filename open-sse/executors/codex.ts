@@ -1,4 +1,5 @@
 import { normalizeCodexWsHeaders } from "./codex/websocketHeaders.ts";
+import { sanitizeCodexInputItemIds } from "./codex/inputIds.ts";
 import { getCodexRequestDefaults } from "@/lib/providers/requestDefaults";
 import {
   getCodexModelScope,
@@ -68,6 +69,28 @@ type WreqWebSocket = {
 };
 type WebsocketFn = (url: string, opts?: Record<string, unknown>) => Promise<WreqWebSocket>;
 type ResponsesMessageInput = { role?: unknown; phase?: unknown; content?: unknown };
+
+const CODEX_FORWARDED_CLIENT_HEADERS = [
+  "X-Codex-Beta-Features",
+  "X-Codex-Turn-Metadata",
+  "X-Codex-Turn-State",
+  "X-Client-Request-Id",
+  "X-Codex-Window-Id",
+  "Thread-Id",
+  "Session-Id",
+  "X-Openai-Internal-Codex-Responses-Lite",
+  "X-ResponsesAPI-Include-Timing-Metrics",
+] as const;
+
+function getHeaderValueCaseInsensitive(
+  headers: Record<string, string> | null | undefined,
+  name: string
+): string | null {
+  const entry = Object.entries(headers || {}).find(
+    ([key]) => key.toLowerCase() === name.toLowerCase()
+  );
+  return typeof entry?.[1] === "string" && entry[1].trim() ? entry[1].trim() : null;
+}
 
 let _websocketFn: WebsocketFn | null = null;
 let _wreqChecked = false;
@@ -918,7 +941,9 @@ export class CodexExecutor extends BaseExecutor {
     }
 
     const url = CODEX_RESPONSES_WS_URL;
-    const headers = normalizeCodexWsHeaders(this.buildHeaders(nextInput.credentials, true));
+    const headers = normalizeCodexWsHeaders(
+      this.buildHeaders(nextInput.credentials, true, nextInput.clientHeaders)
+    );
     mergeUpstreamExtraHeaders(headers, nextInput.upstreamExtraHeaders);
 
     const transformedBody = (await this.transformRequest(
@@ -1132,9 +1157,13 @@ export class CodexExecutor extends BaseExecutor {
    * Always request event-stream from upstream, even when client requested stream=false.
    * Includes chatgpt-account-id header for strict workspace binding.
    */
-  buildHeaders(credentials: ProviderCredentials, stream = true) {
+  buildHeaders(
+    credentials: ProviderCredentials,
+    stream = true,
+    clientHeaders?: Record<string, string> | null
+  ) {
     const isCompactRequest = isCompactResponsesEndpoint(credentials?.requestEndpointPath);
-    const headers = super.buildHeaders(credentials, isCompactRequest ? false : true);
+    const headers = super.buildHeaders(credentials, isCompactRequest ? false : true, clientHeaders);
     headers.Version = getCodexClientVersion();
     setUserAgentHeader(headers, getCodexUserAgent());
 
@@ -1158,6 +1187,10 @@ export class CodexExecutor extends BaseExecutor {
       headers["session_id"] = cacheSessionId;
     }
     applyCodexClientIdentityHeaders(headers, clientIdentity);
+    for (const name of CODEX_FORWARDED_CLIENT_HEADERS) {
+      const value = getHeaderValueCaseInsensitive(clientHeaders, name);
+      if (value) headers[name] = value;
+    }
 
     return headers;
   }
@@ -1310,6 +1343,7 @@ export class CodexExecutor extends BaseExecutor {
     normalizeCodexResponsesInput(body);
 
     if (Array.isArray(body.input)) {
+      sanitizeCodexInputItemIds(body);
       body.input = sanitizeResponsesInputItems(body.input, false, {
         dropInternalAssistantMessages: !nativeCodexPassthrough,
       });

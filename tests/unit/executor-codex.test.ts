@@ -12,6 +12,7 @@ import {
   isCodexResponsesWebSocketRequired,
   normalizeCodexTools,
   parseCodexQuotaHeaders,
+  stripStoredItemReferences,
 } from "../../open-sse/executors/codex.ts";
 import {
   clearRememberedResponseFunctionCallsForTesting,
@@ -189,6 +190,94 @@ test("CodexExecutor.buildHeaders binds workspace ids and disables SSE accept for
   assert.equal(standardHeaders["X-Codex-Beta-Features"], "responses_websockets");
   assert.equal(standardHeaders["User-Agent"], "codex-cli/0.153.4 (Windows 10.0.26200; x64)");
   assert.equal(compactHeaders.Accept, "application/json");
+});
+
+test("CodexExecutor.buildHeaders forwards native Codex turn headers", () => {
+  const executor = new CodexExecutor();
+  const headers = executor.buildHeaders({ accessToken: "codex-token" }, true, {
+    "x-codex-turn-state": "opaque-turn-state",
+    "X-Codex-Turn-Metadata": "opaque-turn-metadata",
+    "x-client-request-id": "request-1",
+    "x-codex-window-id": "window-1",
+    "thread-id": "thread-1",
+  });
+
+  assert.equal(headers["X-Codex-Turn-State"], "opaque-turn-state");
+  assert.equal(headers["X-Codex-Turn-Metadata"], "opaque-turn-metadata");
+  assert.equal(headers["X-Client-Request-Id"], "request-1");
+  assert.equal(headers["X-Codex-Window-Id"], "window-1");
+  assert.equal(headers["Thread-Id"], "thread-1");
+});
+
+test("CodexExecutor.execute forwards turn state without putting it in captured request bodies", async () => {
+  const sent: string[] = [];
+  __setCodexWebSocketTransportForTesting(async () => {
+    const socket: MockCodexWebSocket = {
+      send(data) {
+        sent.push(data);
+        queueMicrotask(() => {
+          socket.onmessage?.({
+            data: JSON.stringify({ type: "response.completed", response: { status: "completed" } }),
+          });
+        });
+      },
+      close() {},
+      onmessage: null,
+      onerror: null,
+      onclose: null,
+    };
+    return socket;
+  });
+
+  const result = await new CodexExecutor().execute({
+    model: "gpt-5.5",
+    body: { model: "gpt-5.5", input: "hello" },
+    stream: true,
+    credentials: {
+      accessToken: "codex-token",
+      providerSpecificData: { codexTransport: "websocket" },
+    },
+    clientHeaders: { "x-codex-turn-state": "opaque-turn-state" },
+  });
+
+  assert.equal(result.headers["X-Codex-Turn-State"], "opaque-turn-state");
+  assert.equal(JSON.stringify(result.transformedBody).includes("opaque-turn-state"), false);
+  assert.equal(
+    sent.some((payload) => payload.includes("opaque-turn-state")),
+    false
+  );
+});
+
+test("CodexExecutor.transformRequest sanitizes IDs before stored-reference stripping", () => {
+  const executor = new CodexExecutor();
+  const longId = "custom-item-".repeat(7);
+
+  const result = executor.transformRequest(
+    "gpt-5.5",
+    {
+      model: "gpt-5.5",
+      input: [
+        { type: "message", id: "item_message", role: "user", content: "continue" },
+        {
+          type: "custom_tool_call",
+          id: longId,
+          call_id: "call-1",
+          name: "apply_patch",
+          input: "{}",
+        },
+      ],
+    },
+    true,
+    { accessToken: "codex-token", requestEndpointPath: "/responses" }
+  ) as Record<string, unknown>;
+
+  const input = result.input as Array<Record<string, unknown>>;
+  assert.equal(input[0].id, undefined);
+  assert.equal(Array.from(input[1].id as string).length, 64);
+  assert.match(input[1].id as string, /^ctc_/);
+
+  stripStoredItemReferences(result);
+  assert.equal((result.input as Array<Record<string, unknown>>)[1].id, input[1].id);
 });
 
 test("CodexExecutor.buildHeaders honors safe env overrides for Version and User-Agent", async () => {

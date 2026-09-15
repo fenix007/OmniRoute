@@ -364,6 +364,109 @@ test("responses ws proxy serializes client frames while upstream prepare is pend
   await close(server);
 });
 
+test("responses ws proxy sanitizes response.create item IDs before every upstream send", async () => {
+  const internalRequests = [];
+  const upstreamSends = [];
+  let completeCount = 0;
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    if (url.pathname === "/api/internal/codex-responses-ws") {
+      const body = JSON.parse((await readRequestBody(req)) || "{}");
+      internalRequests.push(body);
+
+      if (body.action === "authenticate") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, authenticated: true, authType: "api_key" }));
+        return;
+      }
+      if (body.action === "prepare") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            upstreamUrl: "wss://chatgpt.com/backend-api/codex/responses",
+            headers: { Authorization: "Bearer upstream-token" },
+            connectionId: "conn_1",
+            provider: "codex",
+            model: "gpt-5.5",
+            response: body.response,
+          })
+        );
+        return;
+      }
+      if (body.action === "log") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, logged: true }));
+        return;
+      }
+    }
+
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  const fakeUpstream = {
+    send(data) {
+      upstreamSends.push(JSON.parse(data));
+      completeCount += 1;
+      setTimeout(() => {
+        fakeUpstream.onmessage?.({
+          data: JSON.stringify({
+            type: "response.completed",
+            response: { id: `resp_${completeCount}`, status: "completed", usage: {} },
+          }),
+        });
+      }, 5);
+    },
+    close() {},
+    onmessage: null,
+    onerror: null,
+    onclose: null,
+  };
+
+  const port = await listen(server);
+  const proxy = createResponsesWsProxy({
+    baseUrl: `http://127.0.0.1:${port}`,
+    bridgeSecret: "bridge-secret",
+    pingIntervalMs: 1000,
+    idleTimeoutMs: 10000,
+    wsFactory: async () => fakeUpstream,
+  });
+  server.on("upgrade", async (req, socket, head) => {
+    const handled = await proxy.handleUpgrade(req, socket, head);
+    if (!handled && !socket.destroyed) socket.destroy();
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/responses?api_key=local-token`);
+  await new Promise((resolve) => ws.addEventListener("open", resolve, { once: true }));
+  ws.send(
+    JSON.stringify({
+      type: "response.create",
+      model: "gpt-5.5",
+      input: [{ type: "custom_tool_call", id: "item-".repeat(14), call_id: "call-1" }],
+    })
+  );
+  await waitFor(() => upstreamSends.length === 1);
+  ws.send(
+    JSON.stringify({
+      type: "response.create",
+      model: "gpt-5.5",
+      input: [{ type: "custom_tool_call_output", id: "item-".repeat(14), call_id: "call-1" }],
+    })
+  );
+  await waitFor(() => upstreamSends.length === 2);
+
+  assert.equal(Array.from(upstreamSends[0].input[0].id).length, 64);
+  assert.match(upstreamSends[0].input[0].id, /^ctc_/);
+  assert.equal(Array.from(upstreamSends[1].input[0].id).length, 64);
+  assert.match(upstreamSends[1].input[0].id, /^ctco_/);
+  assert.equal(internalRequests.filter((entry) => entry.action === "prepare").length, 1);
+
+  ws.close();
+  await close(server);
+});
+
 test("responses ws proxy closes oversized client messages with 1009", async () => {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);

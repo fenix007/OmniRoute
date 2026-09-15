@@ -4,11 +4,13 @@ type SanitizeResponsesInputOptions = {
 };
 const INTERNAL_ASSISTANT_PHASES = new Set(["commentary"]);
 const SERVER_ITEM_ID_PREFIX_BY_TYPE: Record<string, string> = {
+  custom_tool_call: "ctc_",
+  custom_tool_call_output: "ctco_",
   function_call: "fc_",
   message: "msg_",
   reasoning: "rs_",
 };
-const SERVER_ITEM_ID_PATTERN = /^(fc|msg|rs|resp)_/;
+const SERVER_ITEM_ID_PATTERN = /^(ctc|ctco|fc|msg|rs|resp)_/;
 
 function toRecord(value: unknown): JsonRecord | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
