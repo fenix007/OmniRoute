@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { CodexExecutor } from "@omniroute/open-sse/executors/codex.ts";
+import { normalizeCodexWsHeaders } from "@omniroute/open-sse/executors/codex/websocketHeaders.ts";
 import { getApiKeyMetadata } from "@/lib/db/apiKeys";
 import { authorizeWebSocketHandshake, extractWsTokenFromRequest } from "@/lib/ws/handshake";
 import { getModelInfo } from "@/sse/services/model";
@@ -302,26 +303,6 @@ function jsonError(status: number, code: string, message: string) {
   );
 }
 
-function normalizeUpstreamHeaders(headers: Record<string, string>): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    if (
-      lower === "host" ||
-      lower === "connection" ||
-      lower === "upgrade" ||
-      lower === "sec-websocket-key" ||
-      lower === "sec-websocket-version" ||
-      lower === "sec-websocket-extensions"
-    ) {
-      continue;
-    }
-    result[key] = value;
-  }
-  result.Origin = "https://chatgpt.com";
-  return result;
-}
-
 async function authenticate(body: JsonRecord) {
   const authRequest = getAuthRequest(body);
   const auth = await authorizeWebSocketHandshake(authRequest);
@@ -442,7 +423,7 @@ async function prepare(body: JsonRecord) {
       typeof value === "string" ? [[key, value]] : []
     )
   );
-  const headers = normalizeUpstreamHeaders(
+  const headers = normalizeCodexWsHeaders(
     executor.buildHeaders(refreshedCredentials, true, clientHeaders)
   );
 

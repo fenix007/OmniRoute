@@ -74,7 +74,10 @@ test("responses ws proxy prepares and forwards OpenAI Responses websocket events
           JSON.stringify({
             ok: true,
             upstreamUrl: "wss://chatgpt.com/backend-api/codex/responses",
-            headers: { Authorization: "Bearer upstream-token" },
+            headers: {
+              Authorization: "Bearer upstream-token",
+              "OpenAI-Beta": "responses_websockets=2026-02-06",
+            },
             connectionId: "conn_1",
             provider: "codex",
             account: "codex@example.com",
@@ -135,6 +138,7 @@ test("responses ws proxy prepares and forwards OpenAI Responses websocket events
     wsFactory: async (url, options) => {
       assert.equal(url, "wss://chatgpt.com/backend-api/codex/responses");
       assert.equal(options.headers.Authorization, "Bearer upstream-token");
+      assert.equal(options.headers["OpenAI-Beta"], "responses_websockets=2026-02-06");
       // #5591: prepare omits `browser`, so the fallback must be the supported
       // chrome_142 (not the non-existent chrome_149).
       assert.equal(options.browser, "chrome_142");

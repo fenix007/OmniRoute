@@ -1008,6 +1008,7 @@ test("CodexExecutor.execute falls back to HTTP when websocket transport is unava
 test("CodexExecutor.execute captures the exact websocket request body before send", async () => {
   const executor = new CodexExecutor();
   let sent: string | null = null;
+  let websocketHeaders: Record<string, string> | null = null;
   let sendStarted = false;
   let prepared: unknown = null;
   let preparedBeforeSend = false;
@@ -1026,7 +1027,10 @@ test("CodexExecutor.execute captures the exact websocket request body before sen
     onerror: null,
     onclose: null,
   };
-  __setCodexWebSocketTransportForTesting(async () => ws);
+  __setCodexWebSocketTransportForTesting(async (_url, options) => {
+    websocketHeaders = getRecord(options?.headers) as Record<string, string>;
+    return ws;
+  });
 
   const requestCapture = {
     capture(request) {
@@ -1059,6 +1063,8 @@ test("CodexExecutor.execute captures the exact websocket request body before sen
   assert.deepEqual(prepared, sentBody);
   assert.equal(sentBody.type, "response.create");
   assert.equal(sentBody.model, "gpt-5.5");
+  assert.equal(websocketHeaders?.["OpenAI-Beta"], "responses_websockets=2026-02-06");
+  assert.equal(websocketHeaders?.Origin, "https://chatgpt.com");
 });
 
 test("CodexExecutor.execute adds CLI-like session identity headers without changing response flow", async () => {
