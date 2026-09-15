@@ -449,6 +449,8 @@ test("responses ws proxy sanitizes response.create item IDs before every upstrea
       type: "response.create",
       model: "gpt-5.5",
       input: [{ type: "custom_tool_call", id: "item-".repeat(14), call_id: "call-1" }],
+      max_output_tokens: 64,
+      max_tokens: 64,
     })
   );
   await waitFor(() => upstreamSends.length === 1);
@@ -457,11 +459,17 @@ test("responses ws proxy sanitizes response.create item IDs before every upstrea
       type: "response.create",
       model: "gpt-5.5",
       input: [{ type: "custom_tool_call_output", id: "item-".repeat(14), call_id: "call-1" }],
+      max_output_tokens: 64,
+      max_tokens: 64,
     })
   );
   await waitFor(() => upstreamSends.length === 2);
 
   assert.equal(Array.from(upstreamSends[0].input[0].id).length, 64);
+  for (const request of upstreamSends) {
+    assert.equal(Object.hasOwn(request, "max_output_tokens"), false);
+    assert.equal(Object.hasOwn(request, "max_tokens"), false);
+  }
   assert.match(upstreamSends[0].input[0].id, /^ctc_/);
   assert.equal(Array.from(upstreamSends[1].input[0].id).length, 64);
   assert.match(upstreamSends[1].input[0].id, /^ctco_/);

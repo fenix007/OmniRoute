@@ -355,6 +355,8 @@ function sanitizeResponseCreateMessage(message) {
   const responseBody = getResponseCreatePayload(message);
   if (responseBody === null) return message;
   sanitizeCodexInputItemIds(responseBody);
+  delete responseBody.max_tokens;
+  delete responseBody.max_output_tokens;
   return withPreparedResponseCreate(message, responseBody);
 }
 
