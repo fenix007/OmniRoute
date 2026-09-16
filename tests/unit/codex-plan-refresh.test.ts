@@ -29,6 +29,9 @@ const PERSONAL_PLUS = {
   chatgpt_account_id: "workspace-personal",
   chatgpt_plan_type: "plus",
   chatgpt_user_id: "user-1",
+  chatgpt_subscription_active_start: "2026-08-19T07:23:26Z",
+  chatgpt_subscription_active_until: "2026-09-19T07:23:26Z",
+  chatgpt_subscription_last_checked: "2026-09-16T06:00:00Z",
   organizations: [{ id: "org-1", is_default: true, role: "owner", title: "Personal" }],
 };
 
@@ -38,6 +41,7 @@ test("deriveCodexWorkspaceInfo reads the plan tier out of an id_token", () => {
   assert.equal(info?.workspacePlanType, "plus");
   assert.equal(info?.workspaceId, "workspace-personal");
   assert.equal(info?.chatgptUserId, "user-1");
+  assert.equal(info?.subscriptionActiveUntil, "2026-09-19T07:23:26.000Z");
 });
 
 test("deriveCodexWorkspaceInfo returns null when the token carries no auth claim", () => {
@@ -78,6 +82,9 @@ test("mapTokens still derives the persisted workspace record", () => {
   assert.deepEqual(mapped.providerSpecificData, {
     workspaceId: "workspace-personal",
     workspacePlanType: "plus",
+    subscriptionActiveStart: "2026-08-19T07:23:26.000Z",
+    subscriptionActiveUntil: "2026-09-19T07:23:26.000Z",
+    subscriptionLastCheckedAt: "2026-09-16T06:00:00.000Z",
     chatgptUserId: "user-1",
     organizations: PERSONAL_PLUS.organizations,
   });
@@ -99,7 +106,12 @@ test("refreshCodexToken re-derives the plan tier from the refreshed id_token", a
   const result = await refreshCodexToken("old-rt", null);
 
   assert.equal(result.accessToken, "new-at");
-  assert.deepEqual(result.providerSpecificDataPatch, { workspacePlanType: "free" });
+  assert.deepEqual(result.providerSpecificDataPatch, {
+    workspacePlanType: "free",
+    subscriptionActiveStart: "2026-08-19T07:23:26.000Z",
+    subscriptionActiveUntil: "2026-09-19T07:23:26.000Z",
+    subscriptionLastCheckedAt: "2026-09-16T06:00:00.000Z",
+  });
 });
 
 test("refreshCodexToken patches only the plan, never the workspace binding", async () => {
@@ -116,7 +128,12 @@ test("refreshCodexToken patches only the plan, never the workspace binding", asy
 
   const result = await refreshCodexToken("old-rt", null);
 
-  assert.deepEqual(Object.keys(result.providerSpecificDataPatch), ["workspacePlanType"]);
+  assert.deepEqual(Object.keys(result.providerSpecificDataPatch), [
+    "workspacePlanType",
+    "subscriptionActiveStart",
+    "subscriptionActiveUntil",
+    "subscriptionLastCheckedAt",
+  ]);
   assert.equal(result.providerSpecificData, undefined);
 });
 

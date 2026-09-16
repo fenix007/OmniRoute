@@ -67,6 +67,15 @@ interface CacheEntry {
 // In-memory cache: connectionId → { quota, fetchedAt }
 const quotaCache = new Map<string, CacheEntry>();
 
+export function getCachedCodexQuota(
+  connectionId: string,
+  requestedModel?: string | null
+): CodexDualWindowQuota | null {
+  const cached = quotaCache.get(getQuotaCacheKey(connectionId, requestedModel));
+  if (!cached || Date.now() - cached.fetchedAt >= CACHE_TTL_MS * 5) return null;
+  return cached.quota;
+}
+
 // Auto-cleanup stale entries every 5 minutes
 const _cacheCleanup = setInterval(() => {
   const now = Date.now();

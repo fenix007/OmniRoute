@@ -1184,21 +1184,31 @@ export async function refreshCodexToken(refreshToken, log, proxyConfig: unknown 
       expiresIn: tokens.expires_in,
     });
 
-    // A ChatGPT subscription that lapsed after the account was connected only
-    // shows up in the refreshed id_token's plan claim. Re-derive the tier so a
-    // stale "plus" captured at OAuth time cannot outlive the subscription that
-    // paid for it. Only the plan is patched: the workspace binding stays as the
-    // user selected it during OAuth, because re-running the team-vs-personal
-    // heuristic here could silently re-point an established connection.
+    // A ChatGPT subscription that changed after the account was connected only
+    // shows up in the refreshed id_token. Re-derive the tier and exact active
+    // period, but keep the established workspace binding unchanged because
+    // re-running the team-vs-personal heuristic could silently re-point it.
     const workspaceInfo = deriveCodexWorkspaceInfo(tokens.id_token);
     const refreshedPlanType = workspaceInfo?.workspacePlanType;
+    const refreshedSubscriptionMetadata = workspaceInfo
+      ? {
+          subscriptionActiveStart: workspaceInfo.subscriptionActiveStart,
+          subscriptionActiveUntil: workspaceInfo.subscriptionActiveUntil,
+          subscriptionLastCheckedAt: workspaceInfo.subscriptionLastCheckedAt,
+        }
+      : null;
 
     return {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token || refreshToken,
       expiresIn: tokens.expires_in,
       ...(refreshedPlanType
-        ? { providerSpecificDataPatch: { workspacePlanType: refreshedPlanType } }
+        ? {
+            providerSpecificDataPatch: {
+              workspacePlanType: refreshedPlanType,
+              ...refreshedSubscriptionMetadata,
+            },
+          }
         : {}),
     };
   } catch (error) {

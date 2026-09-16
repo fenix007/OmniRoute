@@ -963,6 +963,38 @@ for (const strategy of ["random", "p2c", "least-used", "cost-optimized", "strict
   });
 }
 
+test("getProviderCredentials quota-deadline skips a Codex account with zero session quota", async () => {
+  await settingsDb.updateSettings({
+    providerStrategies: { codex: { fallbackStrategy: "quota-deadline" } },
+  });
+  const blocked = await seedConnection("codex", {
+    name: "quota-deadline-blocked",
+    priority: 1,
+    providerSpecificData: {
+      subscriptionActiveUntil: futureIso(2 * 24 * 60 * 60_000),
+    },
+  });
+  const available = await seedConnection("codex", {
+    name: "quota-deadline-available",
+    priority: 2,
+    providerSpecificData: {
+      subscriptionActiveUntil: futureIso(30 * 24 * 60 * 60_000),
+    },
+  });
+  quotaCache.setQuotaCache(blocked.id, "codex", {
+    session: { remainingPercentage: 0, resetAt: futureIso(60 * 60_000) },
+    weekly: { remainingPercentage: 90, resetAt: futureIso(7 * 24 * 60 * 60_000) },
+  });
+  quotaCache.setQuotaCache(available.id, "codex", {
+    session: { remainingPercentage: 50, resetAt: futureIso(60 * 60_000) },
+    weekly: { remainingPercentage: 50, resetAt: futureIso(7 * 24 * 60 * 60_000) },
+  });
+
+  const selected = await auth.getProviderCredentials("codex");
+
+  assert.equal(selected.connectionId, available.id);
+});
+
 test("getProviderCredentials least-used prefers accounts that were never used", async () => {
   await settingsDb.updateSettings({ fallbackStrategy: "least-used" });
   const recentlyUsed = await seedConnection("openai", {

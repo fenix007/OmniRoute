@@ -15,9 +15,11 @@ type Props = {
   connectionCount: number;
 };
 
-const STRATEGY_OPTIONS = ACCOUNT_FALLBACK_STRATEGY_VALUES.filter((v) =>
-  ["fill-first", "round-robin", "priority", "p2c", "random", "least-used"].includes(v)
-);
+function getStrategyOptions(providerKey: string): string[] {
+  const visible = ["fill-first", "round-robin", "priority", "p2c", "random", "least-used"];
+  if (providerKey === "codex") visible.push("quota-deadline");
+  return ACCOUNT_FALLBACK_STRATEGY_VALUES.filter((value) => visible.includes(value));
+}
 
 function clampProviderStickyLimit(raw: string): number {
   const val = parseInt(raw, 10);
@@ -91,6 +93,7 @@ export default function ProviderAccountRoutingCard({ providerKey, connectionCoun
     useProviderAccountRoutingState(providerKey);
 
   if (connectionCount < 2) return null;
+  const strategyOptions = getStrategyOptions(providerKey);
 
   return (
     <div className="mb-4 rounded-lg border border-border/60 bg-black/[0.02] dark:bg-white/[0.02] p-3">
@@ -108,7 +111,7 @@ export default function ProviderAccountRoutingCard({ providerKey, connectionCoun
           }}
         >
           <option value="">{t("providerRoutingInheritGlobal")}</option>
-          {STRATEGY_OPTIONS.map((opt) => (
+          {strategyOptions.map((opt) => (
             <option key={opt} value={opt}>
               {opt}
             </option>

@@ -72,6 +72,7 @@ import { isNoAuthProviderBlockedBySettings } from "./noAuthProviderSettings";
 import { resolveAccountProxiesFromRegistry } from "./noAuthProxyResolution";
 import * as log from "../utils/logger";
 import { fisherYatesShuffle, getNextFromDeckSync } from "@/shared/utils/shuffleDeck";
+import { selectCodexDeadlineConnection } from "./codexQuotaDeadlineRouting";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1624,6 +1625,32 @@ export async function getProviderCredentials(
           consecutiveUseCount: 1,
         });
       }
+    } else if (strategy === "quota-deadline" && provider === "codex") {
+      const selected = selectCodexDeadlineConnection(orderedConnections);
+      if (!selected) {
+        const earliestResetAt = getEarliestFutureDate(
+          orderedConnections.map(
+            (candidate) => getQuotaCache(candidate.id)?.quotas?.session?.resetAt
+          )
+        );
+        const retryAfter = earliestResetAt || new Date(Date.now() + 5 * 60_000).toISOString();
+        return {
+          allRateLimited: true,
+          retryAfter,
+          retryAfterHuman: formatRetryAfter(retryAfter),
+          lastError: "All codex accounts have exhausted their session quota",
+          lastErrorCode: 429,
+        };
+      }
+      connection = selected.connection;
+      await updateProviderConnection(connection.id, {
+        lastUsedAt: new Date().toISOString(),
+        consecutiveUseCount: 1,
+      });
+      log.debug(
+        "AUTH",
+        `codex quota-deadline picked=${connection.id.slice(0, 8)} weight=${selected.score.weight.toFixed(2)} burn=${selected.score.requiredWeeklyBurn.toFixed(1)} deadline=${selected.score.deadlineAt || "none"}`
+      );
     } else if (strategy === "p2c") {
       const candidatePool = withQuota.length > 0 ? withQuota : orderedConnections;
       // Power of Two Choices: sample from the quota-eligible pool and compare

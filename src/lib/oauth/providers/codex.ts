@@ -7,6 +7,9 @@ import { CODEX_CONFIG } from "../constants/oauth";
 interface CodexAuthInfo {
   chatgpt_account_id: string;
   chatgpt_plan_type: string;
+  chatgpt_subscription_active_start?: string;
+  chatgpt_subscription_active_until?: string;
+  chatgpt_subscription_last_checked?: string;
   chatgpt_user_id: string;
   user_id: string;
   organizations: Array<{
@@ -83,6 +86,9 @@ function parseIdToken(idToken: string): { email: string | null; authInfo: CodexA
 export interface CodexWorkspaceInfo {
   workspaceId: string | null;
   workspacePlanType: string;
+  subscriptionActiveStart: string | null;
+  subscriptionActiveUntil: string | null;
+  subscriptionLastCheckedAt: string | null;
   chatgptUserId: string | null;
   organizations: CodexAuthInfo["organizations"] | null;
 }
@@ -135,10 +141,19 @@ function buildWorkspaceInfo(authInfo: CodexAuthInfo | null): CodexWorkspaceInfo 
   return {
     workspaceId,
     workspacePlanType: planType,
+    subscriptionActiveStart: normalizeClaimTimestamp(authInfo?.chatgpt_subscription_active_start),
+    subscriptionActiveUntil: normalizeClaimTimestamp(authInfo?.chatgpt_subscription_active_until),
+    subscriptionLastCheckedAt: normalizeClaimTimestamp(authInfo?.chatgpt_subscription_last_checked),
     // Also store the full authInfo for future reference
     chatgptUserId: authInfo?.chatgpt_user_id || null,
     organizations: organizations.length > 0 ? organizations : null,
   };
+}
+
+function normalizeClaimTimestamp(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
 /**

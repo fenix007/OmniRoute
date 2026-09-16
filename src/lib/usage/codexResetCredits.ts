@@ -32,6 +32,15 @@ export interface CodexResetCreditList {
   credits: Array<{ expiresAt: string | null }>;
 }
 
+const RESET_CREDIT_CACHE_TTL_MS = 15 * 60_000;
+const resetCreditCache = new Map<string, { value: CodexResetCreditList; fetchedAt: number }>();
+
+export function getCachedCodexResetCredits(connectionId: string): CodexResetCreditList | null {
+  const cached = resetCreditCache.get(connectionId);
+  if (!cached || Date.now() - cached.fetchedAt >= RESET_CREDIT_CACHE_TTL_MS) return null;
+  return cached.value;
+}
+
 export class CodexResetCreditError extends Error {
   status: number;
   code: string;
@@ -393,10 +402,12 @@ export async function listCodexResetCredits(connectionId: string): Promise<Codex
     }
 
     const credits = parseAvailableResetCredits(payload);
-    return {
+    const value = {
       availableCount: credits.length,
       credits: credits.map(({ expiresAt }) => ({ expiresAt })),
     };
+    resetCreditCache.set(connectionId.trim(), { value, fetchedAt: Date.now() });
+    return value;
   } catch (error) {
     if (error instanceof CodexResetCreditError) throw error;
     throw new CodexResetCreditError(
