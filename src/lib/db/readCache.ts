@@ -223,6 +223,11 @@ export function invalidateModelCatalogCache(): void {
   modelCatalogCacheVersion++;
 }
 
+/** Refresh routing usage counters without discarding the unchanged model catalog. */
+export function invalidateProviderConnectionUsageCache(): void {
+  connectionsCache.invalidate();
+}
+
 /**
  * Invalidate all caches (call after writes to any of: settings, pricing,
  * connections, combos).

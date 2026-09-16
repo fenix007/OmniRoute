@@ -10,7 +10,7 @@ import {
   decryptConnectionFields,
   migrateLegacyEncryptedString,
 } from "./encryption";
-import { invalidateDbCache } from "./readCache";
+import { invalidateDbCache, invalidateProviderConnectionUsageCache } from "./readCache";
 import { normalizeProviderSpecificData } from "@/lib/providers/requestDefaults";
 import { bumpProxyConfigGeneration } from "./settings";
 import { webSessionCredentialKey, parseProviderSpecificData } from "./webSessionDedup";
@@ -577,7 +577,15 @@ export async function updateProviderConnection(id: string, data: JsonRecord) {
   }
   _updateConnectionRow(db, id, encryptConnectionFields({ ...merged }));
   backupDbFile("pre-write");
-  invalidateDbCache("connections"); // Bust connections read cache
+  // Usage bookkeeping is written on ordinary routing requests. Keep routing
+  // reads fresh without expiring the expensive, unchanged /v1/models catalog.
+  // Any other field (including unknown future fields) retains full invalidation.
+  const changedFields = Object.keys(data);
+  const usageOnly =
+    changedFields.length > 0 &&
+    changedFields.every((field) => field === "lastUsedAt" || field === "consecutiveUseCount");
+  if (usageOnly) invalidateProviderConnectionUsageCache();
+  else invalidateDbCache("connections");
   bumpProxyConfigGeneration();
 
   if (data.priority !== undefined) {

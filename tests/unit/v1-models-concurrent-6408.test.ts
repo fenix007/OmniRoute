@@ -25,6 +25,8 @@ process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "catalog-test-secret"
 const core = await import("../../src/lib/db/core.ts");
 const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const modelsDb = await import("../../src/lib/db/models.ts");
+const providersDb = await import("../../src/lib/db/providers.ts");
+const readCache = await import("../../src/lib/db/readCache.ts");
 const v1ModelsCatalog = await import("../../src/app/api/v1/models/catalog.ts");
 
 async function resetStorage() {
@@ -120,4 +122,53 @@ test("catalog-affecting model updates invalidate the longer response cache immed
     2,
     "a synced model update must invalidate the catalog cache without waiting for its TTL"
   );
+});
+
+test("routing usage updates refresh connections without rebuilding the model catalog", async () => {
+  const connection = await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    apiKey: "catalog-usage-test-key",
+    name: "Catalog usage test",
+  });
+  const id = String(connection.id);
+  const request = new Request("http://localhost/v1/models");
+  const first = await v1ModelsCatalog.getUnifiedModelsResponse(request);
+  const body = await first.text();
+  assert.equal(first.status, 200);
+  assert.equal(v1ModelsCatalog.__getCatalogBuilderRunsForTest(), 1);
+
+  for (const patch of [
+    { lastUsedAt: "2026-09-16T10:00:00.000Z" },
+    { consecutiveUseCount: 2 },
+    { lastUsedAt: "2026-09-16T10:00:01.000Z", consecutiveUseCount: 3 },
+  ]) {
+    const before = await readCache.getCachedProviderConnections();
+    await providersDb.updateProviderConnection(id, patch);
+    const after = await readCache.getCachedProviderConnections();
+    assert.notEqual(after, before, "routing connections must be refreshed immediately");
+    const updated = after.find((row) => (row as Record<string, unknown>).id === id) as Record<
+      string,
+      unknown
+    >;
+    for (const [field, value] of Object.entries(patch)) assert.equal(updated[field], value);
+    const response = await v1ModelsCatalog.getUnifiedModelsResponse(request);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), body);
+    assert.equal(v1ModelsCatalog.__getCatalogBuilderRunsForTest(), 1);
+  }
+
+  // Mixed usage/config writes and fields outside the allowlist still invalidate.
+  let runs = 1;
+  for (const patch of [
+    { lastUsedAt: "2026-09-16T10:00:02.000Z", isActive: false },
+    { apiKey: "rotated-catalog-test-key" },
+    { providerSpecificData: { excludedModels: ["gpt-4o"] } },
+    { defaultModel: "gpt-4o-mini" },
+    { futureConnectionField: true },
+  ]) {
+    await providersDb.updateProviderConnection(id, patch);
+    assert.equal((await v1ModelsCatalog.getUnifiedModelsResponse(request)).status, 200);
+    assert.equal(v1ModelsCatalog.__getCatalogBuilderRunsForTest(), ++runs);
+  }
 });
