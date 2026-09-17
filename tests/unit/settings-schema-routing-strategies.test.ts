@@ -24,6 +24,23 @@ test("settings schemas reject combo-only strategies as account fallback strategi
   }
 });
 
+test("settings schemas accept Codex quota deadline provider routing", () => {
+  const payload = {
+    providerStrategies: {
+      codex: { fallbackStrategy: "quota-deadline" },
+    },
+  };
+
+  assert.deepEqual(
+    settingsRouteSchema.parse(payload).providerStrategies,
+    payload.providerStrategies
+  );
+  assert.deepEqual(
+    sharedSettingsSchema.parse(payload).providerStrategies,
+    payload.providerStrategies
+  );
+});
+
 test("shared settings schema module omits the unused fallback strategy sub-schema export", () => {
   assert.equal("settingsFallbackStrategySchema" in sharedSchemaModule, false);
 });

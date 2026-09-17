@@ -56,6 +56,7 @@ export const ACCOUNT_FALLBACK_STRATEGY_VALUES = [
   "p2c",
   "random",
   "least-used",
+  "quota-deadline",
   "cost-optimized",
   "strict-random",
 ] as const;
