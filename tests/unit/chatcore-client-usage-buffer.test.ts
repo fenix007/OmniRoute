@@ -5,10 +5,12 @@
 // (length 2 from JSON.stringify("")) still estimates; the mutation target is translatedResponse.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { FORMATS } from "../../open-sse/translator/formats.ts";
 
-const { applyClientUsageBuffer } = await import(
-  "../../open-sse/handlers/chatCore/clientUsageBuffer.ts"
-);
+const { applyClientUsageBuffer } =
+  await import("../../open-sse/handlers/chatCore/clientUsageBuffer.ts");
+const { invalidateBufferTokensCache, setBufferTokensCache } =
+  await import("../../open-sse/utils/usageTracking.ts");
 
 function makeDeps(overrides: Record<string, unknown> = {}) {
   const calls = { buffer: [] as unknown[], estimate: [] as unknown[], filter: [] as unknown[] };
@@ -38,6 +40,35 @@ test("usage present → buffer then filter, mutates in place", () => {
   assert.equal(calls.estimate.length, 0);
   assert.equal((resp.usage as Record<string, unknown>)._buffered, true);
   assert.equal((resp.usage as Record<string, unknown>)._filtered, true);
+});
+
+for (const format of [FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI_RESPONSE]) {
+  test(`${format} usage present → preserve raw usage and filter without buffer`, () => {
+    const { deps, calls } = makeDeps();
+    const usage = { input_tokens: 5, output_tokens: 3, total_tokens: 8 };
+    const resp: Record<string, unknown> = { usage };
+
+    applyClientUsageBuffer(resp, { input: "hello" }, format, deps);
+
+    assert.equal(calls.buffer.length, 0);
+    assert.equal(calls.filter.length, 1);
+    assert.equal(calls.filter[0], usage);
+    assert.equal((resp.usage as Record<string, unknown>)._buffered, undefined);
+    assert.equal((resp.usage as Record<string, unknown>)._filtered, true);
+  });
+}
+
+test("Responses API keeps provider input_tokens with the real configured buffer", () => {
+  setBufferTokensCache(2000);
+  const resp: Record<string, unknown> = {
+    usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+  };
+
+  applyClientUsageBuffer(resp, { input: "hello" }, FORMATS.OPENAI_RESPONSES);
+
+  assert.equal((resp.usage as Record<string, unknown>).input_tokens, 5);
+  assert.equal((resp.usage as Record<string, unknown>).output_tokens, 3);
+  invalidateBufferTokensCache();
 });
 
 test("no usage but content present → estimate then filter", () => {

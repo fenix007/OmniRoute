@@ -54,6 +54,8 @@ const { resetPayloadRulesConfigForTests, setPayloadRulesConfig } =
   await import("../../open-sse/services/payloadRules.ts");
 const { FORMATS } = await import("../../open-sse/translator/formats.ts");
 const { register, getRequestTranslator } = await import("../../open-sse/translator/registry.ts");
+const { invalidateBufferTokensCache, setBufferTokensCache } =
+  await import("../../open-sse/utils/usageTracking.ts");
 
 const originalFetch = globalThis.fetch;
 const originalResponsesToOpenAI = getRequestTranslator(FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI);
@@ -375,6 +377,34 @@ test("chatCore keeps Responses-native Codex payloads in native passthrough mode"
   assert.equal(call.body.store, false);
   assert.deepEqual(call.body.metadata, { source: "codex-client" });
   assert.equal("messages" in call.body, false);
+});
+
+test("chatCore returns raw Responses usage without the configured client buffer", async () => {
+  setBufferTokensCache(2000);
+  try {
+    const { result } = await invokeChatCore({
+      provider: "codex",
+      model: "gpt-5.1-codex",
+      endpoint: "/v1/responses",
+      credentials: { accessToken: "codex-token", providerSpecificData: {} },
+      body: {
+        model: "gpt-5.1-codex",
+        input: "report raw usage",
+        stream: false,
+      },
+      responseFormat: "openai-responses",
+    });
+
+    const payload = (await result.response.json()) as {
+      usage: { input_tokens: number; output_tokens: number };
+    };
+    assert.equal(result.success, true);
+    assert.equal(payload.usage.input_tokens, 4);
+    assert.equal(payload.usage.output_tokens, 2);
+    assert.equal(result.response.headers.get("X-OmniRoute-Tokens-In"), "4");
+  } finally {
+    invalidateBufferTokensCache();
+  }
 });
 
 test("chatCore honors providerSpecificData.apiType for legacy openai-compatible providers", async () => {
