@@ -379,33 +379,63 @@ test("chatCore keeps Responses-native Codex payloads in native passthrough mode"
   assert.equal("messages" in call.body, false);
 });
 
-test("chatCore returns raw Responses usage without the configured client buffer", async () => {
-  setBufferTokensCache(2000);
-  try {
-    const { result } = await invokeChatCore({
-      provider: "codex",
-      model: "gpt-5.1-codex",
-      endpoint: "/v1/responses",
-      credentials: { accessToken: "codex-token", providerSpecificData: {} },
-      body: {
+for (const usage of [
+  { input_tokens: 20, output_tokens: 5 },
+  { input_tokens: 381, output_tokens: 17 },
+]) {
+  test(`chatCore returns complete raw Responses usage for ${usage.input_tokens} input tokens`, async () => {
+    setBufferTokensCache(2000);
+    try {
+      const { result } = await invokeChatCore({
+        provider: "codex",
         model: "gpt-5.1-codex",
-        input: "report raw usage",
-        stream: false,
-      },
-      responseFormat: "openai-responses",
-    });
+        endpoint: "/v1/responses",
+        credentials: { accessToken: "codex-token", providerSpecificData: {} },
+        body: {
+          model: "gpt-5.1-codex",
+          input: "report raw usage",
+          instructions: "Return only the requested result.",
+          stream: false,
+        },
+        responseFormat: "openai-responses",
+        responseFactory: () =>
+          new Response(
+            JSON.stringify({
+              id: "resp_usage",
+              object: "response",
+              status: "completed",
+              model: "gpt-5.1-codex",
+              output: [
+                {
+                  id: "msg_usage",
+                  type: "message",
+                  role: "assistant",
+                  content: [{ type: "output_text", text: "ok", annotations: [] }],
+                },
+              ],
+              usage,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          ),
+      });
 
-    const payload = (await result.response.json()) as {
-      usage: { input_tokens: number; output_tokens: number };
-    };
-    assert.equal(result.success, true);
-    assert.equal(payload.usage.input_tokens, 4);
-    assert.equal(payload.usage.output_tokens, 2);
-    assert.equal(result.response.headers.get("X-OmniRoute-Tokens-In"), "4");
-  } finally {
-    invalidateBufferTokensCache();
-  }
-});
+      const payload = (await result.response.json()) as {
+        usage: { input_tokens: number; output_tokens: number; total_tokens: number };
+      };
+      assert.equal(result.success, true);
+      assert.deepEqual(payload.usage, {
+        ...usage,
+        total_tokens: usage.input_tokens + usage.output_tokens,
+      });
+      assert.equal(
+        result.response.headers.get("X-OmniRoute-Tokens-In"),
+        String(usage.input_tokens)
+      );
+    } finally {
+      invalidateBufferTokensCache();
+    }
+  });
+}
 
 test("chatCore honors providerSpecificData.apiType for legacy openai-compatible providers", async () => {
   const { call, result } = await invokeChatCore({

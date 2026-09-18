@@ -152,7 +152,9 @@ export function filterUsageForFormat(usage, targetFormat) {
   // Cross-map between Claude-style and OpenAI-style field names before filtering.
   // Some providers return input_tokens/output_tokens even when using OpenAI format.
   const convertedUsage = { ...usage };
-  if (targetFormat === FORMATS.CLAUDE || targetFormat === FORMATS.OPENAI_RESPONSES) {
+  const isResponsesFormat =
+    targetFormat === FORMATS.OPENAI_RESPONSES || targetFormat === FORMATS.OPENAI_RESPONSE;
+  if (targetFormat === FORMATS.CLAUDE || isResponsesFormat) {
     // OpenAI → Claude: prompt_tokens → input_tokens
     if (convertedUsage.prompt_tokens !== undefined && convertedUsage.input_tokens === undefined) {
       convertedUsage.input_tokens = convertedUsage.prompt_tokens;
@@ -162,6 +164,14 @@ export function filterUsageForFormat(usage, targetFormat) {
       convertedUsage.output_tokens === undefined
     ) {
       convertedUsage.output_tokens = convertedUsage.completion_tokens;
+    }
+    if (
+      isResponsesFormat &&
+      convertedUsage.total_tokens === undefined &&
+      convertedUsage.input_tokens !== undefined &&
+      convertedUsage.output_tokens !== undefined
+    ) {
+      convertedUsage.total_tokens = convertedUsage.input_tokens + convertedUsage.output_tokens;
     }
   } else {
     // Claude → OpenAI: input_tokens → prompt_tokens
@@ -215,6 +225,7 @@ export function filterUsageForFormat(usage, targetFormat) {
     [FORMATS.OPENAI_RESPONSES]: [
       "input_tokens",
       "output_tokens",
+      "total_tokens",
       "input_tokens_details",
       "output_tokens_details",
       "estimated",

@@ -60,16 +60,38 @@ for (const format of [FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI_RESPONSE]) {
 
 test("Responses API keeps provider input_tokens with the real configured buffer", () => {
   setBufferTokensCache(2000);
-  const resp: Record<string, unknown> = {
-    usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-  };
+  try {
+    const resp: Record<string, unknown> = {
+      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+    };
 
-  applyClientUsageBuffer(resp, { input: "hello" }, FORMATS.OPENAI_RESPONSES);
+    applyClientUsageBuffer(resp, { input: "hello" }, FORMATS.OPENAI_RESPONSES);
 
-  assert.equal((resp.usage as Record<string, unknown>).input_tokens, 5);
-  assert.equal((resp.usage as Record<string, unknown>).output_tokens, 3);
-  invalidateBufferTokensCache();
+    assert.equal((resp.usage as Record<string, unknown>).input_tokens, 5);
+    assert.equal((resp.usage as Record<string, unknown>).output_tokens, 3);
+    assert.equal((resp.usage as Record<string, unknown>).total_tokens, 8);
+  } finally {
+    invalidateBufferTokensCache();
+  }
 });
+
+for (const format of [FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI_RESPONSE]) {
+  test(`${format} derives total_tokens only when both token counts are present`, () => {
+    const complete: Record<string, unknown> = {
+      usage: { input_tokens: 381, output_tokens: 5 },
+    };
+    applyClientUsageBuffer(complete, { input: "long prompt" }, format);
+    assert.deepEqual(complete.usage, {
+      input_tokens: 381,
+      output_tokens: 5,
+      total_tokens: 386,
+    });
+
+    const incomplete: Record<string, unknown> = { usage: { input_tokens: 25 } };
+    applyClientUsageBuffer(incomplete, { input: "short prompt" }, format);
+    assert.deepEqual(incomplete.usage, { input_tokens: 25 });
+  });
+}
 
 test("no usage but content present → estimate then filter", () => {
   const { deps, calls } = makeDeps();
