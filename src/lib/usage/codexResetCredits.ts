@@ -41,6 +41,18 @@ export function getCachedCodexResetCredits(connectionId: string): CodexResetCred
   return cached.value;
 }
 
+/** Seed/clear the credit cache from tests; mirrors `quotaCache.__clearForTests`. */
+export function __setCachedCodexResetCreditsForTests(
+  connectionId: string,
+  value: CodexResetCreditList | null
+) {
+  if (value === null) {
+    resetCreditCache.delete(connectionId);
+    return;
+  }
+  resetCreditCache.set(connectionId, { value, fetchedAt: Date.now() });
+}
+
 export class CodexResetCreditError extends Error {
   status: number;
   code: string;

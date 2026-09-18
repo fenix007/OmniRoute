@@ -75,14 +75,22 @@ function compareLruConnections(a: SessionAffinityConnection, b: SessionAffinityC
 /**
  * Session-affinity account selection (moved from auth.ts alongside the #5903
  * pin-override so all session-affinity logic lives in one leaf). Reuses an
- * active pin when its connection is in the pool; otherwise picks the LRU
- * connection and creates a fresh pin. Behavior byte-identical to the original.
+ * active pin when its connection is in the pool; otherwise creates a fresh pin.
+ *
+ * Pin *creation* is a first selection, not a continuation, so it must obey the
+ * configured account strategy: callers pass `selectNewPin` for providers whose
+ * strategy scores accounts (e.g. codex `quota-deadline`). Without it the pin
+ * falls back to LRU, which silently bypassed the strategy for every session.
+ * A `selectNewPin` that yields nothing means the strategy rejected the whole
+ * pool — no pin is created and the caller reports the strategy's own error
+ * instead of quietly routing to an LRU pick.
  */
 export async function selectSessionAffinityConnection<T extends SessionAffinityConnection>(
   provider: string,
   sessionKey: string | null | undefined,
   connections: T[],
-  ttlMs = 0
+  ttlMs = 0,
+  selectNewPin?: (candidates: T[]) => T | null
 ): Promise<T | null> {
   if (!sessionKey || connections.length === 0 || ttlMs <= 0) return null;
 
@@ -112,7 +120,9 @@ export async function selectSessionAffinityConnection<T extends SessionAffinityC
     );
   }
 
-  const connection = [...connections].sort(compareLruConnections)[0] ?? null;
+  const connection = selectNewPin
+    ? selectNewPin(connections)
+    : ([...connections].sort(compareLruConnections)[0] ?? null);
   if (!connection) return null;
 
   upsertSessionAccountAffinity(sessionKey, provider, connection.id, Date.now(), ttlMs);
@@ -124,7 +134,7 @@ export async function selectSessionAffinityConnection<T extends SessionAffinityC
     "AUTH",
     `new affinity created for session_key=${formatSessionKeyForLog(
       sessionKey
-    )} -> connection ${connection.id.slice(0, 8)}`
+    )} -> connection ${connection.id.slice(0, 8)} source=${selectNewPin ? "strategy" : "lru"}`
   );
   return connection;
 }

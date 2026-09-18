@@ -1520,11 +1520,18 @@ export async function getProviderCredentials(
     const strategy = providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
 
     let connection;
+    // A new pin is a first selection, so it goes through the configured
+    // strategy instead of the affinity leaf's LRU default (#5903 follow-up).
+    const selectNewPin =
+      strategy === "quota-deadline" && provider === "codex"
+        ? (candidates: any[]) => selectCodexDeadlineConnection(candidates)?.connection ?? null
+        : undefined;
     const affinityConnection = await selectSessionAffinityConnection(
       provider,
       options.sessionKey,
       orderedConnections,
-      sessionAffinityTtlMs
+      sessionAffinityTtlMs,
+      selectNewPin
     );
     if (affinityConnection) {
       connection = affinityConnection;
@@ -1647,9 +1654,11 @@ export async function getProviderCredentials(
         lastUsedAt: new Date().toISOString(),
         consecutiveUseCount: 1,
       });
-      log.debug(
+      // Logged at info: without it the only observable selections are the
+      // affinity ones, which made the strategy look inert in production.
+      log.info(
         "AUTH",
-        `codex quota-deadline picked=${connection.id.slice(0, 8)} weight=${selected.score.weight.toFixed(2)} burn=${selected.score.requiredWeeklyBurn.toFixed(1)} deadline=${selected.score.deadlineAt || "none"}`
+        `codex quota-deadline picked=${connection.id.slice(0, 8)} source=strategy weight=${selected.score.weight.toFixed(2)}(${selected.score.weightSource}) burn=${selected.score.requiredWeeklyBurn.toFixed(1)} deadline=${selected.score.deadlineAt || "none"} weekly=${selected.score.weeklyKnown ? "known" : "unknown"}${selected.score.subscriptionExpired ? " subscription=expired" : ""}`
       );
     } else if (strategy === "p2c") {
       const candidatePool = withQuota.length > 0 ? withQuota : orderedConnections;
