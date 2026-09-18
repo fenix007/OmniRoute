@@ -32,10 +32,12 @@ import { getWebSessionCredentialRequirement } from "../../webSessionCredentials"
 import { useOpenRouterPresetControl } from "../OpenRouterPresetInput";
 import WebSessionCredentialGuide from "../WebSessionCredentialGuide";
 import CcCompatibleRequestDefaultsFields from "./CcCompatibleRequestDefaultsFields";
+import { AdvancedSettingsToggle, GlmConnectionFields } from "./ConnectionModalSharedFields";
 import { buildAddProviderSpecificData } from "./connectionProviderSpecificData";
 import { computeConnectionDefaultName } from "./computeConnectionDefaultName";
 import QuotaScrapingFields, { EMPTY_QUOTA_SCRAPING_FIELDS } from "./QuotaScrapingFields";
-import GlmTeamQuotaFields, { EMPTY_GLM_TEAM_QUOTA_FIELDS } from "./GlmTeamQuotaFields";
+import { EMPTY_GLM_TEAM_QUOTA_FIELDS } from "./GlmTeamQuotaFields";
+import ValidationModelInput from "./ValidationModelInput";
 export interface AddApiKeyModalProps {
   isOpen: boolean;
   provider?: string;
@@ -832,21 +834,12 @@ export default function AddApiKeyModal({
                     })}
               </p>
             )}
-            <button
-              type="button"
-              className="text-sm text-text-muted hover:text-text-primary flex items-center gap-1"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              aria-expanded={showAdvanced}
-              aria-controls="add-api-key-advanced-settings"
-            >
-              <span
-                className={`transition-transform ${showAdvanced ? "rotate-90" : ""}`}
-                aria-hidden="true"
-              >
-                ▶
-              </span>
-              {t("advancedSettings")}
-            </button>
+            <AdvancedSettingsToggle
+              expanded={showAdvanced}
+              controls="add-api-key-advanced-settings"
+              onToggle={() => setShowAdvanced(!showAdvanced)}
+              label={t("advancedSettings")}
+            />
             {showAdvanced && (
               <div
                 id="add-api-key-advanced-settings"
@@ -892,12 +885,10 @@ export default function AddApiKeyModal({
                 )}
               </div>
             )}
-            <Input
-              label={t("validationModelIdLabel")}
-              placeholder={t("validationModelIdPlaceholder")}
+            <ValidationModelInput
               value={formData.validationModelId}
-              onChange={(e) => setFormData({ ...formData, validationModelId: e.target.value })}
-              hint={t("validationModelIdHint")}
+              onChange={(validationModelId) => setFormData({ ...formData, validationModelId })}
+              t={t}
             />
             <Input
               label={t("priorityLabel")}
@@ -935,27 +926,11 @@ export default function AddApiKeyModal({
               />
             )}
             {isGlm && (
-              <div className="flex flex-col gap-3">
-                <div>
-                  <label className="text-sm font-medium text-text-main mb-1 block">
-                    {t("apiRegionLabel")}
-                  </label>
-                  <select
-                    value={formData.apiRegion}
-                    onChange={(e) => setFormData({ ...formData, apiRegion: e.target.value })}
-                    className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
-                  >
-                    <option value="international">{t("apiRegionInternational")}</option>
-                    <option value="china">{t("apiRegionChina")}</option>
-                  </select>
-                  <p className="text-xs text-text-muted mt-1">{t("apiRegionHint")}</p>
-                </div>
-                <GlmTeamQuotaFields
-                  values={formData}
-                  onChange={(patch) => setFormData({ ...formData, ...patch })}
-                  t={t}
-                />
-              </div>
+              <GlmConnectionFields
+                values={formData}
+                onChange={(patch) => setFormData({ ...formData, ...patch })}
+                t={t}
+              />
             )}
             <div className="flex gap-2">
               <Button

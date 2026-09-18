@@ -253,6 +253,11 @@ test("listCodexResetCredits returns only redeemable credits with normalized expi
   };
 
   const result = await resetCredits.listCodexResetCredits(connection.id);
+  const cache = await import("../../src/lib/usage/codexResetCreditCache.ts");
+  assert.equal(cache.getCachedCodexResetCredits(connection.id), result);
+  assert.equal(resetCredits.getCachedCodexResetCredits, cache.getCachedCodexResetCredits);
+  resetCredits.__setCachedCodexResetCreditsForTests(connection.id, null);
+  assert.equal(cache.getCachedCodexResetCredits(connection.id), null);
 
   assert.deepEqual(result, {
     availableCount: 3,

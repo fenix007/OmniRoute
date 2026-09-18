@@ -35,7 +35,7 @@ test("each skill dir has SKILL.md with frontmatter", async () => {
   for (const dir of dirs) {
     const path = join(SKILLS_DIR, dir, "SKILL.md");
     const content = await readFile(path, "utf-8");
-    assert.ok(content.startsWith("---\n"), `${dir}: missing opening frontmatter`);
+    assert.ok(/^---\r?\n/.test(content), `${dir}: missing opening frontmatter`);
     for (const key of REQUIRED_FRONTMATTER) {
       assert.ok(content.includes(key), `${dir}: missing frontmatter key ${key}`);
     }

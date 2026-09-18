@@ -5,7 +5,7 @@
  * DB save/retrieve, and resolution order.
  */
 
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
   transformModelsDevToPricing,
@@ -427,40 +427,44 @@ describe("modelsDevSync — mapProviderId", () => {
   });
 });
 
-describe("modelsDevSync — fetchModelsDev (live API)", () => {
-  it("fetches data from models.dev API", async () => {
-    const data = await fetchModelsDev();
-    assert.ok(typeof data === "object", "data should be an object");
+describe("modelsDevSync — fetchModelsDev HTTP contract", () => {
+  let response: Response;
+  let calls = 0;
+  before(() => {
+    mock.method(globalThis, "fetch", async (url, init) => {
+      calls += 1;
+      assert.equal(url, "https://models.dev/api.json");
+      assert.ok(init?.signal instanceof AbortSignal);
+      return response;
+    });
+  });
+  after(() => mock.restoreAll());
 
-    const providerCount = Object.keys(data).length;
-    assert.ok(providerCount >= 100, `should have 100+ providers, got ${providerCount}`);
-
-    let modelCount = 0;
-    for (const provider of Object.values(data)) {
-      const p = provider;
-      if (p.models) {
-        modelCount += Object.keys(p.models).length;
-      }
-    }
-    assert.ok(modelCount >= 4000, `should have 4000+ models, got ${modelCount}`);
+  it("preserves HTTP failures and retries instead of caching them", async () => {
+    response = new Response("unavailable", { status: 503, statusText: "Unavailable" });
+    await assert.rejects(fetchModelsDev(), /models.dev fetch failed \[503\]: Unavailable/);
+    assert.equal(calls, 1);
   });
 
-  it("returns cached data on second call", async () => {
+  it("rejects malformed JSON without caching it", async () => {
+    response = new Response("invalid JSON");
+    await assert.rejects(fetchModelsDev(), /models.dev returned invalid JSON/);
+    assert.equal(calls, 2);
+  });
+
+  it("fetches and preserves the complete provider/model payload", async () => {
+    response = Response.json(MOCK_MODELS_DEV_DATA);
+    const data = await fetchModelsDev();
+    assert.deepEqual(data, MOCK_MODELS_DEV_DATA);
+    assert.equal(calls, 3);
+  });
+
+  it("returns cached data without another HTTP request", async () => {
     const data1 = await fetchModelsDev();
     const data2 = await fetchModelsDev();
-    assert.strictEqual(data1, data2, "should return same cached reference");
-  });
-
-  it("has openai provider with gpt-4o model", async () => {
-    const data = await fetchModelsDev();
-    assert.ok(data.openai, "openai provider should exist");
-    assert.ok(data.openai.models["gpt-4o"], "gpt-4o model should exist");
-  });
-
-  it("has anthropic provider with claude models", async () => {
-    const data = await fetchModelsDev();
-    assert.ok(data.anthropic, "anthropic provider should exist");
-    const claudeModels = Object.keys(data.anthropic.models).filter((m) => m.includes("claude"));
-    assert.ok(claudeModels.length > 0, "should have claude models");
+    assert.strictEqual(data1, data2);
+    assert.equal(calls, 3);
+    assert.ok(data1.openai.models["gpt-4o"]);
+    assert.ok(data1.anthropic.models["claude-sonnet-4-20250514"]);
   });
 });

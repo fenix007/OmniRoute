@@ -1,6 +1,6 @@
 /**
  * #3147 — Editing a combo must invalidate the 10s nested-combo expansion caches
- * (src/sse/handlers/chat.ts getCombosCachedForChat + open-sse/handlers/chatCore.ts
+ * (src/sse/handlers/chatComboCache.ts getCombosCachedForChat + open-sse/handlers/chatCore.ts
  * getCombosCached) so a parent combo's nested expansion stops serving removed
  * targets/models ("phantom models") within the TTL window.
  *
@@ -134,18 +134,34 @@ test("deleteCombo and reorderCombos also invalidate the cache", async () => {
   let ts = Date.now();
   let version = readCache.getCombosCacheVersion();
   await combosDb.reorderCombos([(b as any).id, (a as any).id]);
-  assert.equal(
-    cacheStillValid(ts, version),
-    false,
-    "reorderCombos must invalidate the cache"
-  );
+  assert.equal(cacheStillValid(ts, version), false, "reorderCombos must invalidate the cache");
 
   ts = Date.now();
   version = readCache.getCombosCacheVersion();
   await combosDb.deleteCombo((a as any).id);
+  assert.equal(cacheStillValid(ts, version), false, "deleteCombo must invalidate the cache");
+});
+
+// Exercise the handler cache itself as well as the DB invalidation hooks above.
+test("chat cache reuses reads and observes combo edits immediately", async () => {
+  const { getCombosCachedForChat } = await import("../../src/sse/handlers/chatComboCache.ts");
+  const combo = await combosDb.createCombo({ name: "LiveCache", models: ["openai/gpt-4.1"] });
+  const initial = await getCombosCachedForChat();
+  const [first, second] = await Promise.all([getCombosCachedForChat(), getCombosCachedForChat()]);
+  assert.equal(first, initial);
+  assert.equal(second, initial);
+  await combosDb.updateCombo((combo as { id: string }).id, { models: ["openai/gpt-4o-mini"] });
+  const updated = await getCombosCachedForChat();
+  assert.notEqual(updated, initial);
+  assert.deepEqual(
+    (updated as { name: string; models: { model: string }[] }[])
+      .find((c) => c.name === "LiveCache")
+      ?.models.map((m) => m.model),
+    ["openai/gpt-4o-mini"]
+  );
+  await combosDb.deleteCombo((combo as { id: string }).id);
   assert.equal(
-    cacheStillValid(ts, version),
-    false,
-    "deleteCombo must invalidate the cache"
+    ((await getCombosCachedForChat()) as { name: string }[]).some((c) => c.name === "LiveCache"),
+    false
   );
 });

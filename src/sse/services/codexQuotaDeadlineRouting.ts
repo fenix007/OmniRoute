@@ -20,7 +20,7 @@
  */
 
 import { getQuotaCache } from "@/domain/quotaCache";
-import { getCachedCodexResetCredits } from "@/lib/usage/codexResetCredits";
+import { getCachedCodexResetCredits } from "@/lib/usage/codexResetCreditCache";
 import { getCachedCodexQuota } from "@omniroute/open-sse/services/codexQuotaFetcher.ts";
 
 type JsonRecord = Record<string, unknown>;

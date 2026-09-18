@@ -20,7 +20,7 @@ vi.mock("@/lib/services/installers/utils", () => ({
   SERVICE_VERSION_PATTERN: /^\d+\.\d+\.\d+$/,
 }));
 
-import { GET, POST } from "../../src/app/api/system/version/route";
+import { GET, POST } from "../../../src/app/api/system/version/route";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
 import { resolveLatestVersion } from "@/lib/system/versionCheck";
 import {

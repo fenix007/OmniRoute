@@ -7,7 +7,6 @@ export const ROUTING_STRATEGY_VALUES = [
   "p2c",
   "random",
   "least-used",
-  "quota-deadline",
   "cost-optimized",
   "reset-aware",
   "reset-window",

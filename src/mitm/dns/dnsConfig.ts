@@ -93,6 +93,14 @@ function readHostsFile(): string {
   }
 }
 
+// Test seam for privileged host-file operations. Runtime uses the imported
+// implementations; unit tests replace these functions with in-memory fakes.
+export const dnsConfigInternals = {
+  readHostsFile,
+  execFileWithPassword,
+  runElevatedPowerShell,
+};
+
 /**
  * Check whether all IPv4+IPv6 lines for `hostname` are present in the hosts file.
  */
@@ -120,7 +128,7 @@ function hasHostEntry(hostsContent: string, hostname: string): boolean {
  * invocation so the user gets one UAC prompt instead of one per line.
  */
 export async function addDNSEntries(hosts: string[], sudoPassword: string): Promise<void> {
-  const hostsContent = readHostsFile();
+  const hostsContent = dnsConfigInternals.readHostsFile();
   const missingEntries: string[] = [];
 
   for (const hostname of hosts) {
@@ -142,13 +150,18 @@ export async function addDNSEntries(hosts: string[], sudoPassword: string): Prom
     const psHostsFile = quotePowerShell(HOSTS_FILE);
     const psEntries = missingEntries.map((e) => quotePowerShell(e)).join(", ");
     const script = "Add-Content -LiteralPath " + psHostsFile + " -Value " + psEntries;
-    await runElevatedPowerShell(script);
+    await dnsConfigInternals.runElevatedPowerShell(script);
     for (const entry of missingEntries) {
       console.log(`[DNS] Added entry: ${entry}`);
     }
   } else {
     const data = missingEntries.map((e) => `${e}\n`).join("");
-    await execFileWithPassword("sudo", ["-S", "tee", "-a", HOSTS_FILE], sudoPassword, data);
+    await dnsConfigInternals.execFileWithPassword(
+      "sudo",
+      ["-S", "tee", "-a", HOSTS_FILE],
+      sudoPassword,
+      data
+    );
     for (const entry of missingEntries) {
       console.log(`[DNS] Added entry: ${entry}`);
     }
@@ -178,7 +191,7 @@ fs.writeFileSync(filePath, filtered.join("\\n").replace(/\\n*$/, "\\n"));
  * invocation so the user gets one UAC prompt instead of one per host.
  */
 export async function removeDNSEntries(hosts: string[], sudoPassword: string): Promise<void> {
-  const hostsContent = readHostsFile();
+  const hostsContent = dnsConfigInternals.readHostsFile();
   const presentHosts = hosts.filter((h) => hasHostEntry(hostsContent, h));
 
   if (presentHosts.length === 0) return;
@@ -198,13 +211,13 @@ export async function removeDNSEntries(hosts: string[], sudoPassword: string): P
       "            -not ($part.Length -ge 2 -and ($targetHosts -contains $part[1]))\n" +
       "          };\n" +
       "          Set-Content -LiteralPath $hostsFile -Value $filtered;\n        ";
-    await runElevatedPowerShell(script);
+    await dnsConfigInternals.runElevatedPowerShell(script);
     for (const hostname of presentHosts) {
       console.log(`[DNS] Removed entries for ${hostname}`);
     }
   } else {
     for (const hostname of presentHosts) {
-      await execFileWithPassword(
+      await dnsConfigInternals.execFileWithPassword(
         "sudo",
         ["-S", process.execPath, "-e", REMOVE_HOSTS_ENTRY_SCRIPT, HOSTS_FILE, hostname],
         sudoPassword
@@ -223,7 +236,7 @@ export async function removeDNSEntries(hosts: string[], sudoPassword: string): P
  * Preserved for backward compat (called by getMitmStatus and other callers).
  */
 export function checkDNSEntry(): boolean {
-  const hostsContent = readHostsFile();
+  const hostsContent = dnsConfigInternals.readHostsFile();
   return ANTIGRAVITY_HOSTS.every((h) => hasHostEntry(hostsContent, h));
 }
 

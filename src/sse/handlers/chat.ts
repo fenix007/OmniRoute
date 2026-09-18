@@ -1,3 +1,9 @@
+import { getCombosCachedForChat } from "./chatComboCache";
+import {
+  intersectAllowedConnectionIds,
+  hasNonObjectMessageEntry,
+  readResponseErrorReason,
+} from "./chatRequestUtils";
 import { randomUUID } from "crypto";
 import { resolveChatRequestBody } from "./requestBody";
 import { normalizeReasoningRequest } from "@/shared/reasoning/effortStandardization";
@@ -63,8 +69,6 @@ import {
   deleteSessionAccountAffinity,
   evictSessionAccountAffinityForConnection,
   getCachedSettings,
-  getCombos,
-  getCombosCacheVersion,
   getSessionAccountAffinity,
 } from "@/lib/localDb";
 import { dispatchChatWithAffinityEviction } from "./chatDispatch";
@@ -172,77 +176,9 @@ registerOpencodeQuotaFetcher();
 // what lets the per-window cutoff modal in Dashboard › Limits actually
 // enforce thresholds for Claude / GLM / Cursor / etc., not just Codex.
 registerGenericQuotaFetchers();
-let combosCachePromise: Promise<unknown[]> | null = null;
-let combosCacheTs = 0;
-let combosCacheVersionSnapshot = -1;
-const COMBOS_CACHE_TTL_MS = 10_000;
-
-async function getCombosCachedForChat(): Promise<unknown[]> {
-  const now = Date.now();
-  // Explicit non-null check: we intentionally cache and return the Promise
-  // itself (to dedupe concurrent callers), so this is not a forgotten await.
-  // The version check makes combo edits (create/update/delete/reorder) take
-  // effect immediately instead of after the 10s TTL — otherwise a removed
-  // target/model could keep being served as a "phantom" for up to 10s (#3147).
-  if (
-    combosCachePromise !== null &&
-    now - combosCacheTs < COMBOS_CACHE_TTL_MS &&
-    combosCacheVersionSnapshot === getCombosCacheVersion()
-  ) {
-    return combosCachePromise;
-  }
-
-  combosCacheTs = now;
-  combosCacheVersionSnapshot = getCombosCacheVersion();
-  combosCachePromise = getCombos().catch(() => []);
-  return combosCachePromise;
-}
-
-function normalizeAllowedConnectionIds(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  const ids = value.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0
-  );
-  return ids.length > 0 ? ids : null;
-}
-
-function intersectAllowedConnectionIds(primary: unknown, secondary: unknown): string[] | null {
-  const first = normalizeAllowedConnectionIds(primary);
-  const second = normalizeAllowedConnectionIds(secondary);
-
-  if (first && second) {
-    return first.filter((id) => second.includes(id));
-  }
-
-  return first || second || null;
-}
-
-function hasNonObjectMessageEntry(messages: unknown[]): boolean {
-  return messages.some(
-    (message) => message === null || typeof message !== "object" || Array.isArray(message)
-  );
-}
-
 const comboPromoteDeps = { updateCombo, info: log.info, warn: log.warn };
 
 export { shouldTripProviderBreakerForResult } from "./chatPredicates";
-
-async function readResponseErrorReason(response: Response): Promise<string | null> {
-  try {
-    const payload = (await response.clone().json()) as {
-      error?: { message?: unknown } | unknown;
-    };
-    const message =
-      payload.error &&
-      typeof payload.error === "object" &&
-      typeof (payload.error as { message?: unknown }).message === "string"
-        ? (payload.error as { message: string }).message
-        : null;
-    return message?.trim() || null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Handle chat completion request
@@ -957,10 +893,8 @@ export async function handleChat(
     // (success:false) so gate/breaker-rejected traffic is counted per key — support-mesh 2026-07-08.
     if (!response.ok) {
       try {
-        const {
-          describeRejectedComboFailure,
-          recordRejectedRequestUsage,
-        } = await import("./rejectedRequestUsage");
+        const { describeRejectedComboFailure, recordRejectedRequestUsage } =
+          await import("./rejectedRequestUsage");
         await recordRejectedRequestUsage({
           status: response.status,
           model: body?.model || resolvedModelStr,
@@ -1817,6 +1751,9 @@ async function handleSingleModelChat(
       // must not rotate away from a still-healthy Codex prompt-cache partition.
       const transportAttempts = sameAccountTransportRetries.get(credentials.connectionId) || 0;
       if (
+        !forceLiveComboTest &&
+        !runtimeOptions.skipUpstreamRetry &&
+        !runtimeOptions.emergencyFallbackTried &&
         shouldRetrySameAccountTransport({
           status: result.status,
           errorText: errorStr,

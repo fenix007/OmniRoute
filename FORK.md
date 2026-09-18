@@ -531,3 +531,53 @@ Other production-scope candidates were not ported:
 
 All unrelated UI, Electron, i18n, A2A, MCP and out-of-scope provider PRs were
 excluded. No tag, publish dispatch or deployment is part of this maintenance.
+
+## 2026-09-18 — Local quality-gate repair (pending publication)
+
+Source: the owned stable patch set at
+[`34f4d1ea5dd8b35ef5ebe1cb8eb66ef44980af52`](https://github.com/fenix007/OmniRoute/commit/34f4d1ea5dd8b35ef5ebe1cb8eb66ef44980af52).
+This is local maintenance requested after the upstream review was blocked; it is
+not an upstream port and does not update the frozen v3.8.48 base.
+
+- Extract existing auth, token-health, Codex, speech, image-alias, chat and modal
+  helpers, and split existing tests. File-size baselines and caps are unchanged.
+- Move the fork-version route suite into the existing Vitest UI collector. Its
+  authentication and disabled-updater checks now run through the normal script.
+- Separate the shared Codex reset-credit cache from the HTTP/refresh service.
+  Routing reads the same singleton, with the same 15-minute TTL; legacy exports
+  remain compatible. This removes the routing-to-provider-mutation import cycle
+  that pulled every executor into core auth typechecking.
+- Correct nullable date-helper input types and remove obsolete ESLint
+  suppressions; no typecheck configuration, test expectations, auth policy or
+  production dependency is weakened.
+
+Validation: file-size, test-discovery, core typecheck, lint, DB rules and error
+helper gates pass. Focused auth/refresh, Codex, audio, image, provider validation,
+chat/cache and reset-credit tests pass. The complete native unit run reports
+23,239 passing, 51 failing and 14 skipped tests: 48 failures reproduce on clean
+stable, and the remaining three models.dev network timeouts pass on retry (22/22
+in that suite). The production build passes with worktree-local dependencies.
+Full evidence is recorded in repository-local automation memory. Publication remains
+blocked while mandatory checks are red. No release, image or deployment is part
+of this maintenance; any eventual maintenance push must use the existing
+`[skip ci]` policy.
+
+Opus 5 review follow-up: import the extracted `ImageModelAliasEntry` type explicitly
+and close the image test's SQLite connection before removing its owned temporary
+DATA_DIR. The cleanup probe leaves a directory before the fix and none afterward;
+image tests pass 44/44. Expanded typechecking of all changed production entrypoints
+now has no new diagnostics against the base (1,129 baseline, 1,128 current); the
+remaining diagnostics are pre-existing. Core typecheck, focused ESLint, size and
+discovery gates pass. The existing full-unit failures still block publication.
+
+Baseline test repair follow-up: normalize shell checkout policy with `.gitattributes`
+and make text-based fixtures tolerate CRLF without rewriting golden content. Isolate
+DNS tests behind an injected privileged-operation seam, reset semantic/provider
+cooldown state in the shared chat harness, and replace the live models.dev unit probe
+with deterministic HTTP-contract coverage. Combo routing preserves model-lockout enforcement while skipping lower-level
+same-account retries when the combo requests failover first, propagating aborts during
+fallback delay, and avoiding a second emergency fallback attempt. The account-only `quota-deadline` strategy is no longer exposed as
+a combo strategy. Dependency and environment contracts now document the existing gRPC
+and live-STT implementation. The complete unit suite passes, including dashboard and
+serial collectors; core typecheck, lint, file-size, discovery and production build
+remain green. This remains local fork maintenance, not an upstream port.

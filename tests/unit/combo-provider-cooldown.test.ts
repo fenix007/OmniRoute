@@ -14,12 +14,8 @@ const {
   seedConnection,
   settingsDb,
 } = harness;
-const { preScreenTargets } = await import(
-  "../../open-sse/services/combo.ts"
-);
-const { getCircuitBreaker } = await import(
-  "../../src/shared/utils/circuitBreaker.ts"
-);
+const { preScreenTargets } = await import("../../open-sse/services/combo.ts");
+const { getCircuitBreaker } = await import("../../src/shared/utils/circuitBreaker.ts");
 
 test.beforeEach(async () => {
   await resetStorage();
@@ -43,6 +39,13 @@ test("combo failover skips the cooled provider target on the next request", asyn
   await settingsDb.updateSettings({
     requestRetry: 0,
     maxRetryIntervalSec: 0,
+    resilienceSettings: {
+      providerCooldown: {
+        enabled: true,
+        minRetryCooldownMs: 5_000,
+        maxRetryCooldownMs: 300_000,
+      },
+    },
   });
   await combosDb.createCombo({
     name: "provider-cooldown-combo",

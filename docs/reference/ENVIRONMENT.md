@@ -169,6 +169,22 @@ OmniRoute uses **SQLite** (via `better-sqlite3`) for all persistence. These vari
 
 ---
 
+### Live transcription server
+
+These settings describe the existing SaluteSpeech WebSocket server. Session signing uses a separate secret; do not reuse provider credentials.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OMNIROUTE_ENABLE_LIVE_STT` | enabled | Set to `0` to disable server startup outside build/test mode. |
+| `LIVE_STT_HOST` | `127.0.0.1` | Listener bind address. Keep private behind the authenticated ingress. |
+| `LIVE_STT_PORT` | `20133` | Listener port and standalone WebSocket proxy target port. |
+| `LIVE_STT_TOKEN_SECRET` | unset | Required separate secret for signing and verifying one-use session tokens. |
+| `LIVE_STT_SESSION_TTL_SECONDS` | `60` | Session token lifetime; positive values are capped at 300 seconds. |
+| `LIVE_STT_MAX_AUDIO_CHUNK_BYTES` | `65536` | Maximum WebSocket payload and individual audio chunk size. |
+| `LIVE_STT_MAX_SESSION_AUDIO_BYTES` | `10485760` | Maximum total audio bytes accepted in a session. |
+| `LIVE_STT_MAX_SESSION_SECONDS` | `300` | Maximum active session duration in seconds. |
+| `LIVE_STT_MAX_CONCURRENT_SESSIONS` | `5` | Maximum concurrent live sessions. |
+
 ## 4. Security & Authentication
 
 | Variable                                | Default                 | Source File                                      | Description                                                                                                                                                                                                                                                                                                                                                        |
@@ -204,6 +220,8 @@ MAX_BODY_SIZE_BYTES=5242880    # 5 MB limit
 ```
 
 ---
+
+`OMNIROUTE_TRUSTED_PROXY_IPS` adds comma-separated exact IP addresses or CIDRs to the trusted proxy peers used for login lockout and audit client IPs (`src/lib/ipUtils.ts`). Loopback is trusted by default. Only list controlled proxies that overwrite forwarded headers or append their immediate peer, and block direct public access to the backend. The default is unset.
 
 ## 5. Input Sanitization & PII Protection
 

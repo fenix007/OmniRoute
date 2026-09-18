@@ -557,11 +557,6 @@
       "count": 9
     }
   },
-  "tests/unit/audio-transcription-handler.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 9
-    }
-  },
   "tests/unit/audio-translations-route.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 6
@@ -1055,11 +1050,6 @@
   "tests/unit/combo-stream-readiness-fallback.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 17
-    }
-  },
-  "tests/unit/combo-target-timeout-runner.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 4
     }
   },
   "tests/unit/combo-test-route.test.ts": {
@@ -2044,7 +2034,7 @@
   },
   "tests/unit/sse-auth.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 13
+      "count": 12
     }
   },
   "tests/unit/sse-parser.test.ts": {

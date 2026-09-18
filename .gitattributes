@@ -1,0 +1,3 @@
+# Shell scripts must remain executable with core.autocrlf enabled.
+*.sh text eol=lf
+.husky/* text eol=lf

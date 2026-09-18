@@ -73,6 +73,9 @@ import { resolveAccountProxiesFromRegistry } from "./noAuthProxyResolution";
 import * as log from "../utils/logger";
 import { fisherYatesShuffle, getNextFromDeckSync } from "@/shared/utils/shuffleDeck";
 import { selectCodexDeadlineConnection } from "./codexQuotaDeadlineRouting";
+import { readHeaderValue } from "./authRequest";
+
+export { extractApiKey } from "./authRequest";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -205,33 +208,6 @@ function toProviderConnection(value: unknown): ProviderConnectionView {
 
 function toBooleanOrDefault(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
-}
-
-function readHeaderValue(
-  headers:
-    | Headers
-    | { get?: (name: string) => string | null }
-    | Record<string, string | string[] | undefined>
-    | null
-    | undefined,
-  name: string
-): string | null {
-  if (!headers) return null;
-
-  if (typeof (headers as Headers).get === "function") {
-    const value = (headers as Headers).get(name) || (headers as Headers).get(name.toLowerCase());
-    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-  }
-
-  const recordHeaders = headers as Record<string, string | string[] | undefined>;
-  const value =
-    recordHeaders[name] || recordHeaders[name.toLowerCase()] || recordHeaders[name.toUpperCase()];
-
-  if (Array.isArray(value)) {
-    return typeof value[0] === "string" && value[0].trim().length > 0 ? value[0].trim() : null;
-  }
-
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 function normalizeSessionKey(value: unknown, prefix: string): string | null {
@@ -522,7 +498,7 @@ export function evaluateQuotaLimitPolicy(
   };
 }
 
-function parseFutureDateMs(value: string | null): number | null {
+function parseFutureDateMs(value: string | null | undefined): number | null {
   if (!value) return null;
   // Tolerate numeric-epoch strings (e.g. "1781696905131.0") as well as ISO
   // strings — the rate_limited_until TEXT column can hold either (#3954).
@@ -531,7 +507,7 @@ function parseFutureDateMs(value: string | null): number | null {
   return ms;
 }
 
-function getEarliestFutureDate(candidates: Array<string | null>): string | null {
+function getEarliestFutureDate(candidates: Array<string | null | undefined>): string | null {
   return (
     candidates
       .map((candidate) => ({
@@ -2423,110 +2399,6 @@ export async function clearRecoveredProviderState(
   }
   await clearAccountError(credentials.connectionId, credentials);
   return { applied: true };
-}
-
-type AuthRequestHeaders = Headers | Record<string, string | string[] | undefined>;
-
-type AuthRequestLike = {
-  headers?: AuthRequestHeaders | null;
-  url?: string | null;
-};
-
-function readNonEmptyUrlToken(request: AuthRequestLike): string | null {
-  if (typeof request?.url !== "string" || request.url.trim().length === 0) return null;
-
-  try {
-    const url = new URL(request.url, "http://localhost");
-
-    const segments = url.pathname
-      .split("/")
-      .map((segment) => segment.trim())
-      .filter(Boolean);
-
-    if (segments[0] === "vscode" && segments[1]) {
-      const decodedSegment = decodeURIComponent(segments[1]).trim();
-      if (decodedSegment.length > 0) return decodedSegment;
-    }
-
-    if (segments[0] === "api" && segments[1] === "v1" && segments[2] === "vscode") {
-      if (segments[3] && segments[3] !== "raw" && segments[3] !== "combos") {
-        const decodedSegment = decodeURIComponent(segments[3]).trim();
-        if (decodedSegment.length > 0) return decodedSegment;
-      }
-
-      if ((segments[3] === "raw" || segments[3] === "combos") && segments[4]) {
-        const decodedSegment = decodeURIComponent(segments[4]).trim();
-        if (decodedSegment.length > 0) return decodedSegment;
-      }
-    }
-
-    // NOTE: query-string token fallbacks (`?token=`/`?key=`/`?apiKey=`/`?api_key=`)
-    // were intentionally REMOVED. They are a broad credential-in-URL surface that
-    // leaks into access logs, Referer headers and proxy logs, and — because this
-    // extractor also feeds management auth — would let `?token=<mgmt-key>`
-    // authenticate management routes. The VS Code integration only needs the
-    // path-scoped `/vscode/<token>/…` form above. (security review, #3300 follow-up)
-  } catch {
-    return null;
-  }
-
-  return null;
-}
-
-/**
- * Extract API key from request auth inputs.
- *
- * Honors explicit auth headers and (for client-facing routes only) a
- * path-scoped URL token:
- * - `Authorization: Bearer <key>` (OpenAI / OmniRoute / Codex CLI / Bearer clients)
- * - `x-api-key: <key>` (Anthropic Messages API contract — Claude Code,
- *   `@anthropic-ai/sdk`, any SDK that sets `anthropic-version`)
- * - `/vscode/<key>/...` (path-scoped tokenized aliases — only when `allowUrl`)
- *
- * When multiple inputs are present, explicit auth headers win.
- *
- * The `x-api-key` fallback only triggers when the request also carries an
- * `anthropic-version` header — the documented signal that the caller is
- * speaking the Anthropic Messages API contract. Without this scoping,
- * non-Anthropic SDKs that happen to set `x-api-key` (or local-mode tools
- * with placeholder keys) would be treated as authenticated attempts and
- * rejected by per-route gates that compare against OmniRoute keys.
- *
- * `opts.allowUrl` (default `true`) gates the path-scoped URL token. Management
- * auth MUST pass `allowUrl: false` — a credential in the URL must never
- * authenticate a management route (it leaks into logs/Referer and would widen
- * the management surface). See the #3300 security follow-up.
- */
-export function extractApiKey(request: AuthRequestLike, opts?: { allowUrl?: boolean }) {
-  const authHeader =
-    readHeaderValue(request?.headers, "Authorization") ||
-    readHeaderValue(request?.headers, "authorization");
-  if (typeof authHeader === "string") {
-    const trimmedHeader = authHeader.trim();
-    if (trimmedHeader.toLowerCase().startsWith("bearer ")) {
-      return trimmedHeader.slice(7).trim() || null;
-    }
-  }
-
-  // Issue #2225: Anthropic Messages API clients authenticate via x-api-key.
-  // Gate the fallback on the anthropic-version header so we don't trip up
-  // local-mode requests from non-Anthropic clients that send placeholder
-  // x-api-key values (which would otherwise be rejected as Invalid API key).
-  const anthropicVersion =
-    readHeaderValue(request?.headers, "anthropic-version") ||
-    readHeaderValue(request?.headers, "Anthropic-Version");
-  if (anthropicVersion) {
-    const xApiKey =
-      readHeaderValue(request?.headers, "x-api-key") ||
-      readHeaderValue(request?.headers, "X-Api-Key");
-    if (typeof xApiKey === "string") {
-      const trimmed = xApiKey.trim();
-      if (trimmed.length > 0) return trimmed;
-    }
-  }
-
-  if (opts?.allowUrl === false) return null;
-  return readNonEmptyUrlToken(request);
 }
 
 /**

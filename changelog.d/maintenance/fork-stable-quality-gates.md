@@ -1,0 +1,1 @@
+- **refactor(quality):** Restore the frozen stable file-size limits by extracting focused helpers and splitting existing test suites; include fork-version route tests in the regular Vitest UI run without changing routing, authentication, provider requests, or UI behavior.

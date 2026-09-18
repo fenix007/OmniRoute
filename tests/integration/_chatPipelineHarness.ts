@@ -39,6 +39,7 @@ export async function createChatPipelineHarness(prefix) {
   const { clearInflight } = await import("../../open-sse/services/requestDedup.ts");
   const { BaseExecutor } = await import("../../open-sse/executors/base.ts");
   const { resetAllCircuitBreakers } = await import("../../src/shared/utils/circuitBreaker.ts");
+  const { clearCooldownState } = await import("../../open-sse/services/providerCooldownTracker.ts");
 
   const originalFetch = globalThis.fetch;
   const originalRetryDelayMs = BaseExecutor.RETRY_CONFIG.delayMs;
@@ -241,6 +242,7 @@ export async function createChatPipelineHarness(prefix) {
     idempotencyLayerModule.clearIdempotency();
     semanticCacheModule.clearCache();
     resetAllCircuitBreakers();
+    clearCooldownState();
     apiKeysDb.resetApiKeyState();
     readCacheDb.invalidateDbCache();
     invalidateMemorySettingsCache();
@@ -260,6 +262,7 @@ export async function createChatPipelineHarness(prefix) {
     semanticCacheModule.clearCache();
     clearSkillState();
     resetAllCircuitBreakers();
+    clearCooldownState();
     core.resetDbInstance();
     fs.rmSync(testDataDir, { recursive: true, force: true });
   }

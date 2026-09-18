@@ -1,76 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
-const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-sse-auth-"));
-process.env.DATA_DIR = TEST_DATA_DIR;
-process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "sse-auth-test-secret";
-
-const core = await import("../../src/lib/db/core.ts");
-const providersDb = await import("../../src/lib/db/providers.ts");
-const settingsDb = await import("../../src/lib/db/settings.ts");
-const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
-const auth = await import("../../src/sse/services/auth.ts");
-const quotaCache = await import("../../src/domain/quotaCache.ts");
-const fallback = await import("../../open-sse/services/accountFallback.ts");
-
-async function resetStorage() {
-  core.resetDbInstance();
-  apiKeysDb.resetApiKeyState();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-  fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
-}
-
-function futureIso(ms = 60_000) {
-  return new Date(Date.now() + ms).toISOString();
-}
-
-async function seedConnection(provider: string, overrides: any = {}) {
-  return providersDb.createProviderConnection({
-    provider,
-    authType: overrides.authType || "apikey",
-    name: overrides.name || `${provider}-${Math.random().toString(16).slice(2, 8)}`,
-    email: overrides.email,
-    // Unique per connection by default — real accounts have distinct keys, and
-    // createProviderConnection dedups by decrypted key value (#3023), so a shared
-    // default would collapse multiple seeded connections into one and break
-    // round-robin / least-used / fallback selection tests.
-    apiKey: overrides.apiKey || `sk-test-${Math.random().toString(16).slice(2, 10)}`,
-    accessToken: overrides.accessToken,
-    refreshToken: overrides.refreshToken,
-    isActive: overrides.isActive ?? true,
-    testStatus: overrides.testStatus || "active",
-    priority: overrides.priority,
-    rateLimitedUntil: overrides.rateLimitedUntil,
-    lastError: overrides.lastError,
-    lastErrorType: overrides.lastErrorType,
-    lastErrorSource: overrides.lastErrorSource,
-    errorCode: overrides.errorCode,
-    backoffLevel: overrides.backoffLevel,
-    providerSpecificData: overrides.providerSpecificData || {},
-    lastUsedAt: overrides.lastUsedAt,
-    consecutiveUseCount: overrides.consecutiveUseCount,
-  });
-}
-
-function msUntil(timestamp) {
-  return new Date(timestamp).getTime() - Date.now();
-}
-
-async function flushWrites() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
+import {
+  apiKeysDb,
+  auth,
+  cleanupStorage,
+  core,
+  fallback,
+  flushWrites,
+  futureIso,
+  msUntil,
+  providersDb,
+  quotaCache,
+  resetStorage,
+  seedConnection,
+  settingsDb,
+} from "./_fixtures/sseAuthHarness";
 
 test.beforeEach(async () => {
   await resetStorage();
 });
 
 test.after(async () => {
-  core.resetDbInstance();
-  apiKeysDb.resetApiKeyState();
-  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  cleanupStorage();
 });
 
 test("extractApiKey parses bearer headers and isValidApiKey validates persisted keys", async () => {

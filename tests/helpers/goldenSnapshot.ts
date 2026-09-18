@@ -49,7 +49,7 @@ export function goldenSnapshot(name: string, value: unknown, dir = DEFAULT_DIR):
     return;
   }
 
-  const expected = fs.readFileSync(file, "utf8").trimEnd();
+  const expected = fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n").trimEnd();
   if (serialized !== expected) {
     throw new GoldenMismatchError(name, expected, serialized);
   }

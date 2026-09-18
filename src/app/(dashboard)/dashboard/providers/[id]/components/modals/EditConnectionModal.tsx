@@ -50,10 +50,12 @@ import { getWebSessionCredentialRequirement } from "../../webSessionCredentials"
 import { useOpenRouterPresetControl } from "../OpenRouterPresetInput";
 import WebSessionCredentialGuide from "../WebSessionCredentialGuide";
 import CcCompatibleRequestDefaultsFields from "./CcCompatibleRequestDefaultsFields";
+import { AdvancedSettingsToggle, GlmConnectionFields } from "./ConnectionModalSharedFields";
 import { assignEditApiKeyProviderSpecificData } from "./connectionProviderSpecificData";
 import { isM365TierCapableProvider, normalizeM365TierValue, type M365TierValue } from "./m365Tier";
 import QuotaScrapingFields, { EMPTY_QUOTA_SCRAPING_FIELDS } from "./QuotaScrapingFields";
-import GlmTeamQuotaFields, { EMPTY_GLM_TEAM_QUOTA_FIELDS } from "./GlmTeamQuotaFields";
+import { EMPTY_GLM_TEAM_QUOTA_FIELDS } from "./GlmTeamQuotaFields";
+import ValidationModelInput from "./ValidationModelInput";
 
 export interface EditConnectionModalConnection {
   id?: string;
@@ -891,21 +893,12 @@ export default function EditConnectionModal({
                 {validationResult === "success" ? t("valid") : t("invalid")}
               </Badge>
             )}
-            <button
-              type="button"
-              className="text-sm text-text-muted hover:text-text-primary flex items-center gap-1"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              aria-expanded={showAdvanced}
-              aria-controls="edit-connection-advanced-settings"
-            >
-              <span
-                className={`transition-transform ${showAdvanced ? "rotate-90" : ""}`}
-                aria-hidden="true"
-              >
-                ▶
-              </span>
-              {t("advancedSettings")}
-            </button>
+            <AdvancedSettingsToggle
+              expanded={showAdvanced}
+              controls="edit-connection-advanced-settings"
+              onToggle={() => setShowAdvanced(!showAdvanced)}
+              label={t("advancedSettings")}
+            />
             {showAdvanced && (
               <div
                 id="edit-connection-advanced-settings"
@@ -1006,12 +999,10 @@ export default function EditConnectionModal({
                 </div>
               </div>
             )}
-            <Input
-              label={t("validationModelIdLabel")}
-              placeholder={t("validationModelIdPlaceholder")}
+            <ValidationModelInput
               value={formData.validationModelId}
-              onChange={(e) => setFormData({ ...formData, validationModelId: e.target.value })}
-              hint={t("validationModelIdHint")}
+              onChange={(validationModelId) => setFormData({ ...formData, validationModelId })}
+              t={t}
             />
           </>
         )}
@@ -1067,27 +1058,11 @@ export default function EditConnectionModal({
         )}
 
         {isGlm && (
-          <div className="flex flex-col gap-3">
-            <div>
-              <label className="text-sm font-medium text-text-main mb-1 block">
-                {t("apiRegionLabel")}
-              </label>
-              <select
-                value={formData.apiRegion}
-                onChange={(e) => setFormData({ ...formData, apiRegion: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
-              >
-                <option value="international">{t("apiRegionInternational")}</option>
-                <option value="china">{t("apiRegionChina")}</option>
-              </select>
-              <p className="text-xs text-text-muted mt-1">{t("apiRegionHint")}</p>
-            </div>
-            <GlmTeamQuotaFields
-              values={formData}
-              onChange={(patch) => setFormData({ ...formData, ...patch })}
-              t={t}
-            />
-          </div>
+          <GlmConnectionFields
+            values={formData}
+            onChange={(patch) => setFormData({ ...formData, ...patch })}
+            t={t}
+          />
         )}
 
         {!isOAuth && connection?.apiKey && (

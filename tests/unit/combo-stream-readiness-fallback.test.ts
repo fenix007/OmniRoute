@@ -547,7 +547,7 @@ test("combo retries 504 on same model before falling through (transient retry)",
         { model: "glm/zombie", weight: 0 },
         { model: "openai/gpt-5.4-mini", weight: 0 },
       ],
-      config: { maxRetries: 1, retryDelayMs: 0 },
+      config: { maxRetries: 1, retryDelayMs: 0, failoverBeforeRetry: false },
     },
     handleSingleModel: async (_body: any, modelStr: string) => {
       calls.push(modelStr);

@@ -11,8 +11,13 @@ const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
 const chatRoute = await import("../../src/app/api/v1/chat/completions/route.ts");
-const { generateSignature, invalidateBySignature, setCachedResponse } =
-  await import("../../src/lib/semanticCache.ts");
+const {
+  clearCache,
+  generateSignature,
+  invalidateBySignature,
+  requestVariantOf,
+  setCachedResponse,
+} = await import("../../src/lib/semanticCache.ts");
 const { getCircuitBreaker, resetAllCircuitBreakers, STATE } =
   await import("../../src/shared/utils/circuitBreaker.ts");
 
@@ -28,6 +33,7 @@ async function resetStorage() {
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
   resetAllCircuitBreakers();
+  clearCache();
 }
 
 async function seedSuppressedConnection() {
@@ -185,11 +191,25 @@ test("combo live test bypasses connection cooldown and breaker state to perform 
 test("combo live test bypasses semantic cache and forces a fresh upstream request", async () => {
   await seedHealthyConnection();
 
+  const requestBody = {
+    model: "openai/gpt-4.1",
+    messages: [{ role: "user", content: "Reply with OK only." }],
+    max_tokens: 16,
+    stream: false,
+    temperature: 0,
+  };
+
   const signature = generateSignature(
     "gpt-4.1",
-    [{ role: "user", content: "Reply with OK only." }],
+    requestBody.messages,
     0,
-    1
+    undefined,
+    undefined,
+    requestVariantOf(requestBody, {
+      endpoint: "/v1/chat/completions",
+      sourceFormat: "openai",
+      provider: "openai",
+    })
   );
 
   setCachedResponse(signature, "gpt-4.1", {
@@ -248,6 +268,7 @@ test("combo live test bypasses semantic cache and forces a fresh upstream reques
 
 test("chat completions route emits early keepalive while waiting for stream readiness", async () => {
   await seedHealthyConnection();
+  process.env.OMNIROUTE_KEEPALIVE_THRESHOLD_MS = "100";
 
   globalThis.fetch = async () => {
     await new Promise((resolve) => setTimeout(resolve, 2200));
@@ -269,14 +290,18 @@ test("chat completions route emits early keepalive while waiting for stream read
     );
   };
 
-  const response = await chatRoute.POST(makeStreamingRequest());
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
+  try {
+    const response = await chatRoute.POST(makeStreamingRequest());
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
 
-  const body = await readAll(response);
-  assert.match(body, /: omniroute-keepalive/);
-  assert.match(body, /OK/);
-  assert.match(body, /\[DONE\]/);
+    const body = await readAll(response);
+    assert.match(body, /: omniroute-keepalive/);
+    assert.match(body, /OK/);
+    assert.match(body, /\[DONE\]/);
+  } finally {
+    delete process.env.OMNIROUTE_KEEPALIVE_THRESHOLD_MS;
+  }
 });
 
 test("chat completions route returns JSON without early SSE framing when stream is omitted and Accept is application/json", async () => {

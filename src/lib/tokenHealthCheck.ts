@@ -25,6 +25,13 @@ import {
   refreshCopilotToken,
 } from "@omniroute/open-sse/services/tokenRefresh.ts";
 import { pickMaskedDisplayValue } from "@/shared/utils/maskEmail";
+import {
+  canClearGitHubNoRefreshTokenState,
+  getCopilotTokenExpiryMs,
+  getEffectiveTokenExpiryIso,
+  getEffectiveTokenExpiryMs,
+  isGitHubAccessTokenOnlyConnection,
+} from "./tokenHealthCheckHelpers";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const TICK_MS = 60 * 1000; // sweep interval: every 60 seconds
@@ -64,46 +71,7 @@ export function extractResolvedProxyConfig(resolvedProxy: unknown) {
   return resolvedProxy ?? null;
 }
 
-function getEffectiveTokenExpiryIso(conn: any): string | null {
-  if (!conn || typeof conn !== "object") return null;
-  return conn.tokenExpiresAt || conn.expiresAt || null;
-}
-
-function getEffectiveTokenExpiryMs(conn: any): number {
-  const effectiveExpiry = getEffectiveTokenExpiryIso(conn);
-  if (!effectiveExpiry) return 0;
-  const expiryMs = new Date(effectiveExpiry).getTime();
-  return Number.isFinite(expiryMs) ? expiryMs : 0;
-}
-
 const TOKEN_EXPIRY_BUFFER = 5 * 60 * 1000; // 5 minutes
-
-function getCopilotTokenExpiryMs(expiresAt: unknown): number {
-  if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
-    return expiresAt < 1e12 ? expiresAt * 1000 : expiresAt;
-  }
-  if (typeof expiresAt === "string" && expiresAt.trim()) {
-    const parsed = new Date(expiresAt).getTime();
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
-
-function isGitHubAccessTokenOnlyConnection(conn: any): boolean {
-  return (
-    String(conn?.provider || "").toLowerCase() === "github" &&
-    typeof conn?.accessToken === "string" &&
-    conn.accessToken.trim().length > 0
-  );
-}
-
-function canClearGitHubNoRefreshTokenState(conn: any): boolean {
-  return (
-    !conn?.testStatus ||
-    conn.testStatus === "active" ||
-    (conn.testStatus === "expired" && conn.errorCode === "no_refresh_token")
-  );
-}
 
 // ── Refresh circuit breaker ───────────────────────────────────────────────
 // A refresh that returns null (network blip, dead proxy, unclassified error)

@@ -1,3 +1,9 @@
+import { setCachedCodexResetCredits, type CodexResetCreditList } from "./codexResetCreditCache";
+export {
+  getCachedCodexResetCredits,
+  setCachedCodexResetCredits as __setCachedCodexResetCreditsForTests,
+  type CodexResetCreditList,
+} from "./codexResetCreditCache";
 import { getProviderConnectionById } from "@/lib/db/providers";
 import { resolveProxyForConnection } from "@/lib/db/settings";
 import {
@@ -26,32 +32,6 @@ type CodexConnectionLike = JsonRecord & {
 };
 
 export type CodexResetCreditOutcome = "reset" | "alreadyRedeemed";
-
-export interface CodexResetCreditList {
-  availableCount: number;
-  credits: Array<{ expiresAt: string | null }>;
-}
-
-const RESET_CREDIT_CACHE_TTL_MS = 15 * 60_000;
-const resetCreditCache = new Map<string, { value: CodexResetCreditList; fetchedAt: number }>();
-
-export function getCachedCodexResetCredits(connectionId: string): CodexResetCreditList | null {
-  const cached = resetCreditCache.get(connectionId);
-  if (!cached || Date.now() - cached.fetchedAt >= RESET_CREDIT_CACHE_TTL_MS) return null;
-  return cached.value;
-}
-
-/** Seed/clear the credit cache from tests; mirrors `quotaCache.__clearForTests`. */
-export function __setCachedCodexResetCreditsForTests(
-  connectionId: string,
-  value: CodexResetCreditList | null
-) {
-  if (value === null) {
-    resetCreditCache.delete(connectionId);
-    return;
-  }
-  resetCreditCache.set(connectionId, { value, fetchedAt: Date.now() });
-}
 
 export class CodexResetCreditError extends Error {
   status: number;
@@ -418,7 +398,7 @@ export async function listCodexResetCredits(connectionId: string): Promise<Codex
       availableCount: credits.length,
       credits: credits.map(({ expiresAt }) => ({ expiresAt })),
     };
-    resetCreditCache.set(connectionId.trim(), { value, fetchedAt: Date.now() });
+    setCachedCodexResetCredits(connectionId.trim(), value);
     return value;
   } catch (error) {
     if (error instanceof CodexResetCreditError) throw error;

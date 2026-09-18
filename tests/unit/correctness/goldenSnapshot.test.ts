@@ -39,3 +39,14 @@ test("goldenSnapshot first-run (no UPDATE_GOLDEN) writes and passes", () => {
     fs.rmSync(td, { recursive: true, force: true });
   }
 });
+
+test("goldenSnapshot accepts CRLF without masking value changes", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "golden-crlf-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "sample.json");
+  const expected = '{\r\n  "a": 1\r\n}\r\n';
+  fs.writeFileSync(file, expected);
+  assert.doesNotThrow(() => goldenSnapshot("sample", { a: 1 }, dir));
+  assert.throws(() => goldenSnapshot("sample", { a: 2 }, dir));
+  assert.equal(fs.readFileSync(file, "utf8"), expected);
+});

@@ -111,7 +111,7 @@ test("raw HTTP guard rejects undici-unsupported methods (TRACE/TRACK/CONNECT) on
 });
 
 test("OpenAPI documents high-risk route auth and setup responses", () => {
-  const spec = readFileSync("docs/openapi.yaml", "utf8");
+  const spec = readFileSync("docs/openapi.yaml", "utf8").replace(/\r\n/g, "\n");
   const apiKeyDetailStart = spec.indexOf("  /api/keys/{id}:");
   const apiKeyDetailEnd = spec.indexOf("\n  /api/combos:", apiKeyDetailStart);
   const apiKeyDetail = spec.slice(apiKeyDetailStart, apiKeyDetailEnd);

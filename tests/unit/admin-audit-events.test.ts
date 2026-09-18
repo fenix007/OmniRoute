@@ -4,12 +4,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeManagementSessionRequest } from "../helpers/managementSession.ts";
+import { CLIENT_IP_HEADER, stampClientIp } from "../../src/server/authz/clientIpStamp.ts";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-admin-audit-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.APP_LOG_TO_FILE = "false";
 process.env.JWT_SECRET = "test-jwt-secret-for-audit-events";
 process.env.INITIAL_PASSWORD = "admin-secret";
+const originalPeerStampToken = process.env.OMNIROUTE_PEER_STAMP_TOKEN;
+const PEER_STAMP_TOKEN = "admin-audit-peer-stamp-token";
+process.env.OMNIROUTE_PEER_STAMP_TOKEN = PEER_STAMP_TOKEN;
 
 const core = await import("../../src/lib/db/core.ts");
 const compliance = await import("../../src/lib/compliance/index.ts");
@@ -38,7 +42,15 @@ test.afterEach(() => {
 test.after(() => {
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  if (originalPeerStampToken === undefined) delete process.env.OMNIROUTE_PEER_STAMP_TOKEN;
+  else process.env.OMNIROUTE_PEER_STAMP_TOKEN = originalPeerStampToken;
 });
+
+function authenticatedClientIp(ip: string): string {
+  const stamp = stampClientIp(ip, PEER_STAMP_TOKEN);
+  assert.ok(stamp);
+  return stamp;
+}
 
 test("auth login/logout routes emit structured audit events with ip and request id", async () => {
   const setCalls = [];
@@ -56,7 +68,8 @@ test("auth login/logout routes emit structured audit events with ip and request 
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-forwarded-for": "198.51.100.10",
+        "x-forwarded-for": "203.0.113.99",
+        [CLIENT_IP_HEADER]: authenticatedClientIp("198.51.100.10"),
         "x-request-id": "req-auth-login",
       },
       body: JSON.stringify({ password: "admin-secret" }),
@@ -71,7 +84,8 @@ test("auth login/logout routes emit structured audit events with ip and request 
     new Request("http://localhost/api/auth/logout", {
       method: "POST",
       headers: {
-        "x-forwarded-for": "198.51.100.10",
+        "x-forwarded-for": "203.0.113.99",
+        [CLIENT_IP_HEADER]: authenticatedClientIp("198.51.100.10"),
         "x-request-id": "req-auth-logout",
       },
     })
@@ -105,7 +119,8 @@ test("auth login route records failed password attempts", async () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-forwarded-for": "198.51.100.22",
+        "x-forwarded-for": "203.0.113.99",
+        [CLIENT_IP_HEADER]: authenticatedClientIp("198.51.100.22"),
         "x-request-id": "req-auth-failed",
       },
       body: JSON.stringify({ password: "wrong-password" }),

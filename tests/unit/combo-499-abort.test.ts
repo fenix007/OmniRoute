@@ -130,10 +130,13 @@ test("signal abort during fallback wait interrupts immediately", async () => {
   const startMs = Date.now();
   const result = await handleComboChat({
     body: { model: "test", messages: [{ role: "user", content: "hi" }] },
-    combo: makeCombo("priority", ["a/m1", "b/m2"]),
+    combo: {
+      ...makeCombo("priority", ["a/m1", "b/m2"]),
+      config: { maxRetries: 0, fallbackDelayMs: 5000 },
+    },
     handleSingleModel,
     log,
-    settings: { fallbackDelayMs: 5000 }, // 5s delay would normally be slow
+    settings: {},
     allCombos: [],
     signal: ac.signal,
   });
