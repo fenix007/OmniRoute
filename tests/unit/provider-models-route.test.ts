@@ -713,7 +713,12 @@ test("provider models route returns the expanded local catalog for Kiro", async 
   assert.equal(kiroIds.has("claude-opus-4.7") || kiroIds.has("claude-sonnet-4.6"), false); // fabricated ids removed
 });
 
-test("provider models route returns the local catalog for new built-in chat-openai-compat providers", async () => {
+test("provider models route falls back to the local DeepInfra catalog on discovery HTTP failure", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return new Response("unauthorized", { status: 401 });
+  };
   const connection = await seedConnection("deepinfra", {
     apiKey: "deepinfra-key",
   });
@@ -721,6 +726,8 @@ test("provider models route returns the local catalog for new built-in chat-open
   const response = await callRoute(connection.id);
   const body = (await response.json()) as any;
 
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /^https:\/\/api\.deepinfra\.com\/.*models$/);
   assert.equal(response.status, 200);
   assert.equal(body.provider, "deepinfra");
   assert.equal(body.source, "local_catalog");

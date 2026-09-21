@@ -185,10 +185,10 @@ test("CodexExecutor.buildHeaders binds workspace ids and disables SSE accept for
   assert.equal(standardHeaders.Authorization, "Bearer codex-token");
   assert.equal(standardHeaders.Accept, "text/event-stream");
   assert.equal(standardHeaders["chatgpt-account-id"], "workspace-1");
-  assert.equal(standardHeaders.Version, "0.153.4");
+  assert.equal(standardHeaders.Version, "0.155.0");
   assert.equal(standardHeaders["Openai-Beta"], "responses=experimental");
   assert.equal(standardHeaders["X-Codex-Beta-Features"], "responses_websockets");
-  assert.equal(standardHeaders["User-Agent"], "codex-cli/0.153.4 (Windows 10.0.26200; x64)");
+  assert.equal(standardHeaders["User-Agent"], "codex-cli/0.155.0 (Windows 10.0.26200; x64)");
   assert.equal(compactHeaders.Accept, "application/json");
 });
 
@@ -302,7 +302,7 @@ test("CodexExecutor.buildHeaders honors safe env overrides for Version and User-
     },
     () => {
       const headers = executor.buildHeaders({ accessToken: "codex-token" }, true);
-      assert.equal(headers.Version, "0.153.4");
+      assert.equal(headers.Version, "0.155.0");
       assert.equal(headers["User-Agent"], "custom-codex/9.9.9");
     }
   );
@@ -1065,6 +1065,8 @@ test("CodexExecutor.execute captures the exact websocket request body before sen
   assert.equal(sentBody.model, "gpt-5.5");
   assert.equal(websocketHeaders?.["OpenAI-Beta"], "responses_websockets=2026-02-06");
   assert.equal(websocketHeaders?.Origin, "https://chatgpt.com");
+  assert.equal(websocketHeaders?.Version, "0.155.0");
+  assert.equal(websocketHeaders?.["User-Agent"], "codex-cli/0.155.0 (Windows 10.0.26200; x64)");
 });
 
 test("CodexExecutor.execute adds CLI-like session identity headers without changing response flow", async () => {

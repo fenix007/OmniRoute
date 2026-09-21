@@ -1,0 +1,1 @@
+- **fix(codex):** Align the default request headers, client identity preset, model discovery and optional Docker CLI with Codex 0.155.0, preserving safe environment and account overrides ([#14052](https://github.com/diegosouzapw/OmniRoute/pull/14052)) — thanks @backryun.

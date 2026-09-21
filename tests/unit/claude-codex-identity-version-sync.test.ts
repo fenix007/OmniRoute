@@ -12,6 +12,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { getClientIdentityProfileHeaders } from "../../src/shared/constants/clientIdentityProfiles.ts";
 
 const id = await import("../../open-sse/executors/claudeIdentity.ts");
 const hdr = await import("../../open-sse/config/anthropicHeaders.ts");
@@ -40,8 +42,20 @@ test("Claude CLI is pinned to the captured 2.1.207 release", () => {
   assert.equal(id.CLAUDE_CODE_VERSION, "2.1.207");
 });
 
-test("Codex client is pinned to the captured 0.153.4 release", () => {
-  assert.equal(codexCfg.getCodexClientVersion(), "0.153.4");
-  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.153.4 (Windows 10.0.26200; x64)");
-  assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.153.4");
+test("Codex client is pinned to the captured 0.155.0 release", () => {
+  assert.equal(codexCfg.getCodexClientVersion(), "0.155.0");
+  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.155.0 (Windows 10.0.26200; x64)");
+  assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.155.0");
+});
+
+test("Codex CLI preset and optional Docker CLI stay aligned with the wire version", () => {
+  const version = codexCfg.getCodexClientVersion();
+  assert.equal(
+    getClientIdentityProfileHeaders("codex-cli")["User-Agent"],
+    `codex_cli_rs/${version}`
+  );
+  const dockerfile = readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8");
+  const cliStage = dockerfile.split("FROM runner-base AS runner-cli")[1];
+  assert.ok(cliStage, "optional runner-cli stage must exist");
+  assert.equal(cliStage.match(/@openai\/codex(?:@([^\s]+))?/)?.[1], version);
 });

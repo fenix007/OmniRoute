@@ -445,7 +445,7 @@ test("chat pipeline applies Codex CLI fingerprint to OAuth responses requests", 
   assert.equal(call.headers.Version, getCodexClientVersion());
   assert.equal(call.headers["Openai-Beta"], "responses=experimental");
   assert.equal(call.headers["X-Codex-Beta-Features"], "responses_websockets");
-  assert.equal(call.headers["User-Agent"], "codex-cli/0.153.4 (Windows 10.0.26200; x64)");
+  assert.equal(call.headers["User-Agent"], "codex-cli/0.155.0 (Windows 10.0.26200; x64)");
   assert.equal(call.headers["x-codex-window-id"], "conv_codex_fingerprint:0");
   assert.ok(call.headers["x-client-request-id"], "expected Codex request id header");
   assert.ok(call.headers["x-codex-turn-metadata"], "expected Codex turn metadata header");
@@ -1260,62 +1260,74 @@ test("chat pipeline falls back to the next account after a provider failure", as
   assert.equal(json.choices[0].message.content, "Second account succeeded");
 });
 
-test("chat pipeline falls back across combo models when the first provider fails", async () => {
-  // Reset provider failure state to avoid circuit breaker interference
-  clearProviderFailure("openai");
-  clearProviderFailure("claude");
-  await seedConnection("openai", { apiKey: "sk-openai-combo-fail" });
-  await seedConnection("claude", { apiKey: "sk-claude-combo-fail" });
-  await combosDb.createCombo({
-    name: "combo-fallback",
-    strategy: "priority",
-    config: { maxRetries: 0, retryDelayMs: 0 },
-    models: ["openai/gpt-4o-mini", "claude/claude-3-5-sonnet-20241022"],
-  });
-  const attempts = [];
-
-  globalThis.fetch = async (url, init: RequestInit = {}) => {
-    const call = {
-      url: String(url),
-      headers: toPlainHeaders(init.headers),
-    };
-    attempts.push(call);
-    if (call.url.endsWith("/chat/completions")) {
-      return new Response(JSON.stringify({ error: { message: "openai combo miss" } }), {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return buildClaudeResponse("Claude combo fallback");
-  };
-
-  const response = await handleChat(
-    buildRequest({
-      body: {
-        model: "combo-fallback",
-        stream: false,
-        messages: [{ role: "user", content: "Use combo fallback" }],
+for (const failoverBeforeRetry of [undefined, false]) {
+  test(`chat pipeline falls back across combo models (failoverBeforeRetry=${failoverBeforeRetry ?? "default"})`, async () => {
+    // Reset provider failure state to avoid circuit breaker interference
+    clearProviderFailure("openai");
+    clearProviderFailure("claude");
+    await seedConnection("openai", { apiKey: "sk-openai-combo-fail" });
+    await seedConnection("claude", { apiKey: "sk-claude-combo-fail" });
+    await combosDb.createCombo({
+      name: "combo-fallback",
+      strategy: "priority",
+      config: {
+        maxRetries: 0,
+        retryDelayMs: 0,
+        ...(failoverBeforeRetry === undefined ? {} : { failoverBeforeRetry }),
       },
-    })
-  );
+      models: ["openai/gpt-4o-mini", "claude/claude-3-5-sonnet-20241022"],
+    });
+    const attempts = [];
 
-  const json = (await response.json()) as any;
-  assert.equal(response.status, 200);
-  // Retry the pre-output 503 once on the same account before combo fallback.
-  assert.equal(attempts.length, 3, JSON.stringify(attempts.map((call) => call.url)));
-  assert.match(attempts[0].url, /\/chat\/completions$/);
-  assert.equal(attempts[1].url, attempts[0].url);
-  assert.equal(
-    new Headers(attempts[0].headers).get("authorization"),
-    "Bearer sk-openai-combo-fail"
-  );
-  assert.equal(
-    new Headers(attempts[1].headers).get("authorization"),
-    "Bearer sk-openai-combo-fail"
-  );
-  assert.match(attempts[2].url, /\?beta=true$/);
-  assert.equal(json.choices[0].message.content, "Claude combo fallback");
-});
+    globalThis.fetch = async (url, init: RequestInit = {}) => {
+      const call = {
+        url: String(url),
+        headers: toPlainHeaders(init.headers),
+      };
+      attempts.push(call);
+      if (call.url.endsWith("/chat/completions")) {
+        return new Response(JSON.stringify({ error: { message: "openai combo miss" } }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return buildClaudeResponse("Claude combo fallback");
+    };
+
+    const response = await handleChat(
+      buildRequest({
+        body: {
+          model: "combo-fallback",
+          stream: false,
+          messages: [{ role: "user", content: "Use combo fallback" }],
+        },
+      })
+    );
+
+    const json = (await response.json()) as any;
+    assert.equal(response.status, 200);
+    // The default prefers a sibling; explicit false retains the same-account retry.
+    assert.equal(
+      attempts.length,
+      failoverBeforeRetry === false ? 3 : 2,
+      JSON.stringify(attempts.map((call) => call.url))
+    );
+    assert.match(attempts[0].url, /\/chat\/completions$/);
+    assert.equal(
+      new Headers(attempts[0].headers).get("authorization"),
+      "Bearer sk-openai-combo-fail"
+    );
+    if (failoverBeforeRetry === false) {
+      assert.equal(attempts[1].url, attempts[0].url);
+      assert.equal(
+        new Headers(attempts[1].headers).get("authorization"),
+        "Bearer sk-openai-combo-fail"
+      );
+    }
+    assert.match(attempts.at(-1).url, /\?beta=true$/);
+    assert.equal(json.choices[0].message.content, "Claude combo fallback");
+  });
+}
 
 test("chat pipeline deduplicates concurrent identical non-stream requests", async () => {
   // Reset provider failure state to avoid circuit breaker interference

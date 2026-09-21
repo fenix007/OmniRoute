@@ -670,3 +670,65 @@ main/release/dev commits, releases and discussion lists. Technical review remain
 partial; deferred candidates and previous source boundaries are retained in the
 existing automation memory. The unchanged original checkout and prior worktrees
 are preserved. Source-review boundaries are not advanced by this continuation.
+
+
+## Codex client maintenance — 2026-09-21
+
+Adapted [diegosouzapw/OmniRoute #14052](https://github.com/diegosouzapw/OmniRoute/pull/14052)
+from exact head `0f2882eceeb8a92cf3108efbdad13423e8524a89` (OPEN,
+updated 2026-09-19; no merge commit). Decision: **adapt**. The fork advertised
+Codex 0.153.4 while this change tracks the released 0.155.0 client. OpenAI's
+version-gated catalog and Responses endpoint share the existing version helper.
+The official release and npm package for 0.155.0 were verified on 2026-09-21.
+This is a client compatibility update, not a claim that 0.153.4 is currently
+rejected by the live provider.
+
+- Update the existing `open-sse/config/codexClient.ts` constant and compatible
+  client identity preset together. The newer upstream shared constants module
+  and incoming-client version forwarding from #13708 are not dependencies and
+  are not imported into the frozen base.
+- Pin only the already-installed Codex package in the optional `runner-cli`
+  Docker stage; the production `runner-base` target does not install that CLI.
+  Update environment examples, documented defaults and Codex golden headers.
+  No new production dependency, account migration or runtime is introduced.
+- Keep validated environment overrides, persisted account/custom headers,
+  credential precedence and existing HTTP/WebSocket behavior intact. Existing
+  deployment environment pins are not rewritten by this source update.
+- Upstream has no submitted reviews. Several upstream CI jobs are red, including
+  native unit shards, fast gates and API route typechecking. Author comments
+  report a successful live smoke; that is not local live-provider validation.
+  The adaptation is checked independently on the fork.
+- Updated expectations fail 7/67 on the original production code; the extended
+  identity/HTTP/WebSocket checks fail 5/42 before the version change. Regression
+  checks cover HTTP and native WebSocket headers, compact responses, safe and
+  invalid environment overrides, catalog discovery/fallback, profile credential
+  protection, CLI/version alignment and provider golden snapshots.
+- Expanded validation found an existing integration test expecting a same-account
+  retry despite the default `failoverBeforeRetry: true`. The failure reproduces
+  on clean `6d21ae02533f8fd0a40ad7182608f68a294c4ef5`. The test now checks both
+  default immediate fallback and explicit `false` with the original same-account
+  retry assertions. Production routing and retry budgets are unchanged.
+
+This targeted continuation does not repeat the two-source discovery scan or
+advance source-review boundaries. Publication follows the existing `[skip ci]`
+policy; no image, release, workflow dispatch or deployment is included.
+
+The first coverage run exposed an unrelated network-dependent DeepInfra catalog
+test: it sent its dummy key to the real service, and a 10-second timeout produced
+504 instead of the expected local-catalog 200. A controlled aborting fetch on
+clean stable reproduces that failure. The test now supplies a deterministic 401
+response and verifies the discovery URL/call count plus all original catalog
+assertions. The complete provider-model route suite passes 59/59. Production
+network errors, timeout handling and fallback policy are unchanged.
+
+Final validation: the focused protocol/integration/golden run passes 123/123;
+provider-model route tests pass 59/59. `npm run test:unit` passes all three
+collectors. After the test-only network repair, the complete
+`npm run test:coverage` passes 23,310 native, 102 dashboard and 20 serial tests
+(14 native skips), with 80.98% lines/statements, 78.36% branches and 86.59%
+functions. All four unchanged 60% gates pass. Full lint, changed-test lint,
+core typecheck, size/discovery, code/test/snapshot formatting, docs/env sync,
+fabricated-doc checks, any-budget, changelog and tracked-artifact gates pass.
+No live-provider validation or production/Docker build was run for this bounded
+version update. The source PR head and `origin/stable` were rechecked unchanged
+before publication.

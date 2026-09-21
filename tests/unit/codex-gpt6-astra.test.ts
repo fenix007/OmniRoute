@@ -138,8 +138,8 @@ test("VS Code discovery splits Astra's extended effort aliases off the base id",
 test("Codex identifies as a client version Astra accepts", () => {
   // Astra rejects older clients with HTTP 400 "requires a newer version of Codex"
   // (upstream issue #12761), so the advertised identity gates the whole model.
-  assert.equal(getCodexClientVersion(), "0.153.4");
-  assert.equal(getCodexDefaultHeaders().Version, "0.153.4");
+  assert.equal(getCodexClientVersion(), "0.155.0");
+  assert.equal(getCodexDefaultHeaders().Version, "0.155.0");
 });
 
 test("Codex Fast bills GPT-6 Astra at the 2.5x multiplier", () => {
