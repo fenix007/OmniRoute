@@ -1,0 +1,1 @@
+- **fix(routing):** Recheck the cooldown deadline after timer wakeup so an early timer cannot consume the only retry while the account remains rate-limited; preserve cancellation and timer/listener cleanup.

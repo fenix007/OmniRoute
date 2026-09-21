@@ -135,9 +135,16 @@ export async function waitForCooldownAwareRetry(
   if (!Number.isFinite(waitMs) || waitMs <= 0) return signal?.aborted !== true;
 
   return await new Promise((resolve) => {
+    const deadline = Date.now() + waitMs;
     let settled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(function onTimeout() {
       if (settled) return;
+      // Timers can wake slightly early; do not consume a retry before cooldown ends.
+      const remainingMs = deadline - Date.now();
+      if (remainingMs > 0) {
+        timeoutId = setTimeout(onTimeout, remainingMs);
+        return;
+      }
       settled = true;
       if (signal) {
         signal.removeEventListener("abort", onAbort);
