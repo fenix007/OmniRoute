@@ -1,0 +1,1 @@
+- **fix(gemini):** Normalize digit-leading tool names before length and collision handling, preserving the original client-visible names ([#13738](https://github.com/diegosouzapw/OmniRoute/pull/13738), [#13752](https://github.com/diegosouzapw/OmniRoute/pull/13752)) — thanks @L4XB and @xiechimon.

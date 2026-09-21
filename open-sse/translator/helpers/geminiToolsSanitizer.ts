@@ -60,10 +60,14 @@ function normalizeGeminiToolName(
         return namespaceIndex >= 0 ? trimmed.slice(namespaceIndex + 1) : trimmed;
       })();
 
-  return namespaceStripped
-    .replace(/[^a-zA-Z0-9_]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  return (
+    namespaceStripped
+      .replace(/[^a-zA-Z0-9_]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      // Prefix before length/collision hashing so every wire name starts legally.
+      .replace(/^(\d)/, "t$1")
+  );
 }
 
 function buildHashedGeminiToolName(

@@ -581,3 +581,92 @@ a combo strategy. Dependency and environment contracts now document the existing
 and live-STT implementation. The complete unit suite passes, including dashboard and
 serial collectors; core typecheck, lint, file-size, discovery and production build
 remain green. This remains local fork maintenance, not an upstream port.
+
+
+## Upstream review — 2026-09-21
+
+Adapted [diegosouzapw/OmniRoute #13738](https://github.com/diegosouzapw/OmniRoute/pull/13738)
+from reviewed head `e28e26ee460b776cec07b6787402b73897698e94`, merged upstream
+on 2026-09-18 as `39cf76c11dd6ee56ca212335dcde3542375f3a0d`.
+Decision: **adapt**. The v3.8.48 helper still forwarded digit-leading Gemini
+function names, causing the provider to reject the entire tool catalog.
+
+- Preserve the upstream `t` prefix in `normalizeGeminiToolName`, before the
+  existing length cap and collision hashing. Keep reverse-name restoration,
+  schema cleaning and all provider/account policies intact; no new dependency.
+- The production helper matches the upstream preimage. Only the explanatory
+  comment is shortened. Extend the regression coverage instead of importing
+  later translator changes.
+- Reuse and extend the previously held #13752 regression scenarios in this
+  isolated worktree; the original dirty checkout is untouched. #13752 was closed
+  unmerged as a duplicate on 2026-09-19. This adaptation follows the merged #13738
+  prefix, rather than the duplicate's underscore prefix.
+- Tests cover short/all-digit names, existing valid names, character replacement,
+  namespace stripping, 63/64/65/128-character boundaries, repeated mappings,
+  collisions with both `_1tool` and `t1tool` in opposite insertion orders,
+  declarations/calls/results, and original-name restoration in OpenAI Chat,
+  Responses and Anthropic event shapes. OpenAI/Claude request translators are
+  exercised with both stream flags, with input immutability assertions.
+- On clean `origin/stable` at `28231896d4595904748a04a02ba4d32a36bfcb78`,
+  14 of the 15 regression tests fail. After the adaptation all 15 pass;
+  the combined seven-suite helper/translator run passes 46/46.
+
+Upstream has no submitted review on #13738; available checks show a successful
+security scan and neutral merge checks. The maintainer reports merge-train tests,
+but this is not a claim that all upstream CI passed. Local gate results and
+source-discovery evidence are retained in repository-local automation memory.
+This maintenance uses the existing `[skip ci]` policy; no release, image publish,
+workflow dispatch or deployment is part of this change.
+
+
+The initial full-unit failures are resolved by a separate local test-maintenance
+change, with production memory/UI behavior unchanged:
+
+- Replace the fixed 10ms extraction sleep with a bounded wait for the existing
+  queue's `active` and `queued` counters to reach zero. All original persisted
+  content, count and ownership assertions remain. A controlled 25ms-per-job probe
+  on clean stable reproduces two failures with the old wait (13/15) and passes
+  15/15 with the repaired wait. Keep the helper outside the frozen-size test file.
+- Normalize CRLF at the UI test's source read; the committed modal blob already
+  uses LF. This removes a checkout-dependent source assertion without changing
+  the production component or increasing any quality baseline.
+- Remove a nested `c8` invocation from `test:coverage:runner`. It cleared the
+  outer collector's V8 files before dashboard tests, excluding native results
+  and preventing the serial stage when the dashboard-only threshold failed.
+  The outer collector and all four 60% thresholds are unchanged. A behavioral
+  fixture runs the real three stage wrappers with small test processes: the
+  original script loses native coverage; the corrected script retains all three.
+- Independent consultation used Claude Code CLI `claude-opus-5`, with tools
+  disabled. Its collision concern led to additional assertions that all three
+  declarations survive and the executor's second sanitization preserves them.
+  Request translators use per-request maps; original-name restoration remains
+  covered. Broader native-catalog and forced-tool support is not introduced.
+
+A further local production fix was required by the coverage run: the cooldown
+retry timer woke at `13:42:19.134Z` while the account deadline was
+`13:42:19.135Z`, consumed the only retry and returned 429. The wait helper now
+rechecks its deadline after wakeup and reschedules only the remaining interval.
+No retry budget, rate limit or account policy changes. Two deterministic tests
+fail against the original helper; all four pass after repair, covering early/late
+wakeups, abort during the rescheduled wait, stale callbacks, concurrent waits and
+listener/timer cleanup. The existing real-429 recovery test is unchanged.
+This is a fork-local correction, not an upstream port.
+
+Final focused validation passes 46/46 Gemini/helper tests and 20/20 repaired-gate
+tests. The full `npm run test:unit` passes: 23,304 native tests, 102 dashboard tests
+and 20 serial tests, with 14 native skips and no failures. Full lint, core
+typecheck, file-size, discovery, formatting of changed code/tests/changelog,
+docs-sync, explicit-any budget and tracked-artifact checks pass.
+The final `npm run test:coverage` reruns all three collectors on the complete
+patch set: 23,309 native, 102 dashboard and 20 serial tests pass (14 native skips).
+Coverage is 80.97% lines/statements, 78.37% branches and 86.58%
+functions; all unchanged 60% gates pass. Focused cooldown/account tests pass
+21/21, with another 5/5 neighboring combo tests. Changed-file typechecking also
+passes. Production builds and live-provider validation were not run for this
+bounded change.
+
+Discovery covers paginated PR lists from both sources since 2026-09-11, their
+main/release/dev commits, releases and discussion lists. Technical review remains
+partial; deferred candidates and previous source boundaries are retained in the
+existing automation memory. The unchanged original checkout and prior worktrees
+are preserved. Source-review boundaries are not advanced by this continuation.
