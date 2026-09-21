@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 const modalPath =
   "src/app/(dashboard)/dashboard/providers/[id]/components/modals/EditConnectionModal.tsx";
-const source = readFileSync(modalPath, "utf8");
+const source = readFileSync(modalPath, "utf8").replace(/\r\n/g, "\n");
 
 describe("agy Project ID UI support", () => {
   it("declares a single Antigravity-family provider gate", () => {

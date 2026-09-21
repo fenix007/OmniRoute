@@ -10,6 +10,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const { handleChatCore } = await import("../../open-sse/handlers/chatCore.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
 const { createMemory, listMemories } = await import("../../src/lib/memory/store.ts");
+const { waitForAsyncMemoryFlush } = await import("../helpers/memoryExtraction.ts");
 const { invalidateMemorySettingsCache } = await import("../../src/lib/memory/settings.ts");
 const core = await import("../../src/lib/db/core.ts");
 
@@ -82,11 +83,6 @@ function ensureLegacyMemoryTable() {
       expiresAt TEXT
     )
   `);
-}
-
-async function waitForAsyncMemoryFlush() {
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 async function invokeChatCore({
