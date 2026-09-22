@@ -41,15 +41,22 @@ export type ComboLogger = {
   debug: (...args: unknown[]) => void;
 };
 
-export type SingleModelTarget =
-  | (ResolvedComboTarget & {
-      allowRateLimitedConnection?: boolean;
-      effectiveComboStrategy?: string | null;
-      modelAbortSignal?: AbortSignal | null;
-      /** True when this target was selected via context-cache session pinning. */
-      modelPinned?: boolean;
-    })
-  | { modelAbortSignal: AbortSignal };
+export type ComboAccountSelection = {
+  excludeConnectionIds?: string[];
+  onConnectionSelected?: (connectionId: string) => void;
+};
+
+export type SingleModelTarget = ComboAccountSelection &
+  (
+    | (ResolvedComboTarget & {
+        allowRateLimitedConnection?: boolean;
+        effectiveComboStrategy?: string | null;
+        modelAbortSignal?: AbortSignal | null;
+        /** True when this target was selected via context-cache session pinning. */
+        modelPinned?: boolean;
+      })
+    | { modelAbortSignal: AbortSignal }
+  );
 
 export type HandleSingleModel = (
   body: Record<string, unknown>,

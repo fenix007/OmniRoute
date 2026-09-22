@@ -733,6 +733,8 @@ export async function handleComboChat({
       return handleSingleModel(dispatchBody, modelStr, target);
     },
     comboTargetTimeoutMs,
+    retryCodexAccountOnTimeout: config.retryCodexAccountOnTimeout === true,
+    signal,
     log,
   });
 

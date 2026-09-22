@@ -582,7 +582,6 @@ and live-STT implementation. The complete unit suite passes, including dashboard
 serial collectors; core typecheck, lint, file-size, discovery and production build
 remain green. This remains local fork maintenance, not an upstream port.
 
-
 ## Upstream review — 2026-09-21
 
 Adapted [diegosouzapw/OmniRoute #13738](https://github.com/diegosouzapw/OmniRoute/pull/13738)
@@ -617,7 +616,6 @@ but this is not a claim that all upstream CI passed. Local gate results and
 source-discovery evidence are retained in repository-local automation memory.
 This maintenance uses the existing `[skip ci]` policy; no release, image publish,
 workflow dispatch or deployment is part of this change.
-
 
 The initial full-unit failures are resolved by a separate local test-maintenance
 change, with production memory/UI behavior unchanged:
@@ -670,7 +668,6 @@ main/release/dev commits, releases and discussion lists. Technical review remain
 partial; deferred candidates and previous source boundaries are retained in the
 existing automation memory. The unchanged original checkout and prior worktrees
 are preserved. Source-review boundaries are not advanced by this continuation.
-
 
 ## Codex client maintenance — 2026-09-21
 
@@ -732,3 +729,19 @@ fabricated-doc checks, any-budget, changelog and tracked-artifact gates pass.
 No live-provider validation or production/Docker build was run for this bounded
 version update. The source PR head and `origin/stable` were rechecked unchanged
 before publication.
+
+### Retry another Codex account after a combo deadline
+
+A combo may opt in with `config.retryCodexAccountOnTimeout: true` (default: false).
+After its Codex target hits the local `targetTimeoutMs` deadline, the router makes
+one additional dispatch on another eligible Codex connection before returning to
+the combo's provider fallback. Every account selected by the timed-out dispatch
+is excluded; API-key connection restrictions and normal quota checks still apply.
+Explicitly pinned connections, client cancellation, and already-returned streams
+do not rotate. The additional dispatch gets a fresh target deadline, so a 120s
+target can now spend up to 240s on Codex before provider fallback.
+
+Implementation: `open-sse/services/combo/targetTimeoutRunner.ts` and
+`src/sse/handlers/chat.ts`. Regression coverage:
+`tests/integration/combo-codex-account-timeout.test.ts` and
+`tests/unit/combo-target-timeout-runner.test.ts`.

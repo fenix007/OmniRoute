@@ -79,3 +79,158 @@ test("external parent abort preserves its reason on the child", async () => {
   await runner({}, "m", { modelAbortSignal: parent.signal });
   assert.equal(childReason, reason);
 });
+
+function stallUntilAborted(target?: SingleModelTarget): Promise<Response> {
+  return new Promise((resolve) => {
+    target?.modelAbortSignal?.addEventListener(
+      "abort",
+      () => resolve(new Response(null, { status: 599 })),
+      { once: true }
+    );
+  });
+}
+
+test("Codex timeout retries once excluding every selected account and preserving routing constraints", async () => {
+  const seen: SingleModelTarget[] = [];
+  const runner = buildTargetTimeoutRunner({
+    retryCodexAccountOnTimeout: true,
+    comboTargetTimeoutMs: 10,
+    log: noopLog,
+    handleSingleModel: async (body, _model, target) => {
+      seen.push(target!);
+      if (seen.length === 1) {
+        target?.onConnectionSelected?.("first");
+        target?.onConnectionSelected?.("rotated-before-timeout");
+        body.changed = true;
+        return stallUntilAborted(target);
+      }
+      assert.equal(body.changed, undefined, "retry receives the original body");
+      target?.onConnectionSelected?.("healthy");
+      return new Response("recovered");
+    },
+  });
+  const result = await runner({}, "codex/gpt-5.6-sol-medium", {
+    provider: "codex",
+    allowedConnectionIds: ["first", "healthy"],
+    excludeConnectionIds: ["previous"],
+  } as SingleModelTarget);
+  assert.equal(await result.text(), "recovered");
+  assert.deepEqual(seen[1].excludeConnectionIds, ["previous", "first", "rotated-before-timeout"]);
+  assert.deepEqual("allowedConnectionIds" in seen[1] ? seen[1].allowedConnectionIds : undefined, [
+    "first",
+    "healthy",
+  ]);
+  assert.equal(seen[0].modelAbortSignal?.aborted, true);
+  assert.equal(seen[1].modelAbortSignal?.aborted, false);
+});
+
+test("Codex account retry is bounded across outer combo retries", async () => {
+  let calls = 0;
+  const runner = buildTargetTimeoutRunner({
+    retryCodexAccountOnTimeout: true,
+    comboTargetTimeoutMs: 10,
+    log: noopLog,
+    handleSingleModel: async (_body, _model, target) => {
+      target?.onConnectionSelected?.(`account-${++calls}`);
+      return stallUntilAborted(target);
+    },
+  });
+  assert.equal((await runner({}, "cx/gpt-5.6-sol")).status, 524);
+  assert.equal(calls, 2);
+  assert.equal((await runner({}, "cx/gpt-5.6-sol")).status, 524);
+  assert.equal(calls, 3, "no second account-retry budget on an outer retry");
+});
+
+for (const scenario of [
+  "disabled",
+  "different-provider",
+  "pinned-account",
+  "upstream-524",
+  "no-selected-account",
+]) {
+  test(`does not rotate for ${scenario}`, async () => {
+    let calls = 0;
+    const runner = buildTargetTimeoutRunner({
+      retryCodexAccountOnTimeout: scenario !== "disabled",
+      comboTargetTimeoutMs: 10,
+      log: noopLog,
+      handleSingleModel: async (_body, _model, target) => {
+        calls++;
+        if (scenario !== "no-selected-account") target?.onConnectionSelected?.("first");
+        return scenario === "upstream-524"
+          ? new Response("upstream timeout", { status: 524 })
+          : stallUntilAborted(target);
+      },
+    });
+    const target =
+      scenario === "pinned-account"
+        ? ({ provider: "codex", connectionId: "first" } as SingleModelTarget)
+        : undefined;
+    const result = await runner(
+      {},
+      scenario === "different-provider" ? "openai/gpt-5.6-sol" : "codex/gpt-5.6-sol",
+      target
+    );
+    assert.equal(result.status, 524);
+    assert.equal(calls, 1);
+  });
+}
+
+test("client cancellation at the deadline prevents the account retry", async () => {
+  const parent = new AbortController();
+  let calls = 0;
+  const runner = buildTargetTimeoutRunner({
+    retryCodexAccountOnTimeout: true,
+    comboTargetTimeoutMs: 10,
+    signal: parent.signal,
+    log: noopLog,
+    handleSingleModel: async (_body, _model, target) => {
+      calls++;
+      target?.onConnectionSelected?.("first");
+      target?.modelAbortSignal?.addEventListener("abort", () => parent.abort("client gone"));
+      return stallUntilAborted(target);
+    },
+  });
+  await runner({}, "codex/gpt-5.6-sol");
+  assert.equal(calls, 1);
+});
+
+test("no eligible alternate preserves a readable timeout response", async () => {
+  let calls = 0;
+  const runner = buildTargetTimeoutRunner({
+    retryCodexAccountOnTimeout: true,
+    comboTargetTimeoutMs: 10,
+    log: noopLog,
+    handleSingleModel: async (_body, _model, target) => {
+      if (++calls === 1) {
+        target?.onConnectionSelected?.("first");
+        return stallUntilAborted(target);
+      }
+      return new Response("no eligible accounts", { status: 503 });
+    },
+  });
+  const result = await runner({}, "codex/gpt-5.6-sol");
+  assert.equal(result.status, 524);
+  assert.match(await result.text(), /timed out/);
+});
+
+test("a committed stream is returned once without a timeout retry", async () => {
+  let calls = 0;
+  const runner = buildTargetTimeoutRunner({
+    retryCodexAccountOnTimeout: true,
+    comboTargetTimeoutMs: 10,
+    log: noopLog,
+    handleSingleModel: async (_body, _model, target) => {
+      calls++;
+      target?.onConnectionSelected?.("first");
+      return new Response("data: partial output\n\n", {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    },
+  });
+  assert.match(
+    await (await runner({ stream: true }, "codex/gpt-5.6-sol")).text(),
+    /partial output/
+  );
+  assert.equal(calls, 1);
+});

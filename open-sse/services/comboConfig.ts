@@ -64,6 +64,7 @@ const DEFAULT_COMBO_CONFIG = {
   resetAwareTieBandPercent: 5,
   resetAwareExhaustionGuardPercent: 10,
   failoverBeforeRetry: true,
+  retryCodexAccountOnTimeout: false,
   // Feature 4985: configurable response-body validation predicate (per-combo). When set,
   // a 200 OK whose body fails the predicate fails over to the next target.
   responseValidation: undefined as ResponseValidationConfig | undefined,

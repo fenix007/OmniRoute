@@ -1,3 +1,4 @@
+import type { ComboAccountSelection } from "@omniroute/open-sse/services/combo/types.ts";
 import { getCombosCachedForChat } from "./chatComboCache";
 import {
   intersectAllowedConnectionIds,
@@ -777,7 +778,7 @@ export async function handleChat(
       handleSingleModel: (
         b: any,
         m: string,
-        target?: {
+        target?: ComboAccountSelection & {
           allowRateLimitedConnection?: boolean;
           connectionId?: string | null;
           executionKey?: string | null;
@@ -816,6 +817,8 @@ export async function handleChat(
             emptyResponseBudget,
             modelPinned: (target as any)?.modelPinned ?? false,
             modelAbortSignal: target?.modelAbortSignal ?? null,
+            excludeConnectionIds: target?.excludeConnectionIds,
+            onConnectionSelected: target?.onConnectionSelected,
           },
           target?.effectiveComboStrategy ?? combo.strategy,
           true
@@ -967,7 +970,7 @@ async function handleSingleModelChat(
   comboName: string | null = null,
   apiKeyInfo: any = null,
   telemetry: any = null,
-  runtimeOptions: {
+  runtimeOptions: ComboAccountSelection & {
     emptyResponseBudget?: EmptyResponseRetryBudget;
     emergencyFallbackTried?: boolean;
     forceLiveComboTest?: boolean;
@@ -1215,13 +1218,15 @@ async function handleSingleModelChat(
   const sameAccountTransportRetries = new Map<string, number>();
 
   requestAttemptLoop: while (true) {
-    const excludedConnectionIds = new Set<string>();
+    const excludedConnectionIds = new Set<string>(runtimeOptions.excludeConnectionIds);
     let lastError = requestRetryLastError;
     let lastStatus = requestRetryLastStatus;
     let lastCooldownMs = requestRetryLastCooldownMs;
     let preselectedCredentials = runtimeOptions.preselectedCredentials;
 
     while (true) {
+      if (requestSignal?.aborted || runtimeOptions.modelAbortSignal?.aborted)
+        return errorResponse(499, "Request aborted");
       if (emptyResponseBudget.isExhausted(provider, model)) return emptyResponseLimitResponse();
       const credentials =
         preselectedCredentials && excludedConnectionIds.size === 0
@@ -1322,6 +1327,7 @@ async function handleSingleModelChat(
         return withSelectedConnectionHeader(noCredsRes, lastFailedConnectionId);
       }
 
+      runtimeOptions.onConnectionSelected?.(credentials.connectionId);
       const accountId = credentials.connectionId.slice(0, 8);
       log.info("AUTH", `Using ${provider} account: ${accountId}...`);
       // #474: when the request used a bare model name (no "/" — e.g. an alias
