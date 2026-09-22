@@ -321,6 +321,11 @@ export function sanitizeResponsesApiResponse(body: unknown): unknown {
     error: responseRoot.error ?? null,
   };
 
+  const incompleteDetails = toRecord(responseRoot.incomplete_details);
+  if (incompleteDetails && typeof incompleteDetails.reason === "string") {
+    sanitized.incomplete_details = { reason: incompleteDetails.reason };
+  }
+
   const output = sanitizeResponsesOutput(responseRoot.output);
 
   // Some upstreams return a shorthand Responses body that carries the answer only

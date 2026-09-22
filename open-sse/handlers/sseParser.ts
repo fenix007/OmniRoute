@@ -819,6 +819,7 @@ export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
     }),
     usage: picked.usage || null,
     status: picked.status || statusFallback,
+    ...(picked.error != null ? { error: picked.error } : {}),
     ...(picked.incomplete_details && typeof picked.incomplete_details === "object"
       ? { incomplete_details: picked.incomplete_details }
       : {}),
