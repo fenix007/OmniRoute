@@ -241,3 +241,36 @@ test("#9708: getProviderCredentials does not report all-quota 429 when a sibling
   assert.match(String(result.lastError), /temporarily unavailable after upstream 507/i);
   assert.equal(isTransportCooldownErrorCode(507), true);
 });
+
+test("model empty output and overload bypass transport retry and retain account fallback", () => {
+  for (const status of [502, 503, 504, 507]) {
+    for (const errorCode of [
+      "empty_response",
+      "response_failed",
+      "response_incomplete",
+      "overloaded_error",
+      "server_overloaded",
+    ]) {
+      assert.equal(shouldRetrySameAccountTransport({ status, errorCode, attempt: 0 }), false);
+    }
+    for (const errorText of [
+      "Provider returned empty content",
+      "[codex/model] returned an empty response (no usable choices/output)",
+      "Servers are overloaded right now",
+    ]) {
+      assert.equal(shouldRetrySameAccountTransport({ status, errorText, attempt: 0 }), false);
+    }
+    assert.equal(
+      shouldRetrySameAccountTransport({
+        status,
+        errorCode: "server_error",
+        errorType: "upstream_response_error",
+        attempt: 0,
+      }),
+      false
+    );
+  }
+  assert.equal(isRetryablePreOutputTransportError(502, "Bad Gateway"), true);
+  assert.equal(isRetryablePreOutputTransportError(503, "connection reset"), true);
+  assert.equal(isRetryablePreOutputTransportError(502, "early EOF", "STREAM_EARLY_EOF"), true);
+});

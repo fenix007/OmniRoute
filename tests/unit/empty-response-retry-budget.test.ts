@@ -96,14 +96,39 @@ test("real chat pipeline caps empty output at three attempts across accounts, th
   assert.equal(primaryAccounts.length, 3, "account retry and combo retry must share a limit");
   assert.equal(
     new Set(primaryAccounts).size,
-    2,
-    "retry first account, then try one alternate account"
+    3,
+    "empty output rotates accounts without spending the transport retry on the same account"
   );
   assert.equal(fallbackCalls, 1);
   await h.waitFor(async () => (await getCallLogs({ status: 502 })).length >= 3);
   const rows = await getCallLogs({ status: 502 });
   assert.equal(rows.length, 3);
   for (const row of rows) assert.match(String(row.error), /returned an empty response/);
+});
+
+test("explicit overload switches accounts before retrying instead of using the transport retry", async () => {
+  await seedPrimary();
+  const accounts: string[] = [];
+  globalThis.fetch = async (_url, init = {}) => {
+    const headers = h.toPlainHeaders(init.headers) as Record<string, string>;
+    accounts.push(headers.authorization);
+    return accounts.length === 1
+      ? new Response(
+          JSON.stringify({
+            error: { code: "server_error", message: "Servers are overloaded right now" },
+          }),
+          {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      : h.buildOpenAIResponse("Recovered on another account");
+  };
+  const response = await h.handleChat(request("openai/gpt-4.1"));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).choices[0].message.content, "Recovered on another account");
+  assert.equal(accounts.length, 2);
+  assert.equal(new Set(accounts).size, 2);
 });
 
 test("standalone model stops after three empty attempts and returns an explicit exhausted code", async () => {

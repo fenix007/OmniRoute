@@ -25,7 +25,25 @@ const RETRYABLE_TRANSPORT_TEXT = [
   /und_err_socket/i,
 ];
 
-const NON_RETRYABLE_ERROR_TYPES = new Set(["lease_error", "account_semaphore_capacity"]);
+const NON_RETRYABLE_ERROR_TYPES = new Set([
+  "lease_error",
+  "account_semaphore_capacity",
+  "upstream_response_error",
+  "overloaded_error",
+]);
+const NON_TRANSPORT_ERROR_CODES = new Set([
+  "empty_response",
+  "empty_response_retry_exhausted",
+  "response_failed",
+  "response_cancelled",
+  "response_canceled",
+  "response_incomplete",
+  "model_error",
+  "model_failed",
+  "overloaded",
+  "overloaded_error",
+  "server_overloaded",
+]);
 
 export function isRetryableTransportStatus(status: unknown): boolean {
   const numeric = Number(status);
@@ -40,8 +58,12 @@ export function isRetryablePreOutputTransportError(
 ): boolean {
   if (errorType && NON_RETRYABLE_ERROR_TYPES.has(errorType)) return false;
   if (errorCode && String(errorCode).startsWith("LEASE_")) return false;
+  if (errorCode && NON_TRANSPORT_ERROR_CODES.has(errorCode.toLowerCase())) return false;
 
   const text = String(errorText || "");
+  // Explicit model/application failures are not a broken transport, even at 502/503.
+  // Let the existing account/combo fallback and shared empty-response budget handle them.
+  if (/empty (?:response|content|output)|overload(?:ed)?/i.test(text)) return false;
   const numericStatus = Number(status);
   if (numericStatus === 429 || numericStatus === 401 || numericStatus === 400) return false;
   if (/quota (threshold|exhausted)|credits exhausted/i.test(text)) return false;

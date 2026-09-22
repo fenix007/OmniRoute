@@ -223,6 +223,7 @@ import {
   type NonStreamingSseTerminalState,
 } from "./chatCore/nonStreamingSse.ts";
 import { parseNonStreamingResponseBody } from "./chatCore/nonStreamingResponseParse.ts";
+import { getResponsesTerminalError } from "../utils/responsesTerminalError.ts";
 import { unwrapClinepassEnvelope } from "../utils/clinepassEnvelope.ts";
 import { recordNonStreamingUsageStats } from "./chatCore/nonStreamingUsageStats.ts";
 import {
@@ -502,7 +503,24 @@ export async function handleChatCore({
   ): EffectiveServiceTier | null => resolveReportedServiceTierFor(provider, payload, maxDepth);
   // Failure usage record building extracted to chatCore/failureUsage.ts (#3501); the handler keeps
   // the fire-and-forget save + computes latencyMs, so the call sites stay byte-identical.
-  const persistFailureUsage = (statusCode: number, errorCode?: string | null) => {
+  const persistFailureUsage = (statusCode: number, errorCode?: string | null, usage?: unknown) => {
+    if (usage && typeof usage === "object") {
+      recordNonStreamingUsageStats(usage, {
+        traceEnabled: false,
+        provider,
+        model,
+        connectionId: getCurrentConnectionId(),
+        startTime,
+        apiKeyInfo,
+        effectiveServiceTier,
+        isCombo,
+        comboStrategy,
+        endpoint: endpointPath,
+        statusCode,
+        errorCode,
+      });
+      return;
+    }
     saveRequestUsage(
       buildFailureUsageRecord({
         provider,
@@ -3772,6 +3790,46 @@ export async function handleChatCore({
     }
     responseBody = unwrapClineNonStreamingEnvelope(provider, responseBody);
 
+    // A buffered Responses failure is an upstream error even when HTTP was 200.
+    // Handle it before translation, success callbacks, caches or tool execution.
+    const terminalError = getResponsesTerminalError(responseBody);
+    if (terminalError) {
+      effectiveServiceTier = resolveReportedServiceTier(responseBody) ?? effectiveServiceTier;
+      const failureUsage = extractUsageFromResponse(responseBody, provider);
+      const failure = createErrorResult(
+        terminalError.status,
+        terminalError.message,
+        null,
+        terminalError.code,
+        terminalError.type
+      );
+      appendRequestLog({
+        model,
+        provider,
+        connectionId: getCurrentConnectionId(),
+        status: `FAILED ${terminalError.status}`,
+      }).catch(() => {});
+      persistAttemptLogs({
+        status: terminalError.status,
+        error: failure.error,
+        tokens: failureUsage,
+        responseBody,
+        providerRequest: finalBody || translatedBody,
+        providerResponse: normalizedProviderPayload,
+        clientResponse: buildErrorBody(terminalError.status, failure.error),
+        cacheSource: "upstream",
+      });
+      persistFailureUsage(terminalError.status, terminalError.code, failureUsage);
+      if (apiKeyInfo?.id && failureUsage) {
+        const failureCost = await calculateCost(provider, model, failureUsage, {
+          serviceTier: effectiveServiceTier,
+        });
+        if (failureCost > 0) recordCost(apiKeyInfo.id, failureCost);
+      }
+      trackPendingRequest(model, provider, pendingConnId, false);
+      return failure;
+    }
+
     // Check for empty content response (fake success) - trigger fallback
     if (isEmptyContentResponse(responseBody)) {
       appendRequestLog({
@@ -3856,17 +3914,7 @@ export async function handleChatCore({
     );
     effectiveServiceTier = resolveReportedServiceTier(responseBody) ?? effectiveServiceTier;
 
-    // Notify success - caller can clear error status if needed
-    if (onRequestSuccess) {
-      await onRequestSuccess();
-    }
     const successConnectionId = getCurrentConnectionId();
-    await maybeSyncClaudeExtraUsageState({
-      provider,
-      connectionId: successConnectionId,
-      providerSpecificData: credentials?.providerSpecificData,
-      log,
-    });
 
     // Log usage for non-streaming responses
     const usage = extractUsageFromResponse(responseBody, provider);
@@ -3884,28 +3932,8 @@ export async function handleChatCore({
       skillRequestId,
       log,
     });
-    appendRequestLog({
-      model,
-      provider,
-      connectionId: successConnectionId,
-      tokens: usage,
-      status: "200 OK",
-    }).catch(() => {});
 
-    // Save structured call log with full payloads
     const cacheUsageLogMeta = buildCacheUsageLogMeta(usage);
-    recordNonStreamingUsageStats(usage, {
-      traceEnabled,
-      provider,
-      connectionId: successConnectionId,
-      model,
-      startTime,
-      apiKeyInfo,
-      effectiveServiceTier,
-      isCombo,
-      comboStrategy,
-      endpoint: endpointPath,
-    });
 
     // Translate response to client's expected format (usually OpenAI)
     // Pass toolNameMap so Claude OAuth proxy_ prefix is stripped in tool_use blocks (#605)
@@ -4032,6 +4060,7 @@ export async function handleChatCore({
       : 0;
 
     if (postCallGuardrails.blocked) {
+      persistFailureUsage(HTTP_STATUS.BAD_REQUEST, "guardrail_blocked", usage);
       const guardrailMessage = postCallGuardrails.message || "Response blocked by guardrail";
       persistAttemptLogs({
         status: HTTP_STATUS.BAD_REQUEST,
@@ -4113,10 +4142,43 @@ export async function handleChatCore({
         claudeCacheUsageMeta: cacheUsageLogMeta,
         cacheSource: "upstream",
       });
-      persistFailureUsage(HTTP_STATUS.BAD_GATEWAY, "malformed_translated_response");
+      persistFailureUsage(HTTP_STATUS.BAD_GATEWAY, "malformed_translated_response", usage);
+      if (apiKeyInfo?.id && estimatedCost > 0) recordCost(apiKeyInfo.id, estimatedCost);
       trackPendingRequest(model, provider, pendingConnId, false);
       return createErrorResult(HTTP_STATUS.BAD_GATEWAY, malformedMessage, null, "empty_response");
     }
+
+    // Notify success - caller can clear error status if needed
+    if (onRequestSuccess) {
+      await onRequestSuccess();
+    }
+    await maybeSyncClaudeExtraUsageState({
+      provider,
+      connectionId: successConnectionId,
+      providerSpecificData: credentials?.providerSpecificData,
+      log,
+    });
+
+    appendRequestLog({
+      model,
+      provider,
+      connectionId: successConnectionId,
+      tokens: usage,
+      status: "200 OK",
+    }).catch(() => {});
+
+    recordNonStreamingUsageStats(usage, {
+      traceEnabled,
+      provider,
+      connectionId: successConnectionId,
+      model,
+      startTime,
+      apiKeyInfo,
+      effectiveServiceTier,
+      isCombo,
+      comboStrategy,
+      endpoint: endpointPath,
+    });
 
     // ── Phase 9.1: Cache store (non-streaming, temp=0) ──
     storeSemanticCacheResponse({

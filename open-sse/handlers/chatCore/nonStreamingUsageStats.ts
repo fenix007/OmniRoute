@@ -3,11 +3,11 @@
  * decomposition, #3501 — response-handling slice of executeProviderRequest).
  *
  * Extracted from handleChatCore's non-streaming success path: records per-request usage analytics
- * for a successful non-streaming response — an optional trace console line, the fire-and-forget
+ * for a finalized non-streaming response — an optional trace console line, the fire-and-forget
  * `saveRequestUsage` row, and the per-api-key billable-token counter. Side-effect only (no handler
  * state is mutated, nothing is returned); best-effort, every write swallows its own errors. The
- * per-request context is threaded via `ctx` so the call site stays byte-identical; behaviour is
- * unchanged.
+ * per-request context includes the final status so provider usage remains billable
+ * even when delivery fails or a guardrail blocks the response.
  */
 
 import { saveRequestUsage } from "@/lib/usageDb";
@@ -28,6 +28,8 @@ export type RecordNonStreamingUsageStatsContext = {
   isCombo: boolean;
   comboStrategy: string | null | undefined;
   endpoint?: string | null | undefined;
+  statusCode?: number;
+  errorCode?: string | null;
 };
 
 function logUsageTrace(
@@ -45,11 +47,11 @@ function persistUsageRow(usage: object, ctx: RecordNonStreamingUsageStatsContext
     provider: provider || "unknown",
     model: model || "unknown",
     tokens: usage,
-    status: "200",
-    success: true,
+    status: String(ctx.statusCode ?? 200),
+    success: (ctx.statusCode ?? 200) < 400,
     latencyMs: Date.now() - startTime,
     timeToFirstTokenMs: Date.now() - startTime,
-    errorCode: null,
+    errorCode: ctx.errorCode ?? null,
     timestamp: new Date().toISOString(),
     connectionId: connectionId || undefined,
     apiKeyId: apiKeyInfo?.id || undefined,
@@ -85,6 +87,8 @@ export function recordNonStreamingUsageStats(
   if (!usage || typeof usage !== "object") return;
 
   if (ctx.traceEnabled) logUsageTrace(usage, ctx.provider, ctx.connectionId);
-  persistUsageRow(usage, ctx);
+  // Token accounting runs in a microtask. Queue history after it so cold counters
+  // cannot include this request in both their history seed and their increment.
   recordBillableTokens(usage, ctx.apiKeyInfo, ctx.provider, ctx.model);
+  queueMicrotask(() => persistUsageRow(usage, ctx));
 }

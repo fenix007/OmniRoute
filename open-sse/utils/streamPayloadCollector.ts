@@ -327,6 +327,10 @@ function buildResponsesSummary(
       output: pickedOutput.length > 0 ? pickedOutput : buildOutputFromText(),
       usage: picked.usage ?? usage ?? null,
       status: toString(picked.status, completed ? "completed" : "in_progress"),
+      ...(picked.error != null ? { error: picked.error } : {}),
+      ...(picked.incomplete_details && typeof picked.incomplete_details === "object"
+        ? { incomplete_details: picked.incomplete_details }
+        : {}),
       created_at: toNumber(picked.created_at, Math.floor(Date.now() / 1000)),
       metadata: asRecord(picked.metadata),
     };

@@ -10,6 +10,7 @@
  */
 
 import { sanitizeErrorMessage } from "./error.ts";
+import { getResponsesTerminalError } from "./responsesTerminalError.ts";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -199,7 +200,8 @@ export function detectMalformedNonStream(resp: unknown): MalformedReason | null 
       });
     if (!hasOutput) return "empty_choices";
     const status = typeof body.status === "string" ? body.status : "";
-    if (status && !["completed", "done"].includes(status)) return "no_terminal";
+    const usablePartial = status === "incomplete" && getResponsesTerminalError(body) === null;
+    if (status && !["completed", "done"].includes(status) && !usablePartial) return "no_terminal";
     return null;
   }
 
