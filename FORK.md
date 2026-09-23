@@ -745,3 +745,44 @@ Implementation: `open-sse/services/combo/targetTimeoutRunner.ts` and
 `src/sse/handlers/chat.ts`. Regression coverage:
 `tests/integration/combo-codex-account-timeout.test.ts` and
 `tests/unit/combo-target-timeout-runner.test.ts`.
+
+## Upstream review — 2026-09-23
+
+Adapted [diegosouzapw/OmniRoute #14279](https://github.com/diegosouzapw/OmniRoute/pull/14279)
+from exact head `9976113505f6f1a5e1bb0b0b866aec77787fa643`, merged upstream
+on 2026-09-22 as `b9d4ea77b28e995e3acfad6193d731750bc3afad`.
+Decision: **adapt**. Tilde-prefixed schema metadata such as `~optional` still
+survives the frozen sanitizer and reaches Gemini as an unsupported field,
+which can reject the entire tool catalog with HTTP 400.
+
+- Apply only the additional `key.startsWith("~")` condition to the existing
+  schema cleaner. Retain the fork's schema-map-aware traversal from #13059;
+  real property names beginning with `~` and their `required` entries survive.
+  No later schema phases, dependencies or provider policies are imported.
+- Replace the upstream two-case suite with nine regression scenarios for this
+  base: metadata versus argument names, nested objects/arrays, composition,
+  escaped local references, descriptions/enum values/patterns, placeholders,
+  idempotence, input immutability, emitted declarations and OpenAI/Claude
+  request translation with both stream flags. OpenAI response schemas are
+  checked alongside tool schemas.
+- All nine new tests fail on clean production code at
+  `0a5f7f4232e8a91ae174617aae19ada5e24cac56`; all nine pass after the change.
+  Together with keyword-property and digit-leading tool-name regressions,
+  the focused run passes 36/36. Live-provider behavior was not exercised.
+- Upstream has no submitted review and its PR checks include failures. The
+  maintainer reports passing merge-train checks with two inherited Vitest
+  timeouts. Neither merged status nor that report substitutes for local gates.
+
+Local validation passes: full unit and coverage collectors, full lint, core
+typecheck, file-size, test-discovery, docs-sync, explicit-any budget,
+tracked-artifact and changelog gates. The coverage run passes 23,351 native,
+102 dashboard and 20 serial tests, with 14 native skips; coverage is 81%
+lines/statements, 78.42% branches and 86.58% functions. Production builds and
+live-provider checks were not run for this one-line sanitizer change.
+
+The source head was checked before and after diff collection. Paginated
+discovery covered both configured sources from 2026-09-11; technical review
+remains bounded, with deferred candidates retained in repository-local memory.
+Full validation and publication results are recorded there. Any maintenance
+push uses the existing `[skip ci]` policy; no image, release or deployment is
+part of this change.

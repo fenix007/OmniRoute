@@ -405,7 +405,7 @@ function removeUnsupportedKeywords(obj: unknown, keywords: Set<string>): void {
   const record = obj as JsonRecord;
   // Delete unsupported *constraint* keywords at the current schema level.
   for (const key of Object.keys(record)) {
-    if (keywords.has(key) || key.startsWith("x-")) {
+    if (keywords.has(key) || key.startsWith("x-") || key.startsWith("~")) {
       delete record[key];
     }
   }

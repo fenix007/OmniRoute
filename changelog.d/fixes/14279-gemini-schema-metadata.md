@@ -1,0 +1,1 @@
+- **fix(translator):** Strip tilde-prefixed metadata from Gemini tool and response schemas while preserving argument names, required fields and caller input ([#14279](https://github.com/diegosouzapw/OmniRoute/pull/14279)) — thanks @hartmark.
