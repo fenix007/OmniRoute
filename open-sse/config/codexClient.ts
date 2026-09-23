@@ -1,8 +1,8 @@
 // Codex's OAuth backend gates newer models by client version: GPT-6 Astra rejects
 // older clients with "requires a newer version of Codex" (upstream issue #12761).
 // Keep this in lockstep with CODEX_CLI_PROFILE in src/shared/constants/clientIdentityProfiles.ts.
-// https://github.com/openai/codex/releases/tag/rust-v0.155.0
-const DEFAULT_CODEX_CLIENT_VERSION = "0.155.0";
+// https://github.com/openai/codex/releases/tag/rust-v0.156.1
+const DEFAULT_CODEX_CLIENT_VERSION = "0.156.1";
 const DEFAULT_CODEX_USER_AGENT_PLATFORM = "Windows 10.0.26200";
 const DEFAULT_CODEX_USER_AGENT_ARCH = "x64";
 const CODEX_VERSION_OVERRIDE_ENV = "CODEX_CLIENT_VERSION";
@@ -28,13 +28,31 @@ export function getCodexClientVersion(): string {
   );
 }
 
-export function getCodexUserAgent(): string {
+export function getCodexClientVersionFromHeaders(
+  clientHeaders?: Record<string, string> | null
+): string | null {
+  const headers = Object.fromEntries(
+    Object.entries(clientHeaders || {}).map(([name, value]) => [name.toLowerCase(), value])
+  );
+  const version = headers.version?.trim();
+  if (version && SAFE_HEADER_TOKEN_PATTERN.test(version)) return version;
+  const match = /(?:codex[-_][A-Za-z0-9_]*|codex-cli)\/(\d+\.\d+\.\d+)/i.exec(
+    headers["user-agent"] || ""
+  );
+  return match?.[1] || null;
+}
+
+export function getCodexUserAgent(versionOverride?: string | null): string {
   const override = getSafeEnvValue(CODEX_USER_AGENT_OVERRIDE_ENV, SAFE_HEADER_VALUE_PATTERN);
   if (override) {
     return override;
   }
 
-  return `codex-cli/${getCodexClientVersion()} (${DEFAULT_CODEX_USER_AGENT_PLATFORM}; ${DEFAULT_CODEX_USER_AGENT_ARCH})`;
+  const version =
+    versionOverride && SAFE_HEADER_TOKEN_PATTERN.test(versionOverride)
+      ? versionOverride
+      : getCodexClientVersion();
+  return `codex-cli/${version} (${DEFAULT_CODEX_USER_AGENT_PLATFORM}; ${DEFAULT_CODEX_USER_AGENT_ARCH})`;
 }
 
 export function getCodexDefaultHeaders(): Record<string, string> {

@@ -11,6 +11,8 @@ export const openaiProvider: RegistryEntry = {
   authHeader: "bearer",
   defaultContextLength: 128000,
   models: [
+    { id: "gpt-6-sol", name: "GPT 6 sol", ...GPT_5_6_API_CAPABILITIES },
+    { id: "gpt-6-luna", name: "GPT 6 luna", ...GPT_5_6_API_CAPABILITIES },
     { id: "gpt-5.6", name: "GPT-5.6", ...GPT_5_6_API_CAPABILITIES },
     { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", ...GPT_5_6_API_CAPABILITIES },
     { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", ...GPT_5_6_API_CAPABILITIES },

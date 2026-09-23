@@ -39,7 +39,7 @@ test("finalizeTokens(codex) maps device-flow tokens and extracts email + workspa
   assert.equal(tokenData.providerSpecificData.workspacePlanType, "plus");
 });
 
-test("finalizeTokens(codex) prefers a team org when plan_type is free", async () => {
+test("finalizeTokens(codex) keeps the granted personal account despite team membership", async () => {
   const idToken = makeIdToken({
     email: "team@example.com",
     "https://api.openai.com/auth": {
@@ -47,9 +47,7 @@ test("finalizeTokens(codex) prefers a team org when plan_type is free", async ()
       chatgpt_plan_type: "free",
       chatgpt_user_id: "cu-2",
       user_id: "u-2",
-      organizations: [
-        { id: "team-acc", is_default: false, role: "member", title: "Acme Team" },
-      ],
+      organizations: [{ id: "team-acc", is_default: false, role: "member", title: "Acme Team" }],
     },
   });
 
@@ -60,8 +58,8 @@ test("finalizeTokens(codex) prefers a team org when plan_type is free", async ()
   });
 
   assert.equal(tokenData.email, "team@example.com");
-  assert.equal(tokenData.providerSpecificData.workspaceId, "team-acc");
-  assert.equal(tokenData.providerSpecificData.workspacePlanType, "team");
+  assert.equal(tokenData.providerSpecificData.workspaceId, "personal-acc");
+  assert.equal(tokenData.providerSpecificData.workspacePlanType, "free");
 });
 
 test("finalizeTokens(codex) tolerates a missing id_token (no metadata)", async () => {

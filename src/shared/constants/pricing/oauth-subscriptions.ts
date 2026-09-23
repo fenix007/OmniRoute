@@ -4,6 +4,8 @@
  */
 import {
   GPT_6_ASTRA_PRICING,
+  GPT_6_SOL_PRICING,
+  GPT_6_LUNA_PRICING,
   GPT_5_3_CODEX_PRICING,
   GPT_5_5_PRICING,
   GPT_5_6_LUNA_PRICING,
@@ -102,6 +104,19 @@ export const DEFAULT_PRICING_OAUTH = {
     "gpt-5.6-luna-medium": GPT_5_6_LUNA_PRICING,
     "gpt-5.6-luna-low": GPT_5_6_LUNA_PRICING,
     // GPT-6 Astra (paid Codex tiers only)
+    "gpt-6-sol": GPT_6_SOL_PRICING,
+    "gpt-6-sol-low": GPT_6_SOL_PRICING,
+    "gpt-6-sol-medium": GPT_6_SOL_PRICING,
+    "gpt-6-sol-high": GPT_6_SOL_PRICING,
+    "gpt-6-sol-xhigh": GPT_6_SOL_PRICING,
+    "gpt-6-sol-max": GPT_6_SOL_PRICING,
+    "gpt-6-sol-ultra": GPT_6_SOL_PRICING,
+    "gpt-6-luna": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-low": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-medium": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-high": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-xhigh": GPT_6_LUNA_PRICING,
+    "gpt-6-luna-max": GPT_6_LUNA_PRICING,
     "gpt-6-astra": GPT_6_ASTRA_PRICING,
     "gpt-6-astra-ultra": GPT_6_ASTRA_PRICING,
     "gpt-6-astra-max": GPT_6_ASTRA_PRICING,

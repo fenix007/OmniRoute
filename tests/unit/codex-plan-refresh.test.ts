@@ -53,7 +53,7 @@ test("deriveCodexWorkspaceInfo returns null when the token carries no auth claim
   assert.equal(deriveCodexWorkspaceInfo(null), null);
 });
 
-test("deriveCodexWorkspaceInfo keeps the team heuristic used at OAuth time", () => {
+test("deriveCodexWorkspaceInfo keeps the granted account despite team membership", () => {
   const info = deriveCodexWorkspaceInfo(
     makeIdToken({
       chatgpt_account_id: "workspace-personal",
@@ -66,8 +66,8 @@ test("deriveCodexWorkspaceInfo keeps the team heuristic used at OAuth time", () 
     })
   );
 
-  assert.equal(info?.workspacePlanType, "team");
-  assert.equal(info?.workspaceId, "org-team");
+  assert.equal(info?.workspacePlanType, "free");
+  assert.equal(info?.workspaceId, "workspace-personal");
 });
 
 test("mapTokens still derives the persisted workspace record", () => {

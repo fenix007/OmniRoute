@@ -4,6 +4,8 @@
  */
 import {
   GPT_6_ASTRA_PRICING,
+  GPT_6_SOL_PRICING,
+  GPT_6_LUNA_PRICING,
   GPT_5_5_PRICING,
   GPT_5_6_LUNA_PRICING,
   GPT_5_6_SOL_PRICING,
@@ -22,6 +24,8 @@ export const DEFAULT_PRICING_FRONTIER = {
     "gpt-5.6-sol": GPT_5_6_SOL_PRICING,
     "gpt-5.6-terra": GPT_5_6_TERRA_PRICING,
     "gpt-5.6-luna": GPT_5_6_LUNA_PRICING,
+    "gpt-6-sol": GPT_6_SOL_PRICING,
+    "gpt-6-luna": GPT_6_LUNA_PRICING,
     "gpt-6-astra": GPT_6_ASTRA_PRICING,
     "gpt-5.5": GPT_5_5_PRICING,
     // The -pro tier mirrors its base family pricing until OpenAI publishes a

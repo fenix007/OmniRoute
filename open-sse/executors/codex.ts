@@ -1,3 +1,4 @@
+import { resolveCodexAccountId } from "../utils/codexAccount.ts";
 import { normalizeCodexWsHeaders } from "./codex/websocketHeaders.ts";
 import { sanitizeCodexInputItemIds } from "./codex/inputIds.ts";
 import { stripStoredItemReferences } from "./codex/storedItemReferences.ts";
@@ -24,6 +25,7 @@ import { FETCH_BODY_TIMEOUT_MS, HTTP_STATUS, PROVIDERS } from "../config/constan
 import { readCodexPeekChunk, buildCodexTimeoutSafePassthroughBody } from "./codex/bodyTimeout.ts";
 import {
   getCodexClientVersion,
+  getCodexClientVersionFromHeaders,
   getCodexUserAgent,
   normalizeCodexSessionId,
 } from "../config/codexClient.ts";
@@ -153,7 +155,7 @@ const GPT_5_6_ULTRA_ALIAS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra"]);
 // STANDARD_EFFORT_SUFFIXES, so without this set neither would ever split off the
 // model id. `ultra` is an OmniRoute-side tier that goes out as wire effort `max`
 // while keeping parallel tool calls for sub-agent delegation.
-const GPT_6_ALIAS_MODELS = new Set(["gpt-6-astra"]);
+const GPT_6_ALIAS_MODELS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
 const CODEX_FAST_WIRE_VALUE = "priority";
 const CODEX_RESPONSES_WS_URL = "wss://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
@@ -193,7 +195,7 @@ function isCodexDelegationDependentModel(model: unknown): boolean {
   const { baseModel, effort } = splitCodexReasoningSuffix(model);
   if (effort === "ultra" && GPT_5_6_ULTRA_ALIAS_MODELS.has(baseModel)) return true;
   if (effort === "ultra" && GPT_6_ALIAS_MODELS.has(baseModel)) return true;
-  if (effort === "max" && baseModel === "gpt-5.6-luna") return true;
+  if (effort === "max" && (baseModel === "gpt-5.6-luna" || baseModel === "gpt-6-luna")) return true;
   return false;
 }
 
@@ -232,10 +234,10 @@ function splitCodexReasoningSuffix(model: unknown): {
     }
   }
 
-  const gpt6AliasMatch = /^(gpt-6-astra)-(max|ultra)$/.exec(modelId);
+  const gpt6AliasMatch = /^(gpt-6-(?:astra|sol|luna))-(max|ultra)$/.exec(modelId);
   if (gpt6AliasMatch) {
     const [, baseModel, alias] = gpt6AliasMatch;
-    if (GPT_6_ALIAS_MODELS.has(baseModel)) {
+    if (GPT_6_ALIAS_MODELS.has(baseModel) && !(baseModel === "gpt-6-luna" && alias === "ultra")) {
       return { baseModel, effort: alias as EffortLevel };
     }
   }
@@ -371,6 +373,8 @@ function normalizeServiceTierValue(value: unknown): string | undefined {
  */
 const MAX_EFFORT_BY_MODEL: Record<string, EffortLevel> = {
   "gpt-6-astra": "ultra",
+  "gpt-6-sol": "ultra",
+  "gpt-6-luna": "max",
   "gpt-5.6-sol": "ultra",
   "gpt-5.6-terra": "ultra",
   "gpt-5.6-luna": "max",
@@ -1081,11 +1085,15 @@ export class CodexExecutor extends BaseExecutor {
   ) {
     const isCompactRequest = isCompactResponsesEndpoint(credentials?.requestEndpointPath);
     const headers = super.buildHeaders(credentials, isCompactRequest ? false : true, clientHeaders);
-    headers.Version = getCodexClientVersion();
-    setUserAgentHeader(headers, getCodexUserAgent());
+    const clientVersion = getCodexClientVersionFromHeaders(clientHeaders);
+    headers.Version = clientVersion ?? getCodexClientVersion();
+    setUserAgentHeader(headers, getCodexUserAgent(clientVersion));
 
     // Add workspace binding header if workspaceId is persisted
-    const workspaceId = credentials?.providerSpecificData?.workspaceId;
+    const workspaceId = resolveCodexAccountId(
+      credentials?.accessToken,
+      credentials?.providerSpecificData
+    );
     if (typeof workspaceId === "string" && workspaceId) {
       headers["chatgpt-account-id"] = workspaceId;
     }

@@ -138,7 +138,22 @@ const CODEX_PREFERRED_UNPREFIXED_MODELS = new Set([
 // short-circuit; #5887 makes the codex block reachable for bare `gpt-5.5`, so the
 // `gpt-5.5 → gpt-5.5-medium` entry is removed to preserve #2877's bare-id contract.
 const CODEX_PREFERRED_UNPREFIXED_MODEL_ALIASES = new Map<string, string>([]);
-export const CODEX_NATIVE_UNPREFIXED_MODELS = new Set(["codex-auto-review"]);
+export const CODEX_NATIVE_UNPREFIXED_MODELS = new Set([
+  "codex-auto-review",
+  "gpt-6-sol",
+  "gpt-6-sol-low",
+  "gpt-6-sol-medium",
+  "gpt-6-sol-high",
+  "gpt-6-sol-xhigh",
+  "gpt-6-sol-max",
+  "gpt-6-sol-ultra",
+  "gpt-6-luna",
+  "gpt-6-luna-low",
+  "gpt-6-luna-medium",
+  "gpt-6-luna-high",
+  "gpt-6-luna-xhigh",
+  "gpt-6-luna-max",
+]);
 
 interface ProviderConnectionLike {
   provider?: unknown;

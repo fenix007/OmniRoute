@@ -194,3 +194,18 @@ export const GLM_PRICING = {
     cache_creation: 0.2,
   },
 };
+
+export const GPT_6_SOL_PRICING = {
+  input: 2,
+  output: 10,
+  cached: 0.2,
+  reasoning: 10,
+  cache_creation: 2.5,
+};
+export const GPT_6_LUNA_PRICING = {
+  input: 0.1,
+  output: 0.5,
+  cached: 0.01,
+  reasoning: 0.5,
+  cache_creation: 0.125,
+};

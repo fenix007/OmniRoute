@@ -49,9 +49,14 @@ export function imageUrlToText(value: unknown): string {
   return toString(record.url);
 }
 
-export function normalizeResponsesReasoningEffort(value: unknown): string {
+export function normalizeResponsesReasoningEffort(value: unknown, model?: unknown): string {
   const effort = toString(value).toLowerCase();
-  return effort === "max" ? "xhigh" : effort;
+  const codexModel =
+    typeof model === "string" &&
+    /^(?:(?:codex|cx)\/)?gpt-6-(?:astra|sol|luna)(?:-(?:low|medium|high|xhigh|max|ultra))?$/.test(
+      model
+    );
+  return effort === "max" && !codexModel ? "xhigh" : effort;
 }
 
 export function shouldRequestClaudeSummarizedThinking(value: unknown): boolean {

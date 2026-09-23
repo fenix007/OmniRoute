@@ -3,6 +3,7 @@ import {
   getCodexDefaultHeaders,
 } from "@omniroute/open-sse/config/codexClient.ts";
 import { isCodexDiscoveryModelExcluded } from "@/shared/services/codexDiscoveryPolicy";
+import { resolveCodexAccountId } from "@omniroute/open-sse/utils/codexAccount.ts";
 
 export {
   CODEX_DISCOVERY_EXCLUDED_IDS,
@@ -27,6 +28,7 @@ export type CodexDiscoveryModel = {
   outputTokenLimit?: number;
   description?: string;
   supportsThinking?: boolean;
+  supportedThinkingEfforts?: string[];
   supportsVision?: boolean;
 };
 
@@ -194,6 +196,12 @@ function buildCodexDiscoveryModel(record: JsonRecord): CodexDiscoveryModel | nul
   if (typeof outputTokenLimit === "number") model.outputTokenLimit = outputTokenLimit;
   if (description) model.description = description;
   if (recordSupportsThinking(record)) model.supportsThinking = true;
+  if (Array.isArray(record.supported_reasoning_levels)) {
+    const efforts = record.supported_reasoning_levels
+      .map((entry) => toNonEmptyString(typeof entry === "string" ? entry : asRecord(entry).effort))
+      .filter((effort): effort is string => effort !== null);
+    if (efforts.length > 0) model.supportedThinkingEfforts = efforts;
+  }
   if (recordSupportsVision(record)) model.supportsVision = true;
 
   return model;
@@ -401,10 +409,7 @@ export async function fetchCodexDiscoveryModels({
   if (!accessToken) return null;
 
   try {
-    const workspaceId =
-      toNonEmptyString(providerSpecificData?.workspaceId) ||
-      toNonEmptyString(providerSpecificData?.chatgptAccountId) ||
-      toNonEmptyString(providerSpecificData?.accountId);
+    const workspaceId = resolveCodexAccountId(accessToken, providerSpecificData);
     const headers: Record<string, string> = {
       ...getCodexDefaultHeaders(),
       Accept: "application/json",

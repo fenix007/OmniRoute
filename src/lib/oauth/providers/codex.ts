@@ -93,50 +93,10 @@ export interface CodexWorkspaceInfo {
   organizations: CodexAuthInfo["organizations"] | null;
 }
 
-/**
- * Build the persisted workspace record from the id_token auth claim.
- *
- * IMPORTANT: A user can have both Team and Personal workspaces.
- * The JWT's chatgpt_account_id may not always reflect the workspace
- * the user selected during OAuth. We need to be smart about selection.
- *
- * Selection logic:
- * 1. If plan_type indicates team/business, use chatgpt_account_id
- * 2. If plan_type is "free" but organizations has team workspace, use team
- * 3. Otherwise use chatgpt_account_id as fallback
- */
 function buildWorkspaceInfo(authInfo: CodexAuthInfo | null): CodexWorkspaceInfo {
-  let workspaceId = authInfo?.chatgpt_account_id || null;
-  let planType = (authInfo?.chatgpt_plan_type || "").toLowerCase();
-
-  // Check if we should use a team workspace instead
+  const workspaceId = authInfo?.chatgpt_account_id || null;
+  const planType = (authInfo?.chatgpt_plan_type || "").toLowerCase();
   const organizations = authInfo?.organizations || [];
-  if (organizations.length > 0) {
-    // Find team/business workspace (non-default usually means team)
-    const teamOrg = organizations.find((org) => {
-      const title = (org.title || "").toLowerCase();
-      const role = (org.role || "").toLowerCase();
-      // Team workspaces typically have role like "member" or "admin" and non-personal titles
-      return (
-        !org.is_default &&
-        (title.includes("team") ||
-          title.includes("business") ||
-          title.includes("workspace") ||
-          title.includes("org") ||
-          role === "admin" ||
-          role === "member")
-      );
-    });
-
-    // If user's plan_type is "team" or we found a team org, prefer it
-    if (planType.includes("team") || planType.includes("chatgptteam")) {
-      // User authenticated via Team, use the chatgpt_account_id from JWT
-    } else if (teamOrg && (planType === "free" || planType === "")) {
-      // User has a team org but plan_type shows free - use team org instead
-      workspaceId = teamOrg.id;
-      planType = "team";
-    }
-  }
 
   return {
     workspaceId,
