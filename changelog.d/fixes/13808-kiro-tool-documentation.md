@@ -1,0 +1,1 @@
+- **fix(kiro):** Preserve oversized tool descriptions on their original conversation turn, keep private documentation fields off the wire, and apply relocation to assistant-only requests without changing existing conversation identity. Adapted from [#13808](https://github.com/diegosouzapw/OmniRoute/pull/13808) — thanks @KelvinKSPS.

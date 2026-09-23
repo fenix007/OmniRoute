@@ -830,3 +830,62 @@ with 87 bundler warnings; its existing configuration skips full type validation,
 so it is not a substitute for the separately passed core typecheck. Build-time
 SQLite is in-memory; no live-provider or deployed-runtime smoke was performed.
 Independent read-only review found no blocking issue.
+
+## Kiro tool documentation — 2026-09-23
+
+Adapted [diegosouzapw/OmniRoute #13808](https://github.com/diegosouzapw/OmniRoute/pull/13808)
+at exact head `425740d5d4fc04292d8498d289f53379808a946e`, merged on
+2026-09-16 as `3fd2440f8aded01b07d8407cea056b68004e78b1`.
+Decision: **adapt**. On this frozen base, a tool description longer than
+10,000 characters is replaced by a pointer, but its full text remains in a
+private `_toolDocs` history field on multi-turn requests, outside prompt content.
+The no-user fallback also bypasses description relocation entirely.
+
+- Retain the documentation and its original user-turn carrier in conversion-local
+  variables. Keep exactly one documentation block in prompt content: the original
+  turn when it enters history, or the current turn for single-user/no-user inputs.
+  Do not assume server-side transcript retention or omit docs on later requests.
+- Extract the existing schema/description conversion into the small
+  `openai-to-kiro/toolDocumentation.ts` helper and use it for both attachment paths.
+  The fallback now shares the existing blank-description normalization as well as
+  the size limit. Short nonblank descriptions and schema sanitization are unchanged.
+- Unlike upstream, embed history and newly relocated fallback documentation only
+  after conversation-ID derivation. Preserve the frozen history/pre-compression
+  seeds, including empty image/tool-result turns and synthetic-user exclusions.
+  The existing single-user long-documentation seed is unchanged; this patch does
+  not redesign session identity. Preserve JSON-contract tail markers, thinking,
+  profile ARN, images, tool-result grouping and assistant prose.
+- Do not import the newer translator or its other helpers, add dependencies,
+  alter quotas/auth/streaming, or raise file-size baselines. Source review found
+  no submitted review or PR discussion; upstream native tests pass but quality
+  and merge-integrity checks fail. Local validation is independent of that CI.
+- The initial 15-case suite fails 14 cases on `b933187a52d9b4de450a0bc47982ad8ade0fa28e`
+  and passes after adaptation. The expanded 20-case suite covers both stream
+  intents, growing histories, assistant-first/only/ending and empty conversations,
+  mixed tools and length boundaries, immutable inputs, preserved IDs, JSON/images,
+  interleaved parallel results, and actual executor HTTP payloads/error status.
+  Together with ten neighboring suites, the focused run passes 116/116.
+
+Full validation results and source-review coverage are retained in the existing
+repository-local maintenance memory. Tests use isolated data directories; no
+default local database inspection, live-provider call or deployment is included.
+Publication follows the existing `[skip ci]` policy without changing workflows.
+
+The full unit run exposed an existing wall-clock-sensitive session-pool test:
+its 50-60ms cooldown elapsed before an assertion after a 107ms scheduling delay.
+The same assertion fails on unchanged `b933187` with a controlled 120ms delay.
+Freeze only this test's clock and jitter, keep its original assertions and add
+exact remaining-time and recovery-boundary assertions. Production cooldowns,
+timers and routing are unchanged; no timeout or test assertion is weakened.
+
+Final validation: full unit passes 23,347 native, 102 dashboard and 20 serial
+tests (14 native skips). The successful coverage retry passes 23,352 native,
+102 dashboard and 20 serial tests (14 native skips): 81% lines/statements,
+78.43% branches and 86.58% functions, above all unchanged 60% gates. The initial
+coverage attempt ran out of disk space and is not counted as a passing run.
+Full lint, core typecheck, file-size, discovery, docs-sync, any-budget,
+tracked-artifact, changelog, changed-code/test formatting and diff checks pass.
+Production build exits zero with 87 bundler warnings; its existing configuration
+skips full type validation, so core typecheck was run separately. Build-time
+SQLite is in-memory; no live-provider or deployed-runtime smoke was performed.
+Independent read-only review found no blocking issue.
