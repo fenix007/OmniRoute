@@ -8,13 +8,13 @@ import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { capMaxOutputTokens, capThinkingBudget } from "@/lib/modelCapabilities";
 import {
   parseToolInput,
-  normalizeKiroToolSchema,
   serializeToolResultContent,
   wrapSystemReminder,
 } from "./openai-to-kiro/messageHelpers.ts";
 import { supportsKiroAdaptiveThinking } from "./openai-to-kiro/adaptiveThinking.ts";
 import { appendKiroJsonFormatInstruction } from "./openai-to-kiro/responseFormat.ts";
 import { createToolResultGrouping } from "./openai-to-kiro/toolResultGrouping.ts";
+import { buildKiroToolSpecs, prependKiroToolDocs } from "./openai-to-kiro/toolDocumentation.ts";
 
 /**
  * Anthropic's direct-provider `[1m]` context-1m beta suffix. Kiro is AWS
@@ -47,6 +47,8 @@ function convertMessages(messages, tools, model) {
   let pendingImages: Array<{ format: string; source: { bytes: string } }> = [];
   let currentRole = null;
   let toolsAttached = false;
+  let toolDocs = "";
+  let toolDocsCarrier = null;
 
   // Only Claude models accept image attachments through Kiro.
   const supportsImages = typeof model === "string" && model.toLowerCase().includes("claude");
@@ -82,7 +84,6 @@ function convertMessages(messages, tools, model) {
             tools?: Array<Record<string, unknown>>;
           };
         };
-        _toolDocs?: string;
       } = {
         userInputMessage: {
           content: content,
@@ -111,39 +112,10 @@ function convertMessages(messages, tools, model) {
         if (!userMsg.userInputMessage.userInputMessageContext) {
           userMsg.userInputMessage.userInputMessageContext = {};
         }
-        // Kiro API rejects requests with tool descriptions > ~10000 chars.
-        // Move long descriptions to system prompt (same approach as kiro-gateway).
-        const TOOL_DESC_MAX = 10000;
-        const toolDocs: string[] = [];
-        userMsg.userInputMessage.userInputMessageContext.tools = tools.map((t) => {
-          const name = t.function?.name || t.name;
-          let description = t.function?.description || t.description || "";
-
-          if (!description.trim()) {
-            description = `Tool: ${name}`;
-          }
-
-          if (description.length > TOOL_DESC_MAX) {
-            toolDocs.push(`## Tool: ${name}\n\n${description}`);
-            description = `[Full documentation in system prompt under '## Tool: ${name}']`;
-          }
-
-          return {
-            toolSpecification: {
-              name,
-              description,
-              inputSchema: {
-                json: normalizeKiroToolSchema(
-                  t.function?.parameters || t.parameters || t.input_schema || {}
-                ),
-              },
-            },
-          };
-        });
-        // Attach tool docs to message so buildKiroPayload can prepend to content
-        if (toolDocs.length > 0) {
-          userMsg._toolDocs = toolDocs.join("\n\n---\n\n");
-        }
+        const built = buildKiroToolSpecs(tools);
+        userMsg.userInputMessage.userInputMessageContext.tools = built.specs;
+        toolDocs = built.docs;
+        toolDocsCarrier = userMsg;
         toolsAttached = true;
       }
 
@@ -363,21 +335,10 @@ function convertMessages(messages, tools, model) {
     if (!currentMessage.userInputMessage.userInputMessageContext) {
       currentMessage.userInputMessage.userInputMessageContext = {};
     }
-    currentMessage.userInputMessage.userInputMessageContext.tools = tools.map((t) => {
-      const name = t.function?.name || t.name;
-      const description = t.function?.description || t.description || `Tool: ${name}`;
-      return {
-        toolSpecification: {
-          name,
-          description,
-          inputSchema: {
-            json: normalizeKiroToolSchema(
-              t.function?.parameters || t.parameters || t.input_schema || {}
-            ),
-          },
-        },
-      };
-    });
+    const built = buildKiroToolSpecs(tools);
+    currentMessage.userInputMessage.userInputMessageContext.tools = built.specs;
+    toolDocs = built.docs;
+    // No original user carrier: defer documentation until after session hashing.
     toolsAttached = true;
   }
 
@@ -570,7 +531,7 @@ function convertMessages(messages, tools, model) {
     alternatingHistory.push(item);
   }
 
-  return { history: alternatingHistory, currentMessage, toolsAttached };
+  return { history: alternatingHistory, currentMessage, toolsAttached, toolDocs, toolDocsCarrier };
 }
 
 /** Kiro's accepted reasoning-effort levels (`output_config.effort`). */
@@ -737,7 +698,7 @@ export function buildKiroPayload(model, body, stream, credentials) {
     }
   }
 
-  const { history, currentMessage, toolsAttached } = convertMessages(
+  const { history, currentMessage, toolDocs, toolDocsCarrier } = convertMessages(
     messages,
     tools,
     normalizedModel
@@ -750,9 +711,8 @@ export function buildKiroPayload(model, body, stream, credentials) {
   finalContent = `[Context: Current time is ${timestamp}]\n\n${finalContent}`;
 
   // Prepend tool documentation for tools with long descriptions (moved from toolSpecification)
-  const toolDocs = (currentMessage as { _toolDocs?: string } | null)?._toolDocs;
-  if (toolDocs) {
-    finalContent = `# Tool Documentation\n\n${toolDocs}\n\n---\n\n${finalContent}`;
+  if (toolDocs && toolDocsCarrier === currentMessage) {
+    finalContent = prependKiroToolDocs(finalContent, toolDocs);
   }
 
   // Appended last: output-format instructions hold far better at the prompt tail.
@@ -843,6 +803,16 @@ export function buildKiroPayload(model, body, stream, credentials) {
     (firstContent || "").substring(0, 4000),
     NAMESPACE_KIRO
   );
+
+  // Anchor docs to their original history turn, or the no-user fallback.
+  // Do this after hashing: relocated text must not change the existing session
+  // seed, including an empty image/tool-result carrier skipped by the lookup.
+  if (toolDocs && toolDocsCarrier !== currentMessage) {
+    const target =
+      toolDocsCarrier?.userInputMessage ||
+      payload.conversationState.currentMessage.userInputMessage;
+    target.content = prependKiroToolDocs(target.content || "", toolDocs);
+  }
 
   if (profileArn) {
     payload.profileArn = profileArn;

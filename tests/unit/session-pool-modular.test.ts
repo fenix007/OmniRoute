@@ -179,10 +179,21 @@ describe("Session State Machine", () => {
     assert.equal(session.isAvailable, true);
   });
 
-  it("markCooldown transitions to cooldown with backoff", () => {
+  it("markCooldown transitions to cooldown with backoff", (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: 100000 });
+    t.mock.method(Math, "random", () => 0.5);
     session.markCooldown();
     assert.equal(session.status, "cooldown");
     assert.ok(session.cooldownRemaining > 0, "cooldownRemaining should be > 0");
+    assert.equal(session.cooldownRemaining, 55);
+    assert.equal(session.isAvailable, false);
+    t.mock.timers.tick(54);
+    assert.equal(session.cooldownRemaining, 1);
+    assert.equal(session.isAvailable, false);
+    t.mock.timers.tick(1);
+    assert.equal(session.cooldownRemaining, 0);
+    assert.equal(session.isAvailable, true);
+    assert.equal(session.status, "active");
   });
 
   it("markDead transitions to dead permanently", () => {
