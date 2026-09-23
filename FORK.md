@@ -786,3 +786,47 @@ remains bounded, with deferred candidates retained in repository-local memory.
 Full validation and publication results are recorded there. Any maintenance
 push uses the existing `[skip ci]` policy; no image, release or deployment is
 part of this change.
+
+## Codex reasoning compatibility — 2026-09-23
+
+Adapted [diegosouzapw/OmniRoute #14065](https://github.com/diegosouzapw/OmniRoute/pull/14065)
+at exact head `a932b873f4cfffc2931e145d7f93dbb3f2c37b39`, merged on
+2026-09-18 as `de428cef867eceb207475db1c0bc96fb37f08ff4`.
+Decision: **adapt**. The frozen executor spreads arbitrary client `reasoning`
+fields into the Codex request. OpenRouter-style `enabled`, `max_tokens` and
+`exclude` therefore reach a backend that rejects them as unknown parameters.
+
+- Keep only `effort` and `summary` before automatic summary injection. Remove
+  an empty object even when no effort is resolved. Interpret `enabled: false`
+  as `none` only after model suffix, nested effort and flat effort selection;
+  it wins over the account default, not over explicit per-request effort.
+- Preserve this fork's existing clamp, ultra-to-max mapping, native passthrough,
+  compact endpoint, summary/include behavior and caller-input immutability.
+  The newer upstream force-rule selector is absent here and is not introduced.
+  Do not import the upstream file-size rebaseline or unrelated executor changes.
+- The source restores an earlier fix lost in upstream's #13717 squash; the
+  maintainer flags a possible later reintroduction through #13224. The inspected
+  head contains the whitelist. Upstream unit/quality checks include failures;
+  merged status and maintainer test reports are not local validation evidence.
+- New independently authored tests fail 15/16 on clean production code at
+  `5b1cd4c4cb06c1b4186c0e1c2a9dac431e1f1f8f`; all 16 pass after adaptation.
+  The combined nine-suite Codex run passes 90/90, including captured HTTP
+  requests with both client stream intents, WebSocket `response.create` and
+  normal socket closure, compact/native paths, effort precedence, clamping,
+  unknown-only objects, explicit includes and unchanged malformed-value behavior.
+
+Full gate results and two-source review coverage are recorded in the existing
+repository-local maintenance memory. Live-provider validation is not claimed.
+Publication uses the existing `[skip ci]` policy; no release, image publication,
+workflow dispatch or deployment is part of this maintenance.
+
+Final validation: full unit passes 23,369 native, 102 dashboard and 20 serial
+tests (14 native skips). Coverage passes 23,356 native, 102 dashboard and 20
+serial tests (14 native skips): 80.99% lines/statements, 78.41% branches and
+86.59% functions, above all unchanged 60% gates. Full lint, core typecheck,
+file-size, discovery, docs-sync, any-budget, tracked-artifact, changelog,
+changed-code/test formatting and diff checks pass. Production build exits zero
+with 87 bundler warnings; its existing configuration skips full type validation,
+so it is not a substitute for the separately passed core typecheck. Build-time
+SQLite is in-memory; no live-provider or deployed-runtime smoke was performed.
+Independent read-only review found no blocking issue.

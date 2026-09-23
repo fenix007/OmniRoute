@@ -1,0 +1,1 @@
+- **fix(codex):** remove client-only reasoning fields before HTTP/WebSocket dispatch, preserving effort precedence and honoring explicit reasoning disable over account defaults ([#14065](https://github.com/diegosouzapw/OmniRoute/pull/14065)) — thanks @HouMinXi.
