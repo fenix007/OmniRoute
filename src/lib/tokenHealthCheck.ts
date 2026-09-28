@@ -32,12 +32,20 @@ import {
   getEffectiveTokenExpiryMs,
   isGitHubAccessTokenOnlyConnection,
 } from "./tokenHealthCheckHelpers";
+import {
+  clearRefreshCircuit,
+  getExpiredRetryBackoffMs,
+  getExpiredRetryState,
+  probeExpiredConnection,
+  withExpiredRetryAttempt,
+} from "./tokenHealthCheckExpired";
+
+export { clearRefreshCircuit, getExpiredRetryBackoffMs, getExpiredRetryState };
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const TICK_MS = 60 * 1000; // sweep interval: every 60 seconds
 const DEFAULT_HEALTH_CHECK_INTERVAL_MIN = 60; // default per-connection interval
 const EXPIRED_RETRY_MAX = 3; // max retry attempts for expired connections before giving up
-const EXPIRED_RETRY_BACKOFF_MIN = 5; // backoff between expired retries (minutes)
 const LOG_PREFIX = "[HealthCheck]";
 const TRUE_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 
@@ -97,13 +105,16 @@ export function isInRefreshBackoff(conn: any, nowMs: number): boolean {
 
 export function buildRefreshFailureUpdate(conn: any, now: string) {
   const wasExpired = conn.testStatus === "expired";
-  const retryCount = (conn.expiredRetryCount ?? 0) + (wasExpired ? 1 : 0);
 
   // Circuit breaker: increment the consecutive-failure streak and set an
   // exponential backoff window so the next sweep skips this connection instead
   // of retrying every 60s. Cleared by a successful refresh (clearRefreshCircuit).
   const prevStreak = conn.providerSpecificData?.refreshCircuit?.streak ?? 0;
   const streak = prevStreak + 1;
+  const providerSpecificData = {
+    ...(conn.providerSpecificData || {}),
+    refreshCircuit: { streak, until: getRefreshBackoffUntil(streak, now), lastFailAt: now },
+  };
 
   return {
     lastHealthCheckAt: now,
@@ -116,26 +127,10 @@ export function buildRefreshFailureUpdate(conn: any, now: string) {
     lastErrorType: "token_refresh_failed",
     lastErrorSource: "oauth",
     errorCode: "refresh_failed",
-    providerSpecificData: {
-      ...(conn.providerSpecificData || {}),
-      refreshCircuit: { streak, until: getRefreshBackoffUntil(streak, now), lastFailAt: now },
-    },
-    ...(wasExpired ? { expiredRetryCount: retryCount, expiredRetryAt: now } : {}),
+    providerSpecificData: wasExpired
+      ? withExpiredRetryAttempt(providerSpecificData, now)
+      : providerSpecificData,
   };
-}
-
-/**
- * Strip the refresh circuit breaker state from providerSpecificData after a
- * successful refresh, so the streak/backoff resets cleanly.
- */
-export function clearRefreshCircuit(
-  providerSpecificData: Record<string, unknown> | null | undefined
-): Record<string, unknown> | undefined {
-  if (!providerSpecificData || typeof providerSpecificData !== "object") return undefined;
-  if (!("refreshCircuit" in providerSpecificData)) return undefined;
-  const next = { ...providerSpecificData };
-  delete next.refreshCircuit;
-  return next;
 }
 
 function isEnvFlagEnabled(name: string): boolean {
@@ -384,6 +379,9 @@ export async function checkConnection(conn) {
       }
 
       if (canClearGitHubNoRefreshTokenState(conn)) {
+        const clearedProviderSpecificData = clearRefreshCircuit(
+          refreshedProviderSpecificData || providerSpecificData
+        );
         await updateProviderConnection(conn.id, {
           lastHealthCheckAt: now,
           testStatus: "active",
@@ -397,10 +395,8 @@ export async function checkConnection(conn) {
           lastErrorSource: copilotAboutToExpire && !refreshedProviderSpecificData ? "oauth" : null,
           errorCode:
             copilotAboutToExpire && !refreshedProviderSpecificData ? "refresh_failed" : null,
-          expiredRetryCount: null,
-          expiredRetryAt: null,
-          ...(refreshedProviderSpecificData
-            ? { providerSpecificData: refreshedProviderSpecificData }
+          ...(clearedProviderSpecificData || refreshedProviderSpecificData
+            ? { providerSpecificData: clearedProviderSpecificData || refreshedProviderSpecificData }
             : {}),
         });
       } else {
@@ -449,14 +445,28 @@ export async function checkConnection(conn) {
     return;
   }
 
-  // Retry expired connections with exponential backoff up to EXPIRED_RETRY_MAX times.
+  // Retry expired connections with exponential backoff. Providers with an
+  // upstream token probe keep being probed (capped backoff); refresh-based
+  // retries stop after EXPIRED_RETRY_MAX attempts.
   if (conn.testStatus === "expired") {
-    const retryCount = conn.expiredRetryCount ?? 0;
-    if (retryCount >= EXPIRED_RETRY_MAX) return;
+    const { count: retryCount, at: lastRetryAt } = getExpiredRetryState(conn);
+    const lastRetry = lastRetryAt ? new Date(lastRetryAt).getTime() : 0;
+    if (Date.now() - lastRetry < getExpiredRetryBackoffMs(retryCount)) return;
 
-    const lastRetry = conn.expiredRetryAt ? new Date(conn.expiredRetryAt).getTime() : 0;
-    const backoffMs = EXPIRED_RETRY_BACKOFF_MIN * 60 * 1000 * Math.pow(2, retryCount);
-    if (Date.now() - lastRetry < backoffMs) return;
+    const proxyConfig = extractResolvedProxyConfig(await resolveProxyForConnection(conn.id));
+    const probe = await probeExpiredConnection(conn, proxyConfig);
+    const label = `${conn.provider}/${getConnectionLogLabel(conn)}`;
+    if (probe.outcome === "recovered") {
+      log(`${LOG_PREFIX} ✓ ${label} access token accepted upstream; restored from expired`);
+      return;
+    }
+    if (probe.outcome === "failed") {
+      logWarn(
+        `${LOG_PREFIX} ✗ ${label} still rejected (${probe.error}); next probe in ${probe.nextProbeMin}min`
+      );
+      return;
+    }
+    if (retryCount >= EXPIRED_RETRY_MAX) return;
 
     log(
       `${LOG_PREFIX} Retrying expired ${conn.provider}/${getConnectionLogLabel(conn)} (attempt ${retryCount + 1}/${EXPIRED_RETRY_MAX})`
@@ -506,7 +516,19 @@ export async function checkConnection(conn) {
   const shouldRefreshByInterval =
     !hasKnownExpiry && !isRotatingProvider && Date.now() - lastCheck >= intervalMs;
 
-  if (!isAboutToExpire && !shouldRefreshByInterval) return;
+  if (!isAboutToExpire && !shouldRefreshByInterval) {
+    // Nothing is due for refresh; still count the expired retry so the sweep
+    // backs off instead of re-announcing the same attempt every tick.
+    if (conn.testStatus === "expired") {
+      await updateProviderConnection(conn.id, {
+        providerSpecificData: withExpiredRetryAttempt(
+          conn.providerSpecificData,
+          new Date().toISOString()
+        ),
+      });
+    }
+    return;
+  }
 
   // Circuit breaker: if recent refreshes for this connection failed, wait out
   // the exponential backoff window instead of retrying every 60s tick. This is
@@ -575,8 +597,6 @@ export async function checkConnection(conn) {
         lastErrorType: null,
         lastErrorSource: null,
         errorCode: null,
-        expiredRetryCount: null,
-        expiredRetryAt: null,
       };
       if (refreshResult.refreshToken) {
         updateData.refreshToken = refreshResult.refreshToken;
@@ -696,8 +716,6 @@ export async function checkConnection(conn) {
         lastErrorType: null,
         lastErrorSource: null,
         errorCode: null,
-        expiredRetryCount: null,
-        expiredRetryAt: null,
       };
 
       if (result.refreshToken) {
@@ -713,11 +731,15 @@ export async function checkConnection(conn) {
         updateData.tokenExpiresAt = expiresAt;
       }
 
-      if (result.providerSpecificData) {
-        updateData.providerSpecificData = {
-          ...(conn.providerSpecificData || {}),
-          ...result.providerSpecificData,
-        };
+      const mergedProviderData = {
+        ...(conn.providerSpecificData || {}),
+        ...(result.providerSpecificData || {}),
+      };
+      const clearedProviderData = clearRefreshCircuit(mergedProviderData);
+      if (clearedProviderData !== undefined) {
+        updateData.providerSpecificData = clearedProviderData;
+      } else if (result.providerSpecificData) {
+        updateData.providerSpecificData = mergedProviderData;
       }
 
       await updateProviderConnection(conn.id, updateData);
@@ -791,7 +813,7 @@ export async function checkConnection(conn) {
     logWarn(
       `${LOG_PREFIX} ✗ ${conn.provider}/${getConnectionLogLabel(conn)} refresh failed` +
         (conn.testStatus === "expired"
-          ? ` (${updateData.expiredRetryCount}/${EXPIRED_RETRY_MAX} expired retries used)`
+          ? ` (${getExpiredRetryState(updateData).count}/${EXPIRED_RETRY_MAX} expired retries used)`
           : "")
     );
   }

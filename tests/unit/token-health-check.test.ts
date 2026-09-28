@@ -170,7 +170,7 @@ test("buildRefreshFailureUpdate keeps active connections routable after refresh 
   const update = tokenHealthCheck.buildRefreshFailureUpdate(
     {
       testStatus: "active",
-      expiredRetryCount: 2,
+      providerSpecificData: { expiredRetry: { count: 2, at: now } },
     },
     now
   );
@@ -181,8 +181,7 @@ test("buildRefreshFailureUpdate keeps active connections routable after refresh 
   assert.equal(update.lastErrorSource, "oauth");
   assert.equal(update.errorCode, "refresh_failed");
   assert.equal(update.lastHealthCheckAt, now);
-  assert.equal("expiredRetryCount" in update, false);
-  assert.equal("expiredRetryAt" in update, false);
+  assert.deepEqual(update.providerSpecificData.expiredRetry, { count: 2, at: now });
 });
 
 test("buildRefreshFailureUpdate preserves expired retry tracking", () => {
@@ -191,14 +190,13 @@ test("buildRefreshFailureUpdate preserves expired retry tracking", () => {
   const update = tokenHealthCheck.buildRefreshFailureUpdate(
     {
       testStatus: "expired",
-      expiredRetryCount: 2,
+      providerSpecificData: { expiredRetry: { count: 2, at: "2026-04-09T04:00:00.000Z" } },
     },
     now
   );
 
   assert.equal(update.testStatus, "expired");
-  assert.equal(update.expiredRetryCount, 3);
-  assert.equal(update.expiredRetryAt, now);
+  assert.deepEqual(update.providerSpecificData.expiredRetry, { count: 3, at: now });
 });
 
 test("checkConnection uses the resolved proxy payload when refreshing tokens", async () => {
@@ -584,3 +582,90 @@ for (const providerId of ["antigravity"]) {
     );
   });
 }
+
+function mockCodexProbe(t, status: number) {
+  const original = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: RequestInfo | URL) => {
+    const target = String(url);
+    calls.push(target);
+    if (!target.startsWith("https://chatgpt.com/backend-api/codex/responses")) {
+      throw new Error(`unexpected fetch ${target}`);
+    }
+    return new Response(JSON.stringify({ error: { message: "probe" } }), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  return calls;
+}
+
+async function createExpiredCodexConnection(providerSpecificData = {}) {
+  return providersDb.createProviderConnection({
+    provider: "codex",
+    authType: "oauth",
+    name: "Expired Codex Account",
+    email: "expired-codex@example.com",
+    accessToken: "codex-access-still-valid",
+    refreshToken: "codex-refresh-single-use",
+    expiresAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
+    testStatus: "expired",
+    lastError: "[401]: Incorrect API key provided",
+    lastErrorType: "unauthorized",
+    errorCode: "401.0",
+    providerSpecificData,
+    isActive: true,
+  });
+}
+
+test("checkConnection restores an expired Codex account whose access token is still accepted", async (t) => {
+  await resetStorage();
+  const calls = mockCodexProbe(t, 400);
+  const connection = await createExpiredCodexConnection({
+    workspaceId: "ws-1",
+    expiredRetry: { count: 1, at: "2026-01-01T00:00:00.000Z" },
+  });
+
+  await tokenHealthCheck.checkConnection(connection);
+
+  const updated = await providersDb.getProviderConnectionById((connection as { id: string }).id);
+  assert.equal(calls.length, 1);
+  assert.equal(updated?.testStatus, "active");
+  assert.equal(updated?.lastError ?? null, null);
+  assert.equal(updated?.errorCode ?? null, null);
+  assert.equal(updated?.refreshToken, "codex-refresh-single-use");
+  assert.equal(updated?.accessToken, "codex-access-still-valid");
+  assert.equal(updated?.providerSpecificData?.workspaceId, "ws-1");
+  assert.equal("expiredRetry" in (updated?.providerSpecificData || {}), false);
+});
+
+test("checkConnection keeps a rejected Codex account expired and backs off the next probe", async (t) => {
+  await resetStorage();
+  const calls = mockCodexProbe(t, 401);
+  const connection = await createExpiredCodexConnection();
+
+  await tokenHealthCheck.checkConnection(connection);
+
+  const afterFirst = await providersDb.getProviderConnectionById((connection as { id: string }).id);
+  assert.equal(calls.length, 1);
+  assert.equal(afterFirst?.testStatus, "expired");
+  assert.equal(afterFirst?.refreshToken, "codex-refresh-single-use");
+  assert.equal(afterFirst?.providerSpecificData?.expiredRetry?.count, 1);
+
+  await tokenHealthCheck.checkConnection(afterFirst);
+
+  const afterSecond = await providersDb.getProviderConnectionById(
+    (connection as { id: string }).id
+  );
+  assert.equal(calls.length, 1, "second sweep inside the backoff window must not probe again");
+  assert.equal(afterSecond?.providerSpecificData?.expiredRetry?.count, 1);
+});
+
+test("expired retry backoff grows exponentially and is capped", () => {
+  assert.equal(tokenHealthCheck.getExpiredRetryBackoffMs(0), 5 * 60 * 1000);
+  assert.equal(tokenHealthCheck.getExpiredRetryBackoffMs(2), 20 * 60 * 1000);
+  assert.equal(tokenHealthCheck.getExpiredRetryBackoffMs(20), 240 * 60 * 1000);
+});

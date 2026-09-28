@@ -889,3 +889,27 @@ Production build exits zero with 87 bundler warnings; its existing configuration
 skips full type validation, so core typecheck was run separately. Build-time
 SQLite is in-memory; no live-provider or deployed-runtime smoke was performed.
 Independent read-only review found no blocking issue.
+
+## Expired OAuth connection recovery (2026-09-28)
+
+On 2026-09-25 22:38-22:50 UTC the Codex upstream answered every Plus account with
+`401 Incorrect API key provided` while refreshes failed, so nine accounts were
+marked `expired`. Their access tokens stayed valid, but they never returned to
+routing: the health check logged `Retrying expired … (attempt 1/3)` every minute
+and then returned, because Codex refresh is expiry-driven only. The retry state
+(`expiredRetryCount`/`expiredRetryAt`) was also never persisted: `provider_connections`
+has no such columns, so every sweep saw attempt 1. On 2026-09-28 the remaining
+pool was exhausted and the `coding` combo returned `503 all targets exhausted`.
+
+- `src/lib/tokenHealthCheckExpired.ts` stores retry state in
+  `providerSpecificData.expiredRetry` with a 5-minute exponential backoff capped at
+  4 hours, and probes an expired connection whose access token has not lapsed.
+- The probe (`probeOAuthAccessToken`, `src/lib/providers/oauthTestConfig.ts`) sends the
+  connection-test request through the connection proxy and never refreshes, so a
+  rotating refresh token is not consumed. Accepted: status `active`, errors and retry
+  state cleared. Rejected: stays `expired` and backs off. Probe-capable providers keep
+  probing; refresh-based retries still stop after three attempts.
+- `OAUTH_TEST_CONFIG` moved unchanged from the connection-test route into that module so
+  the health check does not import the route graph.
+
+Tests: `tests/unit/token-health-check.test.ts`, `tests/unit/token-health-check-circuit-breaker.test.ts`.
