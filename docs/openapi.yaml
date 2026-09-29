@@ -1412,7 +1412,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [input]
+              required: [model, input]
               properties:
                 input:
                   type: string
@@ -1420,6 +1420,47 @@ paths:
                   type: string
                 voice:
                   type: string
+                voice_settings:
+                  type: object
+                  description: >-
+                    ElevenLabs v4 accepts only stability and similarity_boost (0 to 1).
+                    Legacy ElevenLabs models also accept style, speed and use_speaker_boost.
+                  properties:
+                    stability:
+                      type: number
+                      minimum: 0
+                      maximum: 1
+                    similarity_boost:
+                      type: number
+                      minimum: 0
+                      maximum: 1
+                language_code:
+                  type: string
+                  description: ElevenLabs language override; omitted for eleven_multilingual_v2.
+                  pattern: "^[a-z]{2,3}$"
+                output_format:
+                  type: string
+                  description: Native ElevenLabs output format; overrides response_format.
+                  example: wav_24000
+                response_format:
+                  type: string
+                  description: ElevenLabs accepts mp3, opus, pcm or wav. Other providers may differ.
+                speed:
+                  type: number
+                  description: ElevenLabs legacy speed (0.7 to 1.2); v4 accepts only the no-op value 1.
+                seed:
+                  type: integer
+                  minimum: 0
+                  maximum: 4294967295
+                previous_text:
+                  type: string
+                  description: ElevenLabs context preceding this generation.
+                next_text:
+                  type: string
+                  description: ElevenLabs context following this generation.
+                apply_text_normalization:
+                  type: string
+                  enum: [auto, "on", "off"]
       responses:
         "200":
           description: >-

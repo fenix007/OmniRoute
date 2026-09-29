@@ -18,6 +18,7 @@ import { CORS_HEADERS } from "../utils/cors.ts";
 
 import { getSpeechProvider, parseSpeechModel } from "../config/audioRegistry.ts";
 import { buildAuthHeaders } from "../config/registryUtils.ts";
+import { buildElevenLabsSpeechRequest } from "../config/elevenlabsSpeech.ts";
 import { kieExecutor } from "../executors/kie.ts";
 import { vertexGenerateSpeech } from "../executors/vertexMedia.ts";
 import { errorResponse } from "../utils/error.ts";
@@ -111,25 +112,25 @@ async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
   if (!isValidPathSegment(voiceId)) {
     return errorResponse(400, "Invalid voice ID");
   }
-  const url = `${providerConfig.baseUrl}/${voiceId}`;
+  const speech = buildElevenLabsSpeechRequest(body, modelId);
+  if ("error" in speech) return errorResponse(400, speech.error);
+  const url = new URL(`${providerConfig.baseUrl}/${voiceId}`);
+  if (speech.outputFormat) url.searchParams.set("output_format", speech.outputFormat);
 
-  const res = await fetch(url, {
+  const res = await fetch(url.toString(), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...buildAuthHeaders(providerConfig, token),
     },
-    body: JSON.stringify({
-      text: body.input,
-      model_id: modelId,
-    }),
+    body: JSON.stringify(speech.payload),
   });
 
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
   }
 
-  return audioStreamResponse(res);
+  return audioStreamResponse(res, speech.contentType);
 }
 
 async function handleInferenceShOmniVoiceSpeech(providerConfig, body, modelId, token) {
