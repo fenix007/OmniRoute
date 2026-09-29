@@ -96,3 +96,25 @@ test("interrupted 499 combo preserves its terminal reason", () => {
     '[499] Combo "coding" request interrupted: Model timeout: combo-per-model-timeout'
   );
 });
+
+test("combo rejection stores bounded target exclusions from diagnostic response", async () => {
+  const { errorResponseWithComboDiagnostics } = await import("../../open-sse/utils/error.ts");
+  const { readRejectedComboDiagnostics } = await import(
+    "../../src/sse/handlers/rejectedRequestUsage.ts"
+  );
+  const response = errorResponseWithComboDiagnostics(503, "unavailable", {
+    poolSize: 2,
+    attempted: 0,
+    excluded: [
+      { provider: "codex", model: "gpt-6-sol-medium", reason: "no_available_credentials_or_model_excluded" },
+      { provider: "openai", model: "gpt-6-sol", reason: "credential_gate" },
+    ],
+    attemptOrder: [],
+    terminalReason: "all_accounts_inactive",
+  });
+  const diagnostics = await readRejectedComboDiagnostics(response);
+  const summary = describeRejectedComboFailure({ status: 503, comboName: "coding", diagnostics });
+  assert.match(summary, /codex.*no_available_credentials_or_model_excluded/);
+  assert.match(summary, /openai.*credential_gate/);
+  assert.equal(response.bodyUsed, false);
+});

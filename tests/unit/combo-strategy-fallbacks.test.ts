@@ -120,6 +120,36 @@ test("fill-first falls back to the second target when the first fails", async ()
   assert.deepEqual(calls, ["openai/gpt-4o-mini", "claude/sonnet"]);
 });
 
+test("priority combo reports why every target was skipped before dispatch", async () => {
+  let calls = 0;
+  const result = await handleComboChat({
+    body: {},
+    combo: {
+      name: "coding",
+      strategy: "priority",
+      models: ["codex/gpt-6-sol-medium", "openai/gpt-6-sol"],
+      config: { maxRetries: 0, maxSetRetries: 0 },
+    },
+    handleSingleModel: async () => {
+      calls++;
+      return okResponse();
+    },
+    isModelAvailable: async () => false,
+    log: createLog(),
+    settings: null,
+    allCombos: null,
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(result.status, 503);
+  const body = await result.json();
+  assert.equal(body.diagnostics.attempted, 0);
+  assert.deepEqual(body.diagnostics.excluded.map((item: { reason: string }) => item.reason), [
+    "no_available_credentials_or_model_excluded",
+    "no_available_credentials_or_model_excluded",
+  ]);
+});
+
 test("p2c falls back to the remaining target when the selected one fails", async () => {
   const calls: string[] = [];
   const result = await handleComboChat({

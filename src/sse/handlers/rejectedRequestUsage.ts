@@ -18,6 +18,10 @@
  * never turn into a second failure on the response path.
  */
 import { saveCallLog, saveRequestUsage } from "@/lib/usageDb";
+import {
+  sanitizeComboDiagnostics,
+  type ComboDiagnostics,
+} from "@omniroute/open-sse/utils/error.ts";
 
 export interface RejectedRequestUsageInput {
   status: number;
@@ -46,16 +50,41 @@ export function describeRejectedComboFailure({
   status,
   comboName,
   reason,
+  diagnostics,
 }: {
   status: number;
   comboName: string;
   reason?: string | null;
+  diagnostics?: ComboDiagnostics | null;
 }): string {
   const prefix = `[${status}] Combo "${comboName}"`;
-  if (status !== 499) return `${prefix} failed — all targets exhausted`;
+  if (status !== 499) {
+    const summary = `${prefix} failed — all targets exhausted`;
+    if (!diagnostics) return summary;
+    const safe = sanitizeComboDiagnostics(diagnostics);
+    return `${summary}; diagnostics=${JSON.stringify({
+      poolSize: safe.poolSize,
+      attempted: safe.attempted,
+      excluded: safe.excluded,
+      terminalReason: safe.terminalReason,
+    })}`;
+  }
 
   const suffix = reason?.trim() ? `: ${reason.trim()}` : "";
   return `${prefix} request interrupted${suffix}`;
+}
+
+export async function readRejectedComboDiagnostics(
+  response: Response
+): Promise<ComboDiagnostics | null> {
+  if (!response.headers.has("x-omniroute-combo-terminal-reason")) return null;
+  try {
+    const body = await response.clone().json();
+    if (!body?.diagnostics || typeof body.diagnostics !== "object") return null;
+    return sanitizeComboDiagnostics(body.diagnostics);
+  } catch {
+    return null;
+  }
 }
 
 export async function recordRejectedRequestUsage(input: RejectedRequestUsageInput): Promise<void> {

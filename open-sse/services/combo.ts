@@ -1295,6 +1295,7 @@ export async function handleComboChat({
   // (provider/model ids only) so a terminal combo failure can report the attempt
   // sequence alongside pool size + exhaustion reasons. Accumulates across set retries.
   const comboAttemptOrder: Array<{ provider: string; model: string }> = [];
+  const skippedTargets = new Map<string, { provider: string; model: string; reason: string }>();
 
   if (orderedTargets.length === 0) {
     return errorResponseWithComboDiagnostics(
@@ -1398,6 +1399,7 @@ export async function handleComboChat({
         poolSize: orderedTargets.length,
         attempted: recordedAttempts,
         excluded: [
+          ...skippedTargets.values(),
           ...[...exhaustedProviders].map((p) => ({ provider: p, reason: "exhausted" })),
           ...[...exhaustedConnections].map((c) => ({
             provider: "unknown",
@@ -1407,6 +1409,14 @@ export async function handleComboChat({
         attemptOrder: comboAttemptOrder,
         terminalReason,
       });
+
+      const recordSkip = (target: ResolvedComboTarget, reason: string) => {
+        skippedTargets.set(target.executionKey, {
+          provider: target.provider,
+          model: parseModel(target.modelStr).model || target.modelStr,
+          reason,
+        });
+      };
 
       let globalResolve: ((res: Response) => void) | null = null;
       const globalPromise = new Promise<Response>((res) => {
@@ -1427,6 +1437,7 @@ export async function handleComboChat({
 
         const cb = getCircuitBreaker(provider);
         if (cb.getStatus().state === "OPEN") {
+          recordSkip(target, "circuit_breaker_open");
           log.info("COMBO", `Skipping ${modelStr} — circuit breaker OPEN for ${provider}`);
           if (i > 0) fallbackCount++;
           return null;
@@ -1437,6 +1448,7 @@ export async function handleComboChat({
           Boolean(provider && provider !== "unknown") &&
           isProviderInCooldown(provider, target.connectionId ?? undefined, resilienceSettings)
         ) {
+          recordSkip(target, "provider_cooldown");
           log.info("COMBO", `Skipping ${modelStr} — provider ${provider} in global cooldown`);
           if (i > 0) fallbackCount++;
           return null;
@@ -1464,6 +1476,7 @@ export async function handleComboChat({
           exhaustedConnections
         );
         if (exhaustedSkip) {
+          recordSkip(target, "target_exhausted");
           log.info("COMBO", exhaustedSkip);
           if (i > 0) fallbackCount++;
           return null;
@@ -1471,6 +1484,7 @@ export async function handleComboChat({
 
         // Pre-check: skip models locked by the resilience system (model-level lockout)
         if (provider && rawModel && isModelLocked(provider, target.connectionId || "", rawModel)) {
+          recordSkip(target, "model_lockout");
           log.info("COMBO", `Skipping ${modelStr} — model locked by resilience (cooldown active)`);
           if (i > 0) fallbackCount++;
           return null;
@@ -1494,6 +1508,7 @@ export async function handleComboChat({
             log
           );
           if (quotaCutoff.blocked) {
+            recordSkip(target, "quota_cutoff");
             log.info(
               "COMBO",
               `Skipping ${modelStr} — quota exhaustion cutoff (${quotaCutoff.reason || "quota_exhausted"})`
@@ -1511,6 +1526,7 @@ export async function handleComboChat({
         if (isModelAvailable) {
           const available = await isModelAvailable(modelStr, targetForAttempt);
           if (!available) {
+            recordSkip(target, "no_available_credentials_or_model_excluded");
             log.debug?.(
               "COMBO",
               `Skipping ${modelStr} — no credentials available or model excluded`
@@ -1525,6 +1541,7 @@ export async function handleComboChat({
         if (connectionId) {
           const gateResult = checkCredentialGate(connectionId, provider, modelStr);
           if (gateResult.allowed === false) {
+            recordSkip(target, "credential_gate");
             logCredentialSkip(log, modelStr, gateResult.reason || "Credential gate blocked");
             if (i > 0) fallbackCount++;
             return null;
@@ -1532,6 +1549,7 @@ export async function handleComboChat({
         }
 
         // Retry loop for transient errors
+        skippedTargets.delete(target.executionKey);
         for (let retry = 0; retry <= maxRetries; retry++) {
           // Fix #1681: Bail out immediately if the client has disconnected
           if (signal?.aborted) {
