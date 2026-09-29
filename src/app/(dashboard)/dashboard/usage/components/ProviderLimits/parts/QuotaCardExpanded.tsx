@@ -99,11 +99,15 @@ function QuotaDetailRow({ q }: { q: any }) {
 
   if (q.isCredits) {
     const colors = getBarColor(q.remainingPercentage ?? 0);
-    const sym = CURRENCY_SYMBOLS[q.currency] ?? q.currency ?? "";
-    const amount = (q.creditCount ?? q.remaining ?? 0).toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
+    // Count quotas (e.g. Perplexity remaining queries) have no currency and no totals.
+    const isCount = Boolean(q.countUnit);
+    const sym = isCount ? "" : (CURRENCY_SYMBOLS[q.currency] ?? q.currency ?? "");
+    const amount = (q.creditCount ?? q.remaining ?? 0).toLocaleString(
+      undefined,
+      isCount
+        ? { maximumFractionDigits: 0 }
+        : { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+    );
     return (
       <div className="flex min-h-[34px] items-center justify-between gap-2 py-1">
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[12px] font-medium leading-none text-text-main">
@@ -112,10 +116,12 @@ function QuotaDetailRow({ q }: { q: any }) {
               className="material-symbols-outlined text-[15px] leading-none"
               style={{ color: colors.text }}
             >
-              paid
+              {isCount ? "travel_explore" : "paid"}
             </span>
           </span>
-          <span className="truncate leading-none">{formatQuotaLabel(q.name) || "Credits"}</span>
+          <span className="truncate leading-none">
+            {q.displayName || formatQuotaLabel(q.name) || "Credits"}
+          </span>
         </span>
         <span
           className="inline-flex h-6 shrink-0 items-center text-[12px] font-bold leading-none tabular-nums"

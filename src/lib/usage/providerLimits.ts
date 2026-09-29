@@ -84,6 +84,8 @@ const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
   // Qoder connections are PAT-based (authType "apikey"); the usage fetcher
   // exchanges the PAT for a job token and reads openapi.qoder.sh/user/status.
   "qoder",
+  // Session cookie stored as the api key; counters from /rest/rate-limit/all.
+  "perplexity-web",
 ]);
 const DEFAULT_PROVIDER_LIMITS_SYNC_INTERVAL_MINUTES = 70;
 const PROVIDER_LIMITS_AUTO_SYNC_SETTING_KEY = "provider_limits_auto_sync_last_run";

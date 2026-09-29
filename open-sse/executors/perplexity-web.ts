@@ -28,6 +28,10 @@ import { prepareToolMessages } from "../translator/webTools.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
 import {
+  fetchPerplexityRateLimits,
+  invalidatePerplexityRateLimits,
+} from "../services/perplexityQuotaFetcher.ts";
+import {
   PPLX_SSE_ENDPOINT,
   PPLX_STREAM_EOF_SYMBOL,
   PPLX_USER_AGENT,
@@ -519,6 +523,32 @@ export class PerplexityWebExecutor extends BaseExecutor {
       log?.info?.("PPLX-WEB", `Session continue: ${followUp.backendUuid.slice(0, 12)}...`);
     }
 
+    // Deep Research has a small monthly allowance (Pro ≈20). When the account has
+    // none left, fail fast with a quota error: no upstream call, and perplexity-web
+    // uses per-model lockouts, so only this model is parked — Pro search keeps
+    // routing to the account. Unknown counters (fetch failed) fail open.
+    const connectionId = credentials.connectionId || `cookie:${scope}`;
+    if (isResearch) {
+      const limits = await fetchPerplexityRateLimits(connectionId, {
+        apiKey: credentials.apiKey,
+        accessToken: credentials.accessToken,
+      });
+      if (limits?.research === 0) {
+        log?.warn?.("PPLX-WEB", "Deep Research quota exhausted for this account");
+        return {
+          response: jsonError(
+            429,
+            "Perplexity Deep Research quota exhausted for this account (monthly allowance). Use pplx-auto or another account.",
+            "rate_limit_error",
+            "quota_exhausted"
+          ),
+          url: PPLX_SSE_ENDPOINT,
+          headers: {},
+          transformedBody: body,
+        };
+      }
+    }
+
     const query = buildQuery(parsed, followUp?.backendUuid ?? null);
     if (!query.trim()) {
       return {
@@ -640,6 +670,8 @@ export class PerplexityWebExecutor extends BaseExecutor {
 
     const state = createStreamState();
     const firstBody = response.body;
+    // A research run consumes the allowance; make the next check re-read it.
+    if (isResearch) invalidatePerplexityRateLimits(connectionId);
 
     // One logical turn. A Deep Research answer that stops at clarifying questions is
     // continued in the same thread (research_interaction=auto), so the caller gets

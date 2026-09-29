@@ -702,6 +702,9 @@ export function hasPerModelQuota(
   if (!provider) return false;
   if (getCanonicalLockProvider(provider) === "codex") return true;
   if (provider === "gemini" || provider === "github") return true;
+  // Perplexity meters modes separately (Pro search, Deep Research, advanced
+  // models' weekly quota): one exhausted mode must not park the whole account.
+  if (provider === "perplexity-web") return true;
   if (getPassthroughProviders().has(provider)) return true;
   if (isCompatibleProvider(provider)) return true;
   return false;

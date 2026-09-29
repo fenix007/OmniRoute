@@ -958,3 +958,20 @@ upsell, "sign up and retry" answer) while the connection still showed as active.
 
 Tests: `tests/unit/perplexity-web-sources-research.test.ts` (fixture
 `tests/fixtures/perplexity-web-live-2026-09-29.json`), `tests/unit/perplexity-web.test.ts`.
+
+### Perplexity Web limits card (fork.24)
+
+- `open-sse/services/perplexityQuotaFetcher.ts` reads `GET /rest/rate-limit/all`
+  (Firefox TLS + same-origin browser headers; plain requests get a Cloudflare page),
+  cached 60 s per connection, fail-open. Only remaining counts exist (no totals or
+  reset times; Pro Deep Research is ~20/month since Feb 2026).
+- Usage/limits: `perplexity-web` joins `USAGE_FETCHER_PROVIDERS`,
+  `USAGE_SUPPORTED_PROVIDERS` and the API-key limits set. The card shows Deep Research,
+  Pro Search, Labs and Agentic Research as whole-number counts (`countUnit`). Windows
+  carry `fractionReported: false`, so the generic preflight never parks the whole
+  account because one mode is exhausted.
+- `pplx-deep-research` on an account with `remaining_research = 0` returns 429
+  `quota_exhausted` without an upstream call; `hasPerModelQuota("perplexity-web")`
+  makes that a model-only lockout, so Pro search keeps routing to the account.
+
+Tests: `tests/unit/perplexity-web-quota.test.ts`.

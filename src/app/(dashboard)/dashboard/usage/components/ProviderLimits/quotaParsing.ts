@@ -207,6 +207,17 @@ function parseDeepseek(data: any) {
   return quotaEntries(data).map(([quotaKey, quota]) => parseDeepseekQuota(quotaKey, quota));
 }
 
+// Remaining query counters without totals (Perplexity): rendered as plain counts.
+function parseCountQuotas(data: any) {
+  return quotaEntries(data).map(([name, quota]) => {
+    const remaining = Number(quota?.remaining ?? 0);
+    return buildCreditsQuota(name, remaining, remaining > 0 ? 100 : 0, {
+      displayName: quota?.displayName,
+      countUnit: quota?.countUnit || "queries",
+    });
+  });
+}
+
 function parseProviderQuotas(providerId: string, data: any) {
   if (providerId === "github") return parseGithub(data);
   if (["glm", "glm-cn", "glmt", "opencode-go"].includes(providerId)) return parseGlmFamily(data);
@@ -214,6 +225,7 @@ function parseProviderQuotas(providerId: string, data: any) {
   if (providerId === "codex") return parseCodex(data);
   if (providerId === "claude") return parseClaude(data);
   if (providerId === "deepseek") return parseDeepseek(data);
+  if (providerId === "perplexity-web") return parseCountQuotas(data);
   return parseGeneric(data);
 }
 

@@ -8,6 +8,7 @@ import { fetchBailianQuota, type BailianTripleWindowQuota } from "./bailianQuota
 import { fetchDeepseekQuota, type DeepseekQuota } from "./deepseekQuotaFetcher.ts";
 import { fetchOpencodeQuota, type OpencodeTripleWindowQuota } from "./opencodeQuotaFetcher.ts";
 import { getOllamaCloudUsage } from "./opencodeOllamaUsage.ts";
+import { fetchPerplexityRateLimits } from "./perplexityQuotaFetcher.ts";
 import { getCodeBuddyCnUsage } from "./usage/codebuddy-cn.ts";
 import {
   extractCodeAssistOnboardTierId,
@@ -416,6 +417,61 @@ async function getOpencodeUsage(connectionId: string, apiKey: string) {
 }
 
 /**
+ * Perplexity Web Usage
+ * Remaining query counters from the web app's /rest/rate-limit/all. Perplexity
+ * reports no totals or reset times, so each window is a plain count flagged
+ * `fractionReported: false`: the limits card shows the number, and the generic
+ * preflight ignores it instead of parking the whole connection when only Deep
+ * Research is exhausted (Pro search keeps working). Deep Research exhaustion is
+ * enforced per model by the perplexity-web executor.
+ */
+async function getPerplexityWebUsage(
+  connectionId: string,
+  apiKey?: string,
+  accessToken?: string,
+  options: { forceRefresh?: boolean } = {}
+) {
+  if (!apiKey && !accessToken) {
+    return { message: "Perplexity session cookie not available." };
+  }
+  const limits = await fetchPerplexityRateLimits(
+    connectionId,
+    { apiKey, accessToken },
+    { forceRefresh: options.forceRefresh }
+  );
+  if (!limits) {
+    return {
+      message:
+        "Perplexity connected. Unable to read remaining queries (session expired or Cloudflare challenge).",
+    };
+  }
+
+  const windows: Array<[string, string, number | null]> = [
+    ["deep_research", "Deep Research", limits.research],
+    ["pro_search", "Pro Search", limits.pro],
+    ["labs", "Labs", limits.labs],
+    ["agentic_research", "Agentic Research", limits.agenticResearch],
+  ];
+  const quotas: Record<string, UsageQuota> = {};
+  for (const [key, displayName, remaining] of windows) {
+    if (remaining === null) continue;
+    quotas[key] = {
+      used: 0,
+      total: 0,
+      remaining,
+      remainingPercentage: remaining > 0 ? 100 : 0,
+      resetAt: null,
+      unlimited: false,
+      displayName,
+      fractionReported: false,
+      countUnit: "queries",
+    } as UsageQuota;
+  }
+
+  return { plan: "Perplexity", quotas };
+}
+
+/**
  * NanoGPT Usage
  * Fetches subscription-level quota from the NanoGPT API.
  * Returns daily/weekly token limits and daily image limits for PRO accounts.
@@ -533,6 +589,7 @@ export const USAGE_FETCHER_PROVIDERS = [
   "vertex",
   "vertex-partner",
   "codebuddy-cn",
+  "perplexity-web",
 ] as const;
 
 export type UsageFetcherProvider = (typeof USAGE_FETCHER_PROVIDERS)[number];
@@ -615,6 +672,8 @@ export async function getUsageForProvider(
       return await getXaiUsage(id || "");
     case "codebuddy-cn":
       return await getCodeBuddyCnUsage(accessToken, apiKey, providerSpecificData);
+    case "perplexity-web":
+      return await getPerplexityWebUsage(id || "", apiKey, accessToken, options);
     default:
       return { message: `Usage API not implemented for ${provider}` };
   }

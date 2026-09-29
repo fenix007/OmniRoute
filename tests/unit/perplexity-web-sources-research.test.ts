@@ -33,7 +33,11 @@ function sse(events) {
 /** Queue of upstream turns; records every request body the executor sends. */
 function upstream(...turns) {
   const requests = [];
-  __setTlsFetchOverrideForTesting(async (_url, opts) => {
+  __setTlsFetchOverrideForTesting(async (url, opts) => {
+    // Deep Research first reads the remaining quota; answer it as unknown (fail open).
+    if (url.includes("/rest/rate-limit/")) {
+      return { status: 403, headers: new Headers(), text: "challenge", body: null };
+    }
     requests.push({ body: JSON.parse(opts.body), timeoutMs: opts.timeoutMs });
     const events = turns.shift();
     return { status: 200, headers: new Headers(), text: null, body: sse(events) };
