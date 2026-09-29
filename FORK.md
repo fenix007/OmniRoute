@@ -949,6 +949,12 @@ upsell, "sign up and retry" answer) while the connection still showed as active.
   every late-flushing answer (all anonymous answers, ~7 s) reached chatCore as an empty
   200 and was retried three times as `empty_response_retry_exhausted`. The branch now
   returns the file contents.
+- Answers get a 5-minute TLS budget (`OMNIROUTE_PPLX_TLS_TIMEOUT_MS`) instead of the
+  client's 30 s default, which bounds the whole stream: live Pro follow-ups took 42 s.
+  Mid-stream transport failures return 502 `PPLX_STREAM_ERROR` instead of rejecting.
+- Live check 2026-09-29 (Pro account, local): pplx-auto 12 s / 15 sources; same-thread
+  follow-up 42 s / 72 sources; Deep Research 141 s / 118 sources, 86 reasoning chunks,
+  and its same-thread follow-up 137 s kept the first answer's context.
 
 Tests: `tests/unit/perplexity-web-sources-research.test.ts` (fixture
 `tests/fixtures/perplexity-web-live-2026-09-29.json`), `tests/unit/perplexity-web.test.ts`.

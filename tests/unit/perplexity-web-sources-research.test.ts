@@ -326,6 +326,23 @@ test("deep research manual mode returns the clarifying questions", async () => {
   assert.equal(json.choices[0].message.content, "1. Какой район?");
 });
 
+test("answers get a multi-minute TLS budget and mid-stream failures become 502", async () => {
+  const requests = [];
+  __setTlsFetchOverrideForTesting(async (_url, opts) => {
+    requests.push(opts);
+    const body = new ReadableStream({
+      start(c) {
+        c.error(new Error("net/http: request canceled (Client.Timeout)"));
+      },
+    });
+    return { status: 200, headers: new Headers(), text: null, body };
+  });
+  const res = await run({ messages: [{ role: "user", content: "q" }] });
+  assert.ok(requests[0].timeoutMs >= 300_000, "answer streams must not inherit the 30s default");
+  assert.equal(res.status, 502);
+  assert.equal((await res.json()).error.code, "PPLX_STREAM_ERROR");
+});
+
 test("perplexity options are validated", async () => {
   assert.equal(parsePerplexityOptions({ citation_mode: "bogus" }).ok, false);
   assert.equal(parsePerplexityOptions({ language: "ru RU" }).ok, false);

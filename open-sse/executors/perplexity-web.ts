@@ -212,7 +212,10 @@ export function __resetPerplexitySessionsForTesting(): void {
 
 // ─── Deep Research ──────────────────────────────────────────────────────────
 
-// Research streams run for minutes; the TLS client's default 30s cap would cut them.
+// The TLS client's timeout bounds the whole streamed answer, not just the first byte.
+// Its 30s default cut Pro follow-ups mid-answer; research runs for minutes.
+const ANSWER_TIMEOUT_MS =
+  Number.parseInt(process.env.OMNIROUTE_PPLX_TLS_TIMEOUT_MS || "", 10) || 300_000;
 const RESEARCH_TIMEOUT_MS =
   Number.parseInt(process.env.OMNIROUTE_PPLX_RESEARCH_TIMEOUT_MS || "", 10) || 900_000;
 
@@ -377,29 +380,44 @@ async function buildNonStreamingResponse(
   let fullAnswer = "";
   const thinkingParts: string[] = [];
 
-  for await (const chunk of chunks) {
-    if (chunk.error) {
-      const status = chunk.errorCode === PPLX_LOGGED_OUT_ERROR_CODE ? 401 : 502;
-      return new Response(
-        JSON.stringify({
-          error: {
-            message: chunk.error,
-            type: "upstream_error",
-            code: chunk.errorCode || "PPLX_ERROR",
-          },
-        }),
-        { status, headers: { "Content-Type": "application/json" } }
-      );
+  try {
+    for await (const chunk of chunks) {
+      if (chunk.error) {
+        const status = chunk.errorCode === PPLX_LOGGED_OUT_ERROR_CODE ? 401 : 502;
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: chunk.error,
+              type: "upstream_error",
+              code: chunk.errorCode || "PPLX_ERROR",
+            },
+          }),
+          { status, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (chunk.thinking) {
+        thinkingParts.push(chunk.thinking);
+        continue;
+      }
+      if (chunk.done) {
+        fullAnswer = chunk.answer || fullAnswer;
+        break;
+      }
+      if (chunk.answer) fullAnswer = chunk.answer;
     }
-    if (chunk.thinking) {
-      thinkingParts.push(chunk.thinking);
-      continue;
-    }
-    if (chunk.done) {
-      fullAnswer = chunk.answer || fullAnswer;
-      break;
-    }
-    if (chunk.answer) fullAnswer = chunk.answer;
+  } catch (err) {
+    // A transport failure mid-answer (TLS timeout, reset) must become an HTTP error,
+    // not a rejected execute().
+    return new Response(
+      JSON.stringify({
+        error: {
+          message: `Perplexity stream failed: ${sanitizeErrorMessage(err instanceof Error ? err.message : String(err))}`,
+          type: "upstream_error",
+          code: "PPLX_STREAM_ERROR",
+        },
+      }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    );
   }
 
   const content = finalAnswerText(fullAnswer, state, ctx.citationMode);
@@ -543,7 +561,7 @@ export class PerplexityWebExecutor extends BaseExecutor {
         signal: signal ?? null,
         stream: true,
         streamEofSymbol: PPLX_STREAM_EOF_SYMBOL,
-        ...(isResearch ? { timeoutMs: RESEARCH_TIMEOUT_MS } : {}),
+        timeoutMs: isResearch ? RESEARCH_TIMEOUT_MS : ANSWER_TIMEOUT_MS,
       });
 
     // Build Perplexity request
@@ -680,7 +698,19 @@ export class PerplexityWebExecutor extends BaseExecutor {
     // Peek the first chunk so a logged-out session becomes a real 401 (lets the
     // account be marked/rotated) instead of a 200 stream carrying an error line.
     const iterator = turnChunks();
-    const first = await iterator.next();
+    let first: IteratorResult<ContentChunk>;
+    try {
+      first = await iterator.next();
+    } catch (err) {
+      const message = `Perplexity stream failed: ${sanitizeErrorMessage(err instanceof Error ? err.message : String(err))}`;
+      log?.error?.("PPLX-WEB", message);
+      return {
+        response: jsonError(502, message, "upstream_error", "PPLX_STREAM_ERROR"),
+        url: PPLX_SSE_ENDPOINT,
+        headers,
+        transformedBody: pplxBody,
+      };
+    }
     if (!first.done && first.value.errorCode === PPLX_LOGGED_OUT_ERROR_CODE) {
       log?.warn?.("PPLX-WEB", "Session cookie is logged out");
       return {
