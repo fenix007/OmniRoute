@@ -953,6 +953,18 @@ export function createStreamState(): PplxStreamState {
 
 export const PPLX_LOGGED_OUT_ERROR_CODE = "session_logged_out";
 
+// Seen live: `logged_out_thread_sign_in` (upsell_type LOGIN) and, after a few
+// anonymous questions, `fraud_authwall_upsell`. Both mean the cookie is not a session.
+function isSignInUpsell(upsell: PplxUpsellInformation | undefined): boolean {
+  if (!upsell) return false;
+  const name = String(upsell.name || "");
+  return (
+    /^logged_out|authwall/i.test(name) ||
+    String(upsell.upsell_type || "").toUpperCase() === "LOGIN" ||
+    /LOGIN/i.test(String((upsell as { cta?: unknown }).cta || ""))
+  );
+}
+
 function toSources(results: PplxWebResult[] | undefined): PplxSource[] {
   const out: PplxSource[] = [];
   for (const r of results ?? []) {
@@ -1102,7 +1114,7 @@ export async function* extractContent(
     // An expired/invalid cookie is served as an anonymous visitor: HTTP 200 with a
     // "sign in" upsell and a canned "sign up and retry" answer in the first frame.
     // Surface it as an auth failure instead of passing that text off as the answer.
-    if (/^logged_out/i.test(String(event.upsell_information?.name || ""))) {
+    if (isSignInUpsell(event.upsell_information)) {
       yield {
         error:
           "Perplexity session is logged out — the session cookie is expired or invalid. Re-paste your __Secure-next-auth.session-token.",

@@ -17,7 +17,7 @@
 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtemp, open, unlink, rmdir, stat } from "node:fs/promises";
+import { mkdtemp, open, readFile, unlink, rmdir, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
 let clientPromise: Promise<unknown> | null = null;
@@ -185,6 +185,8 @@ export interface TlsFetchOptions {
   stream?: boolean;
   /** EOF marker the upstream sends to signal end of stream (default: "[DONE]"). */
   streamEofSymbol?: string;
+  /** How long to wait for the first streamed byte before buffering (default 5s). */
+  firstByteTimeoutMs?: number;
   /**
    * Optional upstream proxy URL (`http://user:pass@host:port` or
    * `socks5://...`). When set, the request is tunneled through this proxy
@@ -236,6 +238,11 @@ export function __setTlsFetchOverrideForTesting(fn: typeof testOverride): void {
   testOverride = fn;
 }
 
+/** Test-only: replace the native TLS client (null restores lazy loading). */
+export function __setTlsClientForTesting(client: unknown): void {
+  clientPromise = client ? Promise.resolve(client) : null;
+}
+
 /**
  * Make a single HTTP request to perplexity.ai with a Firefox-like TLS fingerprint.
  *
@@ -281,7 +288,8 @@ export async function tlsFetchPerplexity(
       requestOptions,
       options.streamEofSymbol,
       options.signal ?? null,
-      (options.timeoutMs ?? DEFAULT_TIMEOUT_MS) + HARD_TIMEOUT_GRACE_MS
+      (options.timeoutMs ?? DEFAULT_TIMEOUT_MS) + HARD_TIMEOUT_GRACE_MS,
+      options.firstByteTimeoutMs ?? 5_000
     );
   }
 
@@ -353,7 +361,8 @@ async function tlsFetchStreaming(
   requestOptions: Record<string, unknown>,
   eofSymbol = "[DONE]",
   signal: AbortSignal | null = null,
-  hardTimeoutMs: number = DEFAULT_TIMEOUT_MS + HARD_TIMEOUT_GRACE_MS
+  hardTimeoutMs: number = DEFAULT_TIMEOUT_MS + HARD_TIMEOUT_GRACE_MS,
+  firstByteTimeoutMs = 5_000
 ): Promise<TlsFetchResult> {
   const dir = await mkdtemp(join(tmpdir(), "pplx-stream-"));
   const path = join(dir, `${randomUUID()}.sse`);
@@ -395,16 +404,31 @@ async function tlsFetchStreaming(
   // that race; if the request actually fails before producing any bytes,
   // the timeout falls through to the requestPromise drain below (returning
   // the real upstream status).
-  const ready = await waitForContent(path, 5_000, requestPromise);
+  const ready = await waitForContent(path, firstByteTimeoutMs, requestPromise);
   if (!ready) {
     const r = await requestPromise.catch(
       (e) => ({ status: 502, headers: {}, body: String(e) }) as TlsResponseLike
     );
+    // With streamOutputPath the binding writes the body to the file, not r.body.
+    // Upstreams that flush late (Perplexity answers an anonymous/expired session
+    // in one piece after ~7s) land here with the whole SSE body on disk; reading
+    // r.body alone returned an empty 200 that callers saw as "empty response".
+    const onDisk = await readFile(path, "utf8").catch(() => "");
     await cleanupTempPath(path);
+    if (r.status === 200 && looksLikeSse(onDisk)) {
+      const bytes = new TextEncoder().encode(onDisk);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      });
+      return { status: 200, headers: toHeaders(r.headers), text: null, body };
+    }
     return {
       status: r.status,
       headers: toHeaders(r.headers),
-      text: r.body,
+      text: r.body || onDisk,
       body: null,
     };
   }

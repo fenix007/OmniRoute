@@ -122,6 +122,17 @@ test("live capture: logged-out cookie becomes 401 instead of a canned 200 answer
   assert.equal(json.error.code, "session_logged_out");
 });
 
+test("anonymous auth-wall upsell is also treated as a logged-out session", async () => {
+  const events = LIVE.c1.map((e) =>
+    e.upsell_information
+      ? { ...e, upsell_information: { name: "fraud_authwall_upsell", upsell_type: "AUTHWALL" } }
+      : e
+  );
+  upstream(events);
+  const res = await run({ messages: [{ role: "user", content: "hi" }] });
+  assert.equal(res.status, 401);
+});
+
 test("live capture: workflow answer carries web sources in both API shapes", async () => {
   upstream(LIVE.c2);
   const res = await run({ messages: [{ role: "user", content: "стелы рядом?" }] });

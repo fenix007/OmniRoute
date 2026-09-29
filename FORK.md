@@ -942,6 +942,13 @@ upsell, "sign up and retry" answer) while the connection still showed as active.
   `last_backend_uuid` + `read_write_token` (6 h, 500 entries, scoped per credential;
   citation formatting and whitespace are normalized before matching).
 - A logged-out session returns 401 `session_logged_out` instead of the canned answer.
+  Detected by the `logged_out_thread_sign_in` / `fraud_authwall_upsell` (LOGIN) upsell.
+- `perplexityTlsClient` fix (fork.22): when the first streamed byte arrives after the
+  5 s window, the binding has already written the whole SSE body to the stream file
+  and resolves with an empty `body`. The buffered branch returned that empty body, so
+  every late-flushing answer (all anonymous answers, ~7 s) reached chatCore as an empty
+  200 and was retried three times as `empty_response_retry_exhausted`. The branch now
+  returns the file contents.
 
 Tests: `tests/unit/perplexity-web-sources-research.test.ts` (fixture
 `tests/fixtures/perplexity-web-live-2026-09-29.json`), `tests/unit/perplexity-web.test.ts`.
