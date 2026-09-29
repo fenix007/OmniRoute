@@ -29,6 +29,10 @@ import {
   getRuntimeProviderProfile,
   recordModelLockoutFailure,
   isProviderModelUnsupported400,
+  isAccountScopedModelUnsupported400,
+  isAccountModelUnsupported,
+  lockUnsupportedAccountModel,
+  ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS,
 } from "@omniroute/open-sse/services/accountFallback.ts";
 import { isLocalProvider } from "@omniroute/open-sse/config/providerRegistry.ts";
 import { COOLDOWN_MS, RateLimitReason } from "@omniroute/open-sse/config/constants.ts";
@@ -1212,6 +1216,8 @@ export async function getProviderCredentials(
       if (requestedModel && isModelExcludedByConnection(requestedModel, c.providerSpecificData)) {
         return false;
       }
+      // The account's plan lacks this exact model (see markAccountUnavailable).
+      if (requestedModel && isAccountModelUnsupported(provider, c.id, requestedModel)) return false;
       if (!allowSuppressedConnections) {
         if (!allowRateLimitedConnections && isAccountUnavailable(c.rateLimitedUntil)) {
           if (isTransportCooldownErrorCode(c.errorCode)) transportCooledIds.add(c.id);
@@ -2000,6 +2006,24 @@ export async function markAccountUnavailable(
           cooldownMs: new Date(scopeRateLimitedUntil).getTime() - Date.now(),
         };
       }
+    }
+
+    // Account-scoped "model not supported" (e.g. Codex with a ChatGPT account without access
+    // to the model): lock only this model on this connection and rotate to the next account.
+    // The connection stays active for the models its plan does include.
+    if (model && isAccountScopedModelUnsupported400(status, errorText)) {
+      lockUnsupportedAccountModel(provider ?? "", connectionId, model);
+      updateProviderConnection(connectionId, {
+        lastErrorType: "account_model_unsupported",
+        lastError: `Model ${model} is not available for this account`,
+        lastErrorAt: new Date().toISOString(),
+        errorCode: status,
+      }).catch(() => {});
+      log.warn(
+        "AUTH",
+        `${connectionId.slice(0, 8)} account_model_unsupported 400 (${provider}/${model}) — model locked on this account for ${Math.round(ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS / 3_600_000)}h, rotating`
+      );
+      return { shouldFallback: true, cooldownMs: 0, reason: "account_model_unsupported" };
     }
 
     // #10460: model-unsupported 400 — the PROVIDER does not serve this model, not

@@ -1668,7 +1668,11 @@ test("#10460: model-unsupported 400 handles various phrasings", async () => {
     // Verify connection stays healthy after each iteration
     const conn = await providersDb.getProviderConnectionById(id);
     assert.ok(!conn.rateLimitedUntil, `"${errorText}" must not rate-limit connection`);
-    assert.notStrictEqual(conn.testStatus, "unavailable", `"${errorText}" must not mark unavailable`);
+    assert.notStrictEqual(
+      conn.testStatus,
+      "unavailable",
+      `"${errorText}" must not mark unavailable`
+    );
   }
 });
 
@@ -1701,7 +1705,11 @@ test("#10460: non-400 status with model-unsupported text does NOT trigger guard"
     "test-model"
   );
 
-  assert.strictEqual(result.shouldFallback, true, "non-400 must not be short-circuited by model guard");
+  assert.strictEqual(
+    result.shouldFallback,
+    true,
+    "non-400 must not be short-circuited by model guard"
+  );
   // The key assertion: guard returns shouldFallback:false. If we get here with
   // shouldFallback:true, the guard did NOT fire (correct behavior).
 });
@@ -1732,7 +1740,11 @@ test("#10460: auth-credential 400 text does NOT match model-unsupported guard", 
 
   // This text does NOT match MODEL_ACCESS_DENIED_PATTERNS (verified by regex test)
   // so it falls through to checkFallbackError which returns shouldFallback:false for generic 400
-  assert.strictEqual(result.shouldFallback, false, "auth-credential 400 must not be caught by model guard");
+  assert.strictEqual(
+    result.shouldFallback,
+    false,
+    "auth-credential 400 must not be caught by model guard"
+  );
   // The generic 400 path returns cooldownMs:0 — same as the guard, but the
   // connection was NOT touched (no rateLimitedUntil set). This distinguishes
   // it from the normal fallback path which would set a cooldown.
@@ -1746,7 +1758,11 @@ test("#10460: guard early return does not touch DB (distinguishes from normal pa
 
   // Guard path: model-unsupported 400 → shouldFallback:false, cooldownMs:0, no DB change
   const guardResult = await auth.markAccountUnavailable(
-    connId, 400, "The requested model is not supported", "github", "test-model"
+    connId,
+    400,
+    "The requested model is not supported",
+    "github",
+    "test-model"
   );
   assert.strictEqual(guardResult.shouldFallback, false);
   assert.strictEqual(guardResult.cooldownMs, 0);
@@ -1978,4 +1994,114 @@ test("#10460 acceptance: unambiguous model-unsupported 400 makes exactly ONE ups
       `untried account ${connId} must stay active`
     );
   }
+});
+
+// ─── Account-scoped "model not supported" 400 rotates to the next account ────────
+// Codex answers this way for a ChatGPT account whose plan lacks the model; other
+// accounts of the same provider serve it, so the request must not fail provider-wide.
+const CODEX_ACCOUNT_UNSUPPORTED =
+  '[400]: {"detail":"The \'gpt-5.6-sol\' model is not supported when using Codex with a ChatGPT account."}';
+
+test("account-scoped unsupported 400 is not classified as provider-wide", () => {
+  const cases: Array<[number, string, boolean, boolean]> = [
+    // status, text, accountScoped, providerWide
+    [400, CODEX_ACCOUNT_UNSUPPORTED, true, false],
+    [
+      400,
+      "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+      true,
+      false,
+    ],
+    [400, "The requested model is not supported", false, true],
+    [400, "model x is not supported when using an invalid api key account", false, false],
+    [429, CODEX_ACCOUNT_UNSUPPORTED, false, false],
+  ];
+  for (const [status, text, accountScoped, providerWide] of cases) {
+    assert.strictEqual(
+      accountFallback.isAccountScopedModelUnsupported400(status, text),
+      accountScoped,
+      text
+    );
+    assert.strictEqual(
+      accountFallback.isProviderModelUnsupported400(status, text),
+      providerWide,
+      text
+    );
+  }
+});
+
+test("account-scoped unsupported 400 locks only that model on that account and rotates", async () => {
+  await resetStorage10460();
+  const connId = await seedConn10460("codex");
+  const other = (
+    (await providersDb.createProviderConnection({
+      provider: "codex",
+      authType: "apikey",
+      apiKey: "codex-key-other",
+      isActive: true,
+      testStatus: "active",
+    })) as Record<string, unknown>
+  ).id as string;
+  assert.notStrictEqual(other, connId);
+
+  const result = await auth.markAccountUnavailable(
+    connId,
+    400,
+    CODEX_ACCOUNT_UNSUPPORTED,
+    "codex",
+    "gpt-5.6-sol-low"
+  );
+
+  assert.strictEqual(result.shouldFallback, true, "must rotate to another account");
+  assert.strictEqual(result.cooldownMs, 0, "the account itself is not cooled down");
+  assert.strictEqual(
+    accountFallback.isAccountModelUnsupported("codex", connId, "gpt-5.6-sol-low"),
+    true
+  );
+  assert.strictEqual(
+    accountFallback.isAccountModelUnsupported("codex", connId, "gpt-5.5-medium"),
+    false,
+    "other models stay usable"
+  );
+  assert.strictEqual(
+    accountFallback.isAccountModelUnsupported("codex", other, "gpt-5.6-sol-low"),
+    false,
+    "other accounts stay usable"
+  );
+  // The Codex quota-scope lockout is untouched: the account keeps serving its other models.
+  assert.strictEqual(accountFallback.isModelLocked("codex", connId, "gpt-5.5-medium"), false);
+
+  const after = await providersDb.getProviderConnectionById(connId);
+  assert.ok(!after.rateLimitedUntil, "connection must not be rate-limited");
+  assert.notStrictEqual(after.testStatus, "unavailable", "connection must stay active");
+  assert.strictEqual(after.lastErrorType, "account_model_unsupported");
+
+  // Selection skips the locked account for this model only.
+  for (let i = 0; i < 4; i++) {
+    const selected = await auth.getProviderCredentials("codex", null, null, "gpt-5.6-sol-low");
+    assert.strictEqual(
+      selected?.connectionId,
+      other,
+      "the locked account is never picked for this model"
+    );
+  }
+  const forOtherModel = await auth.getProviderCredentials("codex", other, null, "gpt-5.5-medium");
+  assert.strictEqual(
+    forOtherModel?.connectionId,
+    connId,
+    "the account still serves models its plan includes"
+  );
+});
+
+test("the account-model lock expires", () => {
+  accountFallback.lockUnsupportedAccountModel("codex", "conn-expiry", "gpt-5.6-sol-low", -1);
+  assert.strictEqual(
+    accountFallback.isAccountModelUnsupported("codex", "conn-expiry", "gpt-5.6-sol-low"),
+    false
+  );
+  accountFallback.lockUnsupportedAccountModel("codex", "conn-expiry", "gpt-5.6-sol-low", 60_000);
+  assert.strictEqual(
+    accountFallback.isAccountModelUnsupported("codex", "conn-expiry", "gpt-5.6-sol-low"),
+    true
+  );
 });

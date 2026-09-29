@@ -296,6 +296,65 @@ const PROVIDER_MODEL_UNSUPPORTED_PATTERNS = [
   /\bplease select a different model\b/i,
 ];
 
+// "Not supported with THIS kind of account": the model exists, but the account's plan cannot
+// use it — e.g. Codex "The 'gpt-5.6-sol' model is not supported when using Codex with a
+// ChatGPT account." It matches the provider-wide patterns above, yet another account of the
+// same provider serves the model, so it must rotate instead of failing the request.
+const ACCOUNT_SCOPED_MODEL_UNSUPPORTED_PATTERNS = [
+  /\bnot\s+supported\s+when\s+using\b[\s\S]{0,60}?\bwith\s+(?:a|an|your)\b[\s\S]{0,40}?\baccount\b/i,
+];
+
+/** How long a model stays locked on an account that answered "not supported with this account". */
+export const ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS = 24 * 60 * 60 * 1000;
+
+// Exact provider:connection:model locks for plan entitlement gaps. Kept apart from
+// modelLockouts on purpose: Codex model lockouts are keyed by quota scope, which would
+// take every Codex model of the account out, while only this one model is unavailable.
+const accountModelUnsupported = new Map<string, number>();
+
+function accountModelKey(provider: string, connectionId: string, model: string) {
+  return `${getCanonicalLockProvider(provider)}:${connectionId}:${model}`;
+}
+
+/** Mark that this account's plan cannot use this exact model (in memory, bounded by `cooldownMs`). */
+export function lockUnsupportedAccountModel(
+  provider: string,
+  connectionId: string,
+  model: string,
+  cooldownMs = ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS
+): void {
+  accountModelUnsupported.set(
+    accountModelKey(provider, connectionId, model),
+    Date.now() + cooldownMs
+  );
+}
+
+export function isAccountModelUnsupported(
+  provider: string,
+  connectionId: string,
+  model: string | null | undefined
+): boolean {
+  if (!model) return false;
+  const key = accountModelKey(provider, connectionId, model);
+  const until = accountModelUnsupported.get(key);
+  if (until === undefined) return false;
+  if (Date.now() > until) {
+    accountModelUnsupported.delete(key);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Is this 400 an account-scoped "model not supported" answer (the account's plan lacks the
+ * model, other accounts may have it)? Bad-credential texts are never treated as such.
+ */
+export function isAccountScopedModelUnsupported400(status: number, errorText: string): boolean {
+  if (status !== HTTP_STATUS.BAD_REQUEST) return false;
+  if (AUTH_CREDENTIAL_ERROR_PATTERNS.some((p) => p.test(errorText))) return false;
+  return ACCOUNT_SCOPED_MODEL_UNSUPPORTED_PATTERNS.some((p) => p.test(errorText));
+}
+
 /**
  * #10460: is this 400 an unambiguous, PROVIDER-wide "model not supported" response —
  * i.e. would retrying a *different account* of the same provider also fail for the
@@ -313,6 +372,7 @@ const PROVIDER_MODEL_UNSUPPORTED_PATTERNS = [
 export function isProviderModelUnsupported400(status: number, errorText: string): boolean {
   if (status !== HTTP_STATUS.BAD_REQUEST) return false;
   if (AUTH_CREDENTIAL_ERROR_PATTERNS.some((p) => p.test(errorText))) return false;
+  if (isAccountScopedModelUnsupported400(status, errorText)) return false;
   return PROVIDER_MODEL_UNSUPPORTED_PATTERNS.some((p) => p.test(errorText));
 }
 
