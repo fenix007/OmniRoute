@@ -798,7 +798,7 @@ test("Model mapping: pplx-gpt sends current GPT-5.5 internal preference", async 
     });
 
     assert.equal(capturedBody.params.model_preference, "gpt55");
-    assert.equal(capturedBody.params.mode, "search");
+    assert.equal(capturedBody.params.mode, "copilot");
   } finally {
     globalThis.fetch = original;
   }
@@ -841,7 +841,7 @@ test("Model mapping: thinking mode uses thinking variant", async () => {
     });
 
     assert.equal(capturedBody.params.model_preference, "claude50sonnetthinking");
-    assert.equal(capturedBody.params.mode, "search");
+    assert.equal(capturedBody.params.mode, "copilot");
   } finally {
     globalThis.fetch = original;
   }
@@ -854,7 +854,7 @@ test("Provider registry: perplexity-web is registered with correct models", asyn
 
   const models = PROVIDER_MODELS["pplx-web"];
   assert.ok(models, "pplx-web should be in PROVIDER_MODELS");
-  assert.ok(models.length === 10, `Expected 10 models, got ${models.length}`);
+  assert.ok(models.length === 14, `Expected 14 models, got ${models.length}`);
 
   const modelIds = models.map((m) => m.id);
   assert.ok(modelIds.includes("pplx-auto"));
@@ -867,6 +867,9 @@ test("Provider registry: perplexity-web is registered with correct models", asyn
   assert.ok(modelIds.includes("pplx-sonar"));
   assert.ok(modelIds.includes("pplx-kimi"));
   assert.ok(modelIds.includes("pplx-glm"));
+  assert.ok(modelIds.includes("pplx-deep-research"));
+  assert.ok(modelIds.includes("pplx-gpt-5.6-terra"));
+  assert.ok(modelIds.includes("pplx-grok-4.6"));
 });
 
 test("Provider registry: every advertised perplexity-web model has an explicit internal mapping", async () => {

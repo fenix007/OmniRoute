@@ -242,6 +242,15 @@ export interface SanitizeOpenAIResponseOptions {
   parseTextualReasoningTags?: boolean;
 }
 
+/**
+ * Perplexity API source fields (`citations` URL list, `search_results` objects).
+ * Web-search providers attach them top-level; clients such as LiteLLM read them.
+ */
+function copySearchSourceFields(from: JsonRecord, to: JsonRecord): void {
+  if (Array.isArray(from.citations)) to.citations = from.citations;
+  if (Array.isArray(from.search_results)) to.search_results = from.search_results;
+}
+
 export function sanitizeOpenAIResponse(
   body: unknown,
   options: SanitizeOpenAIResponseOptions = {}
@@ -291,6 +300,8 @@ export function sanitizeOpenAIResponse(
   if (bodyRecord.system_fingerprint) {
     sanitized.system_fingerprint = bodyRecord.system_fingerprint;
   }
+
+  copySearchSourceFields(bodyRecord, sanitized);
 
   return sanitized;
 }
@@ -452,6 +463,9 @@ function sanitizeMessage(msg: unknown, options: ParseOptions = {}): unknown {
   if (msgRecord.function_call) {
     sanitized.function_call = stripZeroWidthFunctionArguments(msgRecord.function_call);
   }
+
+  // OpenAI url_citation annotations (web-search providers).
+  if (Array.isArray(msgRecord.annotations)) sanitized.annotations = msgRecord.annotations;
 
   return sanitized;
 }
@@ -1063,6 +1077,7 @@ export function sanitizeStreamingChunk(parsed: unknown): unknown {
           }
           if (deltaRecord.function_call !== undefined)
             delta.function_call = stripZeroWidthFunctionArguments(deltaRecord.function_call);
+          if (Array.isArray(deltaRecord.annotations)) delta.annotations = deltaRecord.annotations;
           c.delta = delta;
         } else {
           c.delta = choiceRecord.delta;
@@ -1086,6 +1101,8 @@ export function sanitizeStreamingChunk(parsed: unknown): unknown {
   if (parsedRecord.system_fingerprint) {
     sanitized.system_fingerprint = parsedRecord.system_fingerprint;
   }
+
+  copySearchSourceFields(parsedRecord, sanitized);
 
   return sanitized;
 }

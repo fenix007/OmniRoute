@@ -1,0 +1,594 @@
+{
+ "c1": [
+  {
+   "status": "PENDING",
+   "backend_uuid": "6ad27589-3e45-4fa1-98c2-ce8e782889f9",
+   "read_write_token": "rw-token-c1",
+   "upsell_information": {
+    "name": "logged_out_thread_sign_in",
+    "upsell_type": "LOGIN"
+   },
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "workflow_block": {
+      "version": "1.0",
+      "status": "WORKFLOW_COMPLETED",
+      "headline": "",
+      "started_at": "2026-09-29T08:11:13.408568+00:00",
+      "completed_at": "2026-09-29T08:11:20.851198+00:00",
+      "predicted_completion_at": "",
+      "steps": [
+       {
+        "status": "WORKFLOW_PENDING",
+        "title": "",
+        "items": [
+         {
+          "id": "e613519e544c434888665ee67fbc0531",
+          "type": "WORKFLOW_ITEM_TEXT",
+          "payload": {
+           "text_payload": {
+            "text": "",
+            "chunks": [
+             "Зарегистрируйтесь и повторите свой зап"
+            ],
+            "variant": "answer",
+            "is_streaming": true
+           }
+          },
+          "display_mode": "WORKFLOW_ITEM_ALWAYS_EXPAND",
+          "variant": "answer"
+         }
+        ],
+        "started_at": "",
+        "completed_at": "",
+        "unnest_items": true,
+        "source_tier": "SOURCE_TIER_DEFAULT",
+        "id": "e613519e544c434888665ee67fbc0531"
+       }
+      ],
+      "snapshots": []
+     }
+    }
+   ]
+  },
+  {
+   "status": "PENDING",
+   "final": true,
+   "backend_uuid": "6ad27589-3e45-4fa1-98c2-ce8e782889f9",
+   "read_write_token": "rw-token-c1",
+   "upsell_information": {
+    "name": "logged_out_thread_sign_in",
+    "upsell_type": "LOGIN"
+   },
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "diff_block": {
+      "field": "workflow_block",
+      "patches": [
+       {
+        "op": "replace",
+        "path": "/steps/0/status",
+        "value": "WORKFLOW_COMPLETED"
+       },
+       {
+        "op": "replace",
+        "path": "/steps/0/items/0/payload/text_payload/text",
+        "value": "Зарегистрируйтесь и повторите свой запрос."
+       },
+       {
+        "op": "add",
+        "path": "/steps/0/items/0/payload/text_payload/chunks/1",
+        "value": "рос."
+       },
+       {
+        "op": "replace",
+        "path": "/steps/0/items/0/payload/text_payload/is_streaming",
+        "value": false
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "status": "COMPLETED",
+   "final": true,
+   "backend_uuid": "6ad27589-3e45-4fa1-98c2-ce8e782889f9",
+   "read_write_token": "rw-token-c1",
+   "upsell_information": {
+    "name": "logged_out_thread_sign_in",
+    "upsell_type": "LOGIN"
+   },
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "workflow_block": {
+      "version": "1.0",
+      "status": "WORKFLOW_COMPLETED",
+      "headline": "",
+      "started_at": "2026-09-29T08:11:13.408568+00:00",
+      "completed_at": "2026-09-29T08:11:20.851198+00:00",
+      "predicted_completion_at": "",
+      "steps": [
+       {
+        "status": "WORKFLOW_COMPLETED",
+        "title": "",
+        "items": [
+         {
+          "id": "e613519e544c434888665ee67fbc0531",
+          "type": "WORKFLOW_ITEM_TEXT",
+          "payload": {
+           "text_payload": {
+            "text": "Зарегистрируйтесь и повторите свой запрос.",
+            "chunks": [
+             "Зарегистрируйтесь и повторите свой зап",
+             "рос."
+            ],
+            "variant": "answer",
+            "is_streaming": false
+           }
+          },
+          "display_mode": "WORKFLOW_ITEM_ALWAYS_EXPAND",
+          "variant": "answer"
+         }
+        ],
+        "started_at": "",
+        "completed_at": "",
+        "unnest_items": true,
+        "source_tier": "SOURCE_TIER_DEFAULT",
+        "id": "e613519e544c434888665ee67fbc0531"
+       }
+      ],
+      "snapshots": []
+     }
+    }
+   ]
+  }
+ ],
+ "c2": [
+  {
+   "status": "PENDING",
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "workflow_block": {
+      "version": "1.0",
+      "status": "WORKFLOW_EXECUTING_STEPS",
+      "headline": "",
+      "started_at": "2026-09-29T08:11:21.747875+00:00",
+      "completed_at": "",
+      "predicted_completion_at": "",
+      "steps": [
+       {
+        "status": "WORKFLOW_COMPLETED",
+        "title": "Поиск в интернете",
+        "items": [
+         {
+          "id": "prefill_search_web:item:0",
+          "type": "WORKFLOW_ITEM_QUERIES",
+          "payload": {
+           "queries_payload": {
+            "queries": [
+             "А какие памятники или стелы есть рядом с ним?"
+            ]
+           }
+          }
+         },
+         {
+          "id": "prefill_search_web:item:0",
+          "type": "WORKFLOW_ITEM_SOURCES",
+          "payload": {
+           "sources_payload": {
+            "sources": [
+             {
+              "name": "Стела — Википедия",
+              "snippet": "",
+              "url": "https://ru.wikipedia.org/wiki/%D0%A1%D1%82%D0%B5%D0%BB%D0%B0"
+             },
+             {
+              "name": "Какие бывают памятники? Виды, формы, материал.",
+              "snippet": "Какие бывают памятники на могилу? Где, как и из чего делают надгробия? Породы камня. Виды, формы и технологии изготовления памятников.",
+              "url": "https://izgotovleniepamyatnikov.ru/kakie-byvayut-pamyatniki/"
+             },
+             {
+              "name": "Двойные памятники в Москве — заказать изготовление",
+              "snippet": "Закажите изготовление и установку памятника на могилу под ключ в гранитной мастерской Monument Service. ➠ Полный цикл работ - от ЭСКИЗА до УСТАНОВКИ. ➠ Собственное ПРОИЗВОДСТВО. ➠ Современное ОБОРУДОВАНИЕ. ⚐ Доставка по всей РОССИИ. ⚐ Консультация специалиста БЕСПЛАТНО +7 (925) 49-55-777",
+              "url": "https://monument-service.ru/pamyatniki/dvojnye"
+             }
+            ]
+           }
+          }
+         }
+        ],
+        "started_at": "2026-09-29T08:11:21.747875+00:00",
+        "completed_at": "2026-09-29T08:11:21.749432+00:00",
+        "icon": "search",
+        "tool_name": "search_web",
+        "source_tier": "SOURCE_TIER_DEFAULT",
+        "id": "prefill_search_web"
+       }
+      ],
+      "snapshots": []
+     }
+    },
+    {
+     "intended_usage": "web_results",
+     "web_result_block": {
+      "web_results": [
+       {
+        "name": "Стела — Википедия",
+        "snippet": "",
+        "timestamp": "2007-11-26T00:00:00",
+        "url": "https://ru.wikipedia.org/wiki/%D0%A1%D1%82%D0%B5%D0%BB%D0%B0"
+       },
+       {
+        "name": "Какие бывают памятники? Виды, формы, материал.",
+        "snippet": "",
+        "timestamp": "2015-06-22T00:00:00",
+        "url": "https://izgotovleniepamyatnikov.ru/kakie-byvayut-pamyatniki/"
+       },
+       {
+        "name": "Двойные памятники в Москве — заказать изготовление",
+        "snippet": "",
+        "timestamp": "",
+        "url": "https://monument-service.ru/pamyatniki/dvojnye"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "status": "PENDING",
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE"
+  },
+  {
+   "status": "PENDING",
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "diff_block": {
+      "field": "workflow_block",
+      "patches": [
+       {
+        "op": "replace",
+        "path": "/status",
+        "value": "WORKFLOW_COMPLETED"
+       },
+       {
+        "op": "replace",
+        "path": "/started_at",
+        "value": "2026-09-29T08:11:21.614187+00:00"
+       },
+       {
+        "op": "replace",
+        "path": "/completed_at",
+        "value": "2026-09-29T08:11:29.472880+00:00"
+       },
+       {
+        "op": "add",
+        "path": "/steps/1",
+        "value": {
+         "status": "WORKFLOW_PENDING",
+         "title": "",
+         "items": [
+          {
+           "id": "11da70ec459e4a239f4b6955bb64aee8",
+           "type": "WORKFLOW_ITEM_TEXT",
+           "payload": {
+            "text_payload": {
+             "text": "",
+             "chunks": [
+              "Пожалуйста, уточните, о каком именно месте речь: р"
+             ],
+             "variant": "answer",
+             "is_streaming": true
+            }
+           },
+           "display_mode": "WORKFLOW_ITEM_ALWAYS_EXPAND",
+           "variant": "answer"
+          }
+         ],
+         "started_at": "",
+         "completed_at": "",
+         "unnest_items": true,
+         "source_tier": "SOURCE_TIER_DEFAULT",
+         "id": "11da70ec459e4a239f4b6955bb64aee8"
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "status": "PENDING",
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "diff_block": {
+      "field": "workflow_block",
+      "patches": [
+       {
+        "op": "add",
+        "path": "/steps/1/items/0/payload/text_payload/chunks/1",
+        "value": "ядом с чем именно? Если вы имеете в виду конкретный п"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "status": "PENDING",
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "diff_block": {
+      "field": "workflow_block",
+      "patches": [
+       {
+        "op": "add",
+        "path": "/steps/1/items/0/payload/text_payload/chunks/2",
+        "value": "амятник или стелу, скажите название или адрес, и я"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "status": "PENDING",
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "diff_block": {
+      "field": "workflow_block",
+      "patches": [
+       {
+        "op": "add",
+        "path": "/steps/1/items/0/payload/text_payload/chunks/3",
+        "value": " подскажу, какие памятники и стелы обычно встречаются"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "status": "PENDING",
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "diff_block": {
+      "field": "workflow_block",
+      "patches": [
+       {
+        "op": "add",
+        "path": "/steps/1/items/0/payload/text_payload/chunks/4",
+        "value": " поблизо"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "status": "PENDING",
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE"
+  },
+  {
+   "status": "PENDING",
+   "final": true,
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "diff_block": {
+      "field": "workflow_block",
+      "patches": [
+       {
+        "op": "replace",
+        "path": "/steps/1/status",
+        "value": "WORKFLOW_COMPLETED"
+       },
+       {
+        "op": "replace",
+        "path": "/steps/1/items/0/payload/text_payload/text",
+        "value": "Пожалуйста, уточните, о каком именно месте речь: рядом с чем именно? Если вы имеете в виду конкретный памятник или стелу, скажите название или адрес, и я подскажу, какие памятники и стелы обычно встречаются поблизости."
+       },
+       {
+        "op": "add",
+        "path": "/steps/1/items/0/payload/text_payload/chunks/5",
+        "value": "сти."
+       },
+       {
+        "op": "replace",
+        "path": "/steps/1/items/0/payload/text_payload/is_streaming",
+        "value": false
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "status": "PENDING",
+   "final": true,
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE"
+  },
+  {
+   "status": "COMPLETED",
+   "final": true,
+   "backend_uuid": "bc2cf27d-894b-4d75-8dfd-bb20aaf795e8",
+   "read_write_token": "rw-token-c2",
+   "display_model": "pplx_pro",
+   "mode": "CONCISE",
+   "blocks": [
+    {
+     "intended_usage": "workflow_root",
+     "workflow_block": {
+      "version": "1.0",
+      "status": "WORKFLOW_COMPLETED",
+      "headline": "",
+      "started_at": "2026-09-29T08:11:21.614187+00:00",
+      "completed_at": "2026-09-29T08:11:29.472880+00:00",
+      "predicted_completion_at": "",
+      "steps": [
+       {
+        "status": "WORKFLOW_COMPLETED",
+        "title": "Поиск в интернете",
+        "items": [
+         {
+          "id": "prefill_search_web:item:0",
+          "type": "WORKFLOW_ITEM_QUERIES",
+          "payload": {
+           "queries_payload": {
+            "queries": [
+             "А какие памятники или стелы есть рядом с ним?"
+            ]
+           }
+          }
+         },
+         {
+          "id": "prefill_search_web:item:0",
+          "type": "WORKFLOW_ITEM_SOURCES",
+          "payload": {
+           "sources_payload": {
+            "sources": [
+             {
+              "name": "Стела — Википедия",
+              "snippet": "",
+              "url": "https://ru.wikipedia.org/wiki/%D0%A1%D1%82%D0%B5%D0%BB%D0%B0"
+             },
+             {
+              "name": "Какие бывают памятники? Виды, формы, материал.",
+              "snippet": "Какие бывают памятники на могилу? Где, как и из чего делают надгробия? Породы камня. Виды, формы и технологии изготовления памятников.",
+              "url": "https://izgotovleniepamyatnikov.ru/kakie-byvayut-pamyatniki/"
+             },
+             {
+              "name": "Двойные памятники в Москве — заказать изготовление",
+              "snippet": "Закажите изготовление и установку памятника на могилу под ключ в гранитной мастерской Monument Service. ➠ Полный цикл работ - от ЭСКИЗА до УСТАНОВКИ. ➠ Собственное ПРОИЗВОДСТВО. ➠ Современное ОБОРУДОВАНИЕ. ⚐ Доставка по всей РОССИИ. ⚐ Консультация специалиста БЕСПЛАТНО +7 (925) 49-55-777",
+              "url": "https://monument-service.ru/pamyatniki/dvojnye"
+             }
+            ]
+           }
+          }
+         }
+        ],
+        "started_at": "2026-09-29T08:11:21.747875+00:00",
+        "completed_at": "2026-09-29T08:11:21.749432+00:00",
+        "icon": "search",
+        "tool_name": "search_web",
+        "source_tier": "SOURCE_TIER_DEFAULT",
+        "id": "prefill_search_web"
+       },
+       {
+        "status": "WORKFLOW_COMPLETED",
+        "title": "",
+        "items": [
+         {
+          "id": "11da70ec459e4a239f4b6955bb64aee8",
+          "type": "WORKFLOW_ITEM_TEXT",
+          "payload": {
+           "text_payload": {
+            "text": "Пожалуйста, уточните, о каком именно месте речь: рядом с чем именно? Если вы имеете в виду конкретный памятник или стелу, скажите название или адрес, и я подскажу, какие памятники и стелы обычно встречаются поблизости.",
+            "chunks": [
+             "Пожалуйста, уточните, о каком именно месте речь: р",
+             "ядом с чем именно? Если вы имеете в виду конкретный п",
+             "амятник или стелу, скажите название или адрес, и я",
+             " подскажу, какие памятники и стелы обычно встречаются",
+             " поблизо",
+             "сти."
+            ],
+            "variant": "answer",
+            "is_streaming": false
+           }
+          },
+          "display_mode": "WORKFLOW_ITEM_ALWAYS_EXPAND",
+          "variant": "answer"
+         }
+        ],
+        "started_at": "",
+        "completed_at": "",
+        "unnest_items": true,
+        "source_tier": "SOURCE_TIER_DEFAULT",
+        "id": "11da70ec459e4a239f4b6955bb64aee8"
+       }
+      ],
+      "snapshots": []
+     }
+    },
+    {
+     "intended_usage": "web_results",
+     "web_result_block": {
+      "web_results": [
+       {
+        "name": "Стела — Википедия",
+        "snippet": "«Стела коршунов», фрагмент. Лагаш. XXV в. до н. э. Лувр, Париж Палермский камень. Диорит. Около 2400 г. до н. э. Археологический музей, Палермо",
+        "timestamp": "2007-11-26T00:00:00",
+        "url": "https://ru.wikipedia.org/wiki/%D0%A1%D1%82%D0%B5%D0%BB%D0%B0"
+       },
+       {
+        "name": "Какие бывают памятники? Виды, формы, материал.",
+        "snippet": "Какие бывают памятники на могилу? Где, как и из чего делают надгробия? Породы камня. Виды, формы и технологии изготовления памятников.",
+        "timestamp": "2015-06-22T00:00:00",
+        "url": "https://izgotovleniepamyatnikov.ru/kakie-byvayut-pamyatniki/"
+       },
+       {
+        "name": "Двойные памятники в Москве — заказать изготовление",
+        "snippet": "Закажите изготовление и установку памятника на могилу под ключ в гранитной мастерской Monument Service. ➠ Полный цикл работ - от ЭСКИЗА до УСТАНОВКИ. ➠ Собственное ПРОИЗВОДСТВО. ➠ Современное ОБОРУДОВАНИЕ. ⚐ Доставка по всей РОССИИ. ⚐ Консультация специалиста БЕСПЛАТНО +7 (925) 49-55-777",
+        "timestamp": "",
+        "url": "https://monument-service.ru/pamyatniki/dvojnye"
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

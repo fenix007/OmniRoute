@@ -913,3 +913,35 @@ pool was exhausted and the `coding` combo returned `503 all targets exhausted`.
   the health check does not import the route graph.
 
 Tests: `tests/unit/token-health-check.test.ts`, `tests/unit/token-health-check-circuit-breaker.test.ts`.
+
+## Perplexity Web sources, Deep Research and threads (2026-09-29)
+
+The frozen 3.8.48 `perplexity-web` executor sent `mode:"search"` for every model (the
+backend now answers it as `CONCISE`/`FAILED`), did not parse the workflow API answer
+format, dropped `web_results`, and capped every stream at the TLS client's 30 s
+default. A live capture on 2026-09-29 also showed the production cookie had expired:
+Perplexity served it as an anonymous visitor (HTTP 200, `logged_out_thread_sign_in`
+upsell, "sign up and retry" answer) while the connection still showed as active.
+
+- Protocol layer ported from upstream `release/v3.8.51` (#10259 workflow_block,
+  #13968/#14121 citation cleanup, quota upsell, `event: end_of_stream` EOF, `copilot`
+  catalog). Legacy ids `pplx-gpt` / `pplx-gpt-5.4` still resolve.
+- Sources: `web_result_block` (fallbacks: Sources tab, workflow step sources) are
+  returned as top-level `citations` + `search_results` (Perplexity API shape) and
+  `message.annotations` / `delta.annotations` url_citation entries. The response
+  sanitizers now pass these fields through. Streaming sends them on the chunk before
+  the stop chunk.
+- `perplexity` request extension: `citation_mode` (`clean` default, `numbered`,
+  `markdown`), `language` (BCP-47), `coordinates` `{latitude, longitude}` (local
+  search), `research_interaction` (`auto` default, `manual`). Invalid values → 400.
+- `pplx-deep-research` (`mode:"research"`, `pplx_alpha`) with a 15-minute TLS timeout
+  (`OMNIROUTE_PPLX_RESEARCH_TIMEOUT_MS`). Clarifying questions are answered in the same
+  thread automatically; `manual` returns them as the answer. Workflow search queries and
+  sources stream as `reasoning_content`, which keeps research streams ready/alive.
+- Threads: a follow-up whose echoed transcript matches a previous answer is sent with
+  `last_backend_uuid` + `read_write_token` (6 h, 500 entries, scoped per credential;
+  citation formatting and whitespace are normalized before matching).
+- A logged-out session returns 401 `session_logged_out` instead of the canned answer.
+
+Tests: `tests/unit/perplexity-web-sources-research.test.ts` (fixture
+`tests/fixtures/perplexity-web-live-2026-09-29.json`), `tests/unit/perplexity-web.test.ts`.
