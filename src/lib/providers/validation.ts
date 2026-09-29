@@ -67,6 +67,7 @@ import {
   validateAssemblyAIProvider,
   validateSaluteSpeechProvider,
   validateElevenLabsProvider,
+  validateElevenLabsWebProvider,
   validateInferenceShProvider,
   validateInworldProvider,
   validateKieProvider,
@@ -489,6 +490,7 @@ export async function validateProviderApiKey({ provider, apiKey, providerSpecifi
     topaz: ({ apiKey, providerSpecificData }: any) =>
       validateImageProviderApiKey({ provider: "topaz", apiKey, providerSpecificData }),
     elevenlabs: validateElevenLabsProvider,
+    "elevenlabs-web": validateElevenLabsWebProvider,
     "inference-sh": validateInferenceShProvider,
     inworld: validateInworldProvider,
     kie: validateKieProvider,

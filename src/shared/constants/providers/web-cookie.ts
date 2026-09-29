@@ -90,6 +90,20 @@ export const WEB_COOKIE_PROVIDERS = {
     subscriptionRisk: true,
     riskNoticeVariant: "webCookie",
   },
+  "elevenlabs-web": {
+    id: "elevenlabs-web",
+    // Primary "elevenlabs" API-key provider keeps the short alias; web variant uses its own id.
+    alias: "elevenlabs-web",
+    name: "ElevenLabs Web (Subscription TTS)",
+    icon: "record_voice_over",
+    color: "#6C47FF",
+    textIcon: "ELW",
+    website: "https://elevenlabs.io/app/speech-synthesis",
+    authHint:
+      "Sign in at elevenlabs.io, open DevTools → Application → Local Storage → https://elevenlabs.io, and copy the value of the firebase:authUser:…:[DEFAULT] entry (or only its stsTokenManager.refreshToken). Text-to-speech only; free accounts that sign in with a password may be asked for a captcha.",
+    subscriptionRisk: true,
+    riskNoticeVariant: "webCookie",
+  },
   "deepseek-web": {
     id: "deepseek-web",
     alias: "ds-web",

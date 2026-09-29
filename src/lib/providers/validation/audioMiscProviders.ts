@@ -23,6 +23,11 @@ import {
   buildMaritalkModelsUrl,
 } from "@omniroute/open-sse/config/maritalk.ts";
 import { signAwsRequest } from "@omniroute/open-sse/utils/awsSigV4.ts";
+import {
+  ELEVENLABS_WEB_API_BASE_URL,
+  ElevenLabsWebAuthError,
+  getElevenLabsWebIdToken,
+} from "@omniroute/open-sse/services/elevenlabsWebAuth.ts";
 import { randomUUID } from "node:crypto";
 
 export async function validateDeepgramProvider({ apiKey, providerSpecificData = {} }: any) {
@@ -125,6 +130,33 @@ export async function validateElevenLabsProvider({ apiKey, providerSpecificData 
 
     return { valid: false, error: `Validation failed: ${response.status}` };
   } catch (error: any) {
+    return toValidationErrorResult(error);
+  }
+}
+
+export async function validateElevenLabsWebProvider({ apiKey, providerSpecificData = {} }: any) {
+  try {
+    const session = await getElevenLabsWebIdToken(apiKey, { forceRefresh: true });
+    const response = await validationRead(`${ELEVENLABS_WEB_API_BASE_URL}/v1/user`, {
+      method: "GET",
+      headers: applyCustomUserAgent(
+        { Authorization: `Bearer ${session.idToken}` },
+        providerSpecificData
+      ),
+    });
+
+    if (response.ok) return { valid: true, error: null };
+    if (response.status === 401 || response.status === 403) {
+      return { valid: false, error: "SESSION_EXPIRED", errorCode: "AUTH_007" };
+    }
+
+    return { valid: false, error: `Validation failed: ${response.status}` };
+  } catch (error: any) {
+    if (error instanceof ElevenLabsWebAuthError) {
+      return error.status === 401
+        ? { valid: false, error: error.message, errorCode: "AUTH_007" }
+        : { valid: false, error: error.message };
+    }
     return toValidationErrorResult(error);
   }
 }

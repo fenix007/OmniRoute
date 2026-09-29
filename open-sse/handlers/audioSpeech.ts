@@ -10,6 +10,7 @@ import { CORS_HEADERS } from "../utils/cors.ts";
  * - Hyperbolic: POST { text } → { audio: base64 }
  * - Deepgram: POST { text } with model via query param, Token auth
  * - ElevenLabs: POST { text, model_id } to /v1/text-to-speech/{voice_id}
+ * - ElevenLabs Web: same request, Firebase ID token from an imported web session
  * - Nvidia NIM: POST { input: { text }, voice, model } → audio binary
  * - HuggingFace Inference: POST { inputs: text } to /models/{model_id}
  * - Coqui TTS: POST { text, speaker_id } → WAV audio (local, no auth)
@@ -19,6 +20,7 @@ import { CORS_HEADERS } from "../utils/cors.ts";
 import { getSpeechProvider, parseSpeechModel } from "../config/audioRegistry.ts";
 import { buildAuthHeaders } from "../config/registryUtils.ts";
 import { buildElevenLabsSpeechRequest } from "../config/elevenlabsSpeech.ts";
+import { ElevenLabsWebAuthError, getElevenLabsWebIdToken } from "../services/elevenlabsWebAuth.ts";
 import { kieExecutor } from "../executors/kie.ts";
 import { vertexGenerateSpeech } from "../executors/vertexMedia.ts";
 import { errorResponse } from "../utils/error.ts";
@@ -106,7 +108,7 @@ async function handleDeepgramSpeech(providerConfig, body, modelId, token) {
  * POST {baseUrl}/{voice_id} with { text, model_id }
  * voice_id is mapped from the OpenAI `voice` parameter
  */
-async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
+function prepareElevenLabsSpeech(providerConfig, body, modelId) {
   // ElevenLabs uses voice_id in URL path; default to "21m00Tcm4TlvDq8ikWAM" (Rachel)
   const voiceId = body.voice || "21m00Tcm4TlvDq8ikWAM";
   if (!isValidPathSegment(voiceId)) {
@@ -116,21 +118,56 @@ async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
   if ("error" in speech) return errorResponse(400, speech.error);
   const url = new URL(`${providerConfig.baseUrl}/${voiceId}`);
   if (speech.outputFormat) url.searchParams.set("output_format", speech.outputFormat);
+  return { url: url.toString(), payload: speech.payload, contentType: speech.contentType };
+}
 
-  const res = await fetch(url.toString(), {
+function postElevenLabsSpeech(prepared, authHeaders) {
+  return fetch(prepared.url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...buildAuthHeaders(providerConfig, token),
+      ...authHeaders,
     },
-    body: JSON.stringify(speech.payload),
+    body: JSON.stringify(prepared.payload),
   });
+}
 
+async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
+  const prepared = prepareElevenLabsSpeech(providerConfig, body, modelId);
+  if (prepared instanceof Response) return prepared;
+
+  const res = await postElevenLabsSpeech(prepared, buildAuthHeaders(providerConfig, token));
   if (!res.ok) {
     return upstreamErrorResponse(res, await res.text());
   }
 
-  return audioStreamResponse(res, speech.contentType);
+  return audioStreamResponse(res, prepared.contentType);
+}
+
+/**
+ * ElevenLabs web session: exchange the imported Firebase refresh token for an ID token.
+ * A cached ID token rejected with 401 is refreshed once before the error is surfaced.
+ */
+async function handleElevenLabsWebSpeech(providerConfig, body, modelId, credential) {
+  const prepared = prepareElevenLabsSpeech(providerConfig, body, modelId);
+  if (prepared instanceof Response) return prepared;
+
+  try {
+    let session = await getElevenLabsWebIdToken(credential);
+    let res = await postElevenLabsSpeech(prepared, { Authorization: `Bearer ${session.idToken}` });
+    if (res.status === 401 && session.cached) {
+      await res.body?.cancel();
+      session = await getElevenLabsWebIdToken(credential, { forceRefresh: true });
+      res = await postElevenLabsSpeech(prepared, { Authorization: `Bearer ${session.idToken}` });
+    }
+    if (!res.ok) {
+      return upstreamErrorResponse(res, await res.text());
+    }
+    return audioStreamResponse(res, prepared.contentType);
+  } catch (error) {
+    if (error instanceof ElevenLabsWebAuthError) return errorResponse(error.status, error.message);
+    throw error;
+  }
 }
 
 async function handleInferenceShOmniVoiceSpeech(providerConfig, body, modelId, token) {
@@ -785,7 +822,7 @@ export async function handleAudioSpeech({
   if (!providerConfig) {
     return errorResponse(
       400,
-      `No speech provider found for model "${body.model}". Use format provider/model. Available: openai, hyperbolic, deepgram, nvidia, elevenlabs, inference-sh, huggingface, inworld, cartesia, playht, kie, aws-polly, xiaomi-mimo, coqui, tortoise, qwen`
+      `No speech provider found for model "${body.model}". Use format provider/model. Available: openai, hyperbolic, deepgram, nvidia, elevenlabs, elevenlabs-web, inference-sh, huggingface, inworld, cartesia, playht, kie, aws-polly, xiaomi-mimo, coqui, tortoise, qwen`
     );
   }
 
@@ -820,6 +857,10 @@ export async function handleAudioSpeech({
 
     if (providerConfig.format === "elevenlabs") {
       return handleElevenLabsSpeech(providerConfig, body, modelId, token);
+    }
+
+    if (providerConfig.format === "elevenlabs-web") {
+      return handleElevenLabsWebSpeech(providerConfig, body, modelId, token);
     }
 
     if (providerConfig.format === "inference-sh-omnivoice") {

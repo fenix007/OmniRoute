@@ -95,6 +95,14 @@ export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
     acceptsFullCookieHeader: false,
     storageKeys: ["token", "userToken"],
   },
+  "elevenlabs-web": {
+    kind: "token",
+    credentialName: "Firebase refresh token (firebase:authUser Local Storage entry)",
+    placeholder:
+      '{"uid":"...","stsTokenManager":{"refreshToken":"AMf-v..."}} or the raw refresh token',
+    acceptsFullCookieHeader: false,
+    storageKeys: ["token", "refreshToken"],
+  },
   "copilot-web": {
     kind: "token",
     credentialName: "access_token",

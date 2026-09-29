@@ -34,3 +34,27 @@ precedence over `response_format`; the latter supports `mp3`, `opus`, `pcm`, and
 The upstream audio body streams through unchanged. See
 `open-sse/config/elevenlabsSpeech.ts` for the validated options and
 `tests/unit/elevenlabs-speech.test.ts` for exercised requests.
+
+## ElevenLabs Web session (`elevenlabs-web`)
+
+`elevenlabs-web` uses the subscription of an account signed in at elevenlabs.io
+instead of an API key. It supports text-to-speech only and exposes the same four
+models with the same request validation, for example `elevenlabs-web/eleven_v4`.
+
+elevenlabs.io keeps its session in Firebase Auth Local Storage, not in a cookie.
+To create a connection, sign in, open DevTools → Application → Local Storage →
+`https://elevenlabs.io`, and paste the value of the `firebase:authUser:…:[DEFAULT]`
+entry (or only its `stsTokenManager.refreshToken`). OmniRoute stores it as the
+connection credential, exchanges it for a short-lived Firebase ID token, caches that
+token until five minutes before expiry, and calls
+`https://api.us.elevenlabs.io/v1/text-to-speech/{voice_id}` with
+`Authorization: Bearer <ID token>`. A cached token rejected with 401 is refreshed once.
+A revoked or expired session returns 401 and must be re-imported. Connection tests
+probe `GET /v1/user` with a freshly refreshed token.
+
+The public Firebase Web key comes from `open-sse/utils/publicCreds.ts`; set
+`ELEVENLABS_FIREBASE_API_KEY` only to override it. Chat requests sent to
+`elevenlabs-web` return 400 without contacting any upstream. Free accounts that sign
+in with a password may be asked for a captcha by ElevenLabs; that flow is not
+supported. This is an unofficial integration of the web application. See
+`open-sse/services/elevenlabsWebAuth.ts` and `tests/unit/elevenlabs-web.test.ts`.

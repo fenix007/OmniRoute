@@ -23,6 +23,13 @@ export interface AudioProvider {
   models: AudioModel[];
 }
 
+const ELEVENLABS_SPEECH_MODELS: AudioModel[] = [
+  { id: "eleven_v4", name: "Eleven v4" },
+  { id: "eleven_v4_turbo", name: "Eleven v4 Turbo" },
+  { id: "eleven_multilingual_v2", name: "Eleven Multilingual v2" },
+  { id: "eleven_turbo_v2_5", name: "Eleven Turbo v2.5" },
+];
+
 export const AUDIO_TRANSCRIPTION_PROVIDERS: Record<string, AudioProvider> = {
   vertex: {
     id: "vertex",
@@ -260,12 +267,16 @@ export const AUDIO_SPEECH_PROVIDERS: Record<string, AudioProvider> = {
     authType: "apikey",
     authHeader: "xi-api-key",
     format: "elevenlabs",
-    models: [
-      { id: "eleven_v4", name: "Eleven v4" },
-      { id: "eleven_v4_turbo", name: "Eleven v4 Turbo" },
-      { id: "eleven_multilingual_v2", name: "Eleven Multilingual v2" },
-      { id: "eleven_turbo_v2_5", name: "Eleven Turbo v2.5" },
-    ],
+    models: ELEVENLABS_SPEECH_MODELS,
+  },
+
+  "elevenlabs-web": {
+    id: "elevenlabs-web",
+    baseUrl: "https://api.us.elevenlabs.io/v1/text-to-speech",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "elevenlabs-web",
+    models: ELEVENLABS_SPEECH_MODELS,
   },
 
   "inference-sh": {
