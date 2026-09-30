@@ -1,0 +1,1 @@
+Extract unchanged account/model error classifiers and their regression tests into focused modules to restore existing file-size gates after the Codex account-model access change. Preserve public exports and all assertions.

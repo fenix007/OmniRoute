@@ -1084,3 +1084,35 @@ typecheck, build and static gates passed. Runtime checks used isolated data
 directories. Remote stable advanced during validation; the final integration
 checks are recorded separately below before publication. Publication uses the existing
 `[skip ci]` policy without workflow changes, image publication, release or deployment.
+
+### Integration with concurrent stable update
+
+During validation, stable advanced to
+[`7e20ea6273505fa5f674f531b4fbb08d562b7236`](https://github.com/fenix007/OmniRoute/commit/7e20ea6273505fa5f674f531b4fbb08d562b7236)
+with the account/model-access changes from fork PR #2. The OAuth commit rebased
+without conflicts. The new base introduced two size-gate failures:
+`accountFallback.ts` had 2,035 lines against 1,953, and its test had 2,111 against
+1,982. Extract the unchanged model-error classifiers into `accountModelErrors.ts`
+and move the existing model-error tests into `account-fallback-model-errors.test.ts`.
+Existing public exports, classifier expressions, lock state and all assertions are
+preserved; TypeScript AST comparison confirms 100 declarations and 93 test bodies
+are identical across the split. The size thresholds remain unchanged. Remove the one obsolete ESLint `any`
+suppression for the account-fallback fixture that the incoming PR had typed;
+no suppression is added or expanded.
+
+On base `7e20ea6273`, all 150 focused OAuth, Codex, account-fallback and model-access
+tests passed, followed by 23,577 unit tests (14 skips) and 29 integration cases.
+Full lint, core typecheck, static gates and production build passed. Coverage passed
+with 81.11% statements/lines, 78.44% branches and 86.68% functions. Runtime checks
+used isolated data directories; build retained warnings in unchanged modules.
+
+Stable then advanced to
+[`bb71342bcdeaf057370610d39301a082a82e6d11`](https://github.com/fenix007/OmniRoute/commit/bb71342bcdeaf057370610d39301a082a82e6d11)
+with fork PR #3 (GPT-6.1 Sol and Codex client identity). Both commits rebased
+without conflicts; all seven authored runtime/test file hashes stayed identical.
+After reviewing the incoming diff, rerun 125 affected unit files (1,069 tests)
+and five routing/contract integration files (34 tests): all passed. Full lint,
+core typecheck, static gates and production build also passed on this final base.
+The full unit and coverage results above belong to base `7e20ea6273`; the second
+rebase was validated with the affected suites rather than repeating those full runs.
+No workflow, coverage threshold, runtime dependency or deployment was changed.
