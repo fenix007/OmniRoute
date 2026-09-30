@@ -1,3 +1,12 @@
+import {
+  EFFORT_ORDER,
+  type EffortLevel,
+  GPT_5_6_ULTRA_ALIAS_MODELS,
+  GPT_6_ALIAS_MODELS,
+  splitCodexReasoningSuffix,
+  getCodexUpstreamModel,
+} from "../config/codexModels.ts";
+export { getCodexUpstreamModel } from "../config/codexModels.ts";
 import { resolveCodexAccountId } from "../utils/codexAccount.ts";
 import { normalizeCodexWsHeaders } from "./codex/websocketHeaders.ts";
 import { sanitizeCodexInputItemIds } from "./codex/inputIds.ts";
@@ -145,17 +154,6 @@ function codexWebSocketUnavailableResponse(): Response {
 // Ref: sub2api PR #1129 (feat(openai): split codex spark rate limiting from codex)
 export { getCodexModelScope, getCodexRateLimitKey, type CodexQuotaScope };
 
-// Ordered list of effort levels from lowest to highest
-const EFFORT_ORDER = ["none", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
-type EffortLevel = (typeof EFFORT_ORDER)[number];
-const STANDARD_EFFORT_SUFFIXES = ["none", "low", "medium", "high", "xhigh"] as const;
-const GPT_5_6_MAX_ALIAS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
-const GPT_5_6_ULTRA_ALIAS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra"]);
-// GPT-6 Astra takes both alias suffixes. `max` and `ultra` are not part of
-// STANDARD_EFFORT_SUFFIXES, so without this set neither would ever split off the
-// model id. `ultra` is an OmniRoute-side tier that goes out as wire effort `max`
-// while keeping parallel tool calls for sub-agent delegation.
-const GPT_6_ALIAS_MODELS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
 const CODEX_FAST_WIRE_VALUE = "priority";
 const CODEX_RESPONSES_WS_URL = "wss://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
@@ -217,44 +215,6 @@ function enforceCodexResponsesLiteParallelToolCalls(
   const body = bodyInput as Record<string, unknown>;
   if (body.parallel_tool_calls === false) return bodyInput;
   return { ...body, parallel_tool_calls: false };
-}
-
-function splitCodexReasoningSuffix(model: unknown): {
-  baseModel: string;
-  effort: EffortLevel | null;
-} {
-  const modelId = typeof model === "string" ? model : "";
-  const gpt56AliasMatch = /^(gpt-5\.6-(?:sol|terra|luna))-(max|ultra)$/.exec(modelId);
-  if (gpt56AliasMatch) {
-    const [, baseModel, alias] = gpt56AliasMatch;
-    const supportedModels =
-      alias === "ultra" ? GPT_5_6_ULTRA_ALIAS_MODELS : GPT_5_6_MAX_ALIAS_MODELS;
-    if (supportedModels.has(baseModel)) {
-      return { baseModel, effort: alias as EffortLevel };
-    }
-  }
-
-  const gpt6AliasMatch = /^(gpt-6-(?:astra|sol|luna))-(max|ultra)$/.exec(modelId);
-  if (gpt6AliasMatch) {
-    const [, baseModel, alias] = gpt6AliasMatch;
-    if (GPT_6_ALIAS_MODELS.has(baseModel) && !(baseModel === "gpt-6-luna" && alias === "ultra")) {
-      return { baseModel, effort: alias as EffortLevel };
-    }
-  }
-
-  for (const level of STANDARD_EFFORT_SUFFIXES) {
-    if (modelId.endsWith(`-${level}`)) {
-      return {
-        baseModel: modelId.slice(0, -`-${level}`.length),
-        effort: level,
-      };
-    }
-  }
-  return { baseModel: modelId, effort: null };
-}
-
-export function getCodexUpstreamModel(model: unknown): string {
-  return splitCodexReasoningSuffix(model).baseModel;
 }
 
 /**

@@ -30,9 +30,11 @@ import {
   recordModelLockoutFailure,
   isProviderModelUnsupported400,
   isAccountScopedModelUnsupported400,
+  isAccountScopedModelUnavailable404,
   isAccountModelUnsupported,
   lockUnsupportedAccountModel,
   ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS,
+  ACCOUNT_MODEL_UNAVAILABLE_LOCK_MS,
 } from "@omniroute/open-sse/services/accountFallback.ts";
 import { isLocalProvider } from "@omniroute/open-sse/config/providerRegistry.ts";
 import { COOLDOWN_MS, RateLimitReason } from "@omniroute/open-sse/config/constants.ts";
@@ -2011,8 +2013,14 @@ export async function markAccountUnavailable(
     // Account-scoped "model not supported" (e.g. Codex with a ChatGPT account without access
     // to the model): lock only this model on this connection and rotate to the next account.
     // The connection stays active for the models its plan does include.
-    if (model && isAccountScopedModelUnsupported400(status, errorText)) {
-      lockUnsupportedAccountModel(provider ?? "", connectionId, model);
+    if (
+      model &&
+      (isAccountScopedModelUnsupported400(status, errorText) ||
+        isAccountScopedModelUnavailable404(status, errorText))
+    ) {
+      const lockMs =
+        status === 404 ? ACCOUNT_MODEL_UNAVAILABLE_LOCK_MS : ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS;
+      lockUnsupportedAccountModel(provider ?? "", connectionId, model, lockMs);
       updateProviderConnection(connectionId, {
         lastErrorType: "account_model_unsupported",
         lastError: `Model ${model} is not available for this account`,
@@ -2021,7 +2029,7 @@ export async function markAccountUnavailable(
       }).catch(() => {});
       log.warn(
         "AUTH",
-        `${connectionId.slice(0, 8)} account_model_unsupported 400 (${provider}/${model}) — model locked on this account for ${Math.round(ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS / 3_600_000)}h, rotating`
+        `${connectionId.slice(0, 8)} account_model_unsupported ${status} (${provider}/${model}) — model locked on this account for ${Math.round(lockMs / 60_000)}m, rotating`
       );
       return { shouldFallback: true, cooldownMs: 0, reason: "account_model_unsupported" };
     }

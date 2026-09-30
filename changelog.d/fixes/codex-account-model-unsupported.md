@@ -1,1 +1,3 @@
 - **fix(codex):** A 400 like `The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.` is now treated as an account-plan gap, not a provider-wide unsupported model: that exact model is locked on that account for 24h and the request rotates to the next account, instead of failing (the account keeps serving the models its plan includes).
+
+- Treat explicit model-or-access 404 errors as temporary account/model exclusions (15 minutes), share exclusions across Codex effort aliases, and bound the in-memory exclusion cache. Other models and accounts remain eligible; allowed and pinned connection constraints are preserved. Active exclusions are process-local and re-probed after expiry or restart.

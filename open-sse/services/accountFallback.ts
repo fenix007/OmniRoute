@@ -33,6 +33,7 @@ import {
 import { recordProviderSuccess as resetCooldownFailureCount } from "./providerCooldownTracker.ts";
 import { resolveProviderId } from "../../src/shared/constants/providers";
 import { resolveUseUpstream429BreakerHints } from "../../src/shared/utils/providerHints";
+import { getCodexUpstreamModel } from "../config/codexModels.ts";
 import { getCodexModelScope } from "../config/codexQuotaScopes.ts";
 import { getQuotaScopedModelForProvider } from "./antigravityQuotaFamily.ts";
 import { isRpdExhausted, isRpmExhausted } from "./geminiRateLimitTracker.ts";
@@ -306,6 +307,9 @@ const ACCOUNT_SCOPED_MODEL_UNSUPPORTED_PATTERNS = [
 
 /** How long a model stays locked on an account that answered "not supported with this account". */
 export const ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS = 24 * 60 * 60 * 1000;
+// A 404 is ambiguous (missing model OR missing entitlement). Re-probe sooner.
+export const ACCOUNT_MODEL_UNAVAILABLE_LOCK_MS = 15 * 60 * 1000;
+const MAX_ACCOUNT_MODEL_LOCKS = 10_000;
 
 // Exact provider:connection:model locks for plan entitlement gaps. Kept apart from
 // modelLockouts on purpose: Codex model lockouts are keyed by quota scope, which would
@@ -313,7 +317,10 @@ export const ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS = 24 * 60 * 60 * 1000;
 const accountModelUnsupported = new Map<string, number>();
 
 function accountModelKey(provider: string, connectionId: string, model: string) {
-  return `${getCanonicalLockProvider(provider)}:${connectionId}:${model}`;
+  const canonical = getCanonicalLockProvider(provider);
+  const upstreamModel =
+    canonical === "codex" ? getCodexUpstreamModel(model.replace(/^(?:codex|cx)\//, "")) : model;
+  return JSON.stringify([canonical, connectionId, upstreamModel]);
 }
 
 /** Mark that this account's plan cannot use this exact model (in memory, bounded by `cooldownMs`). */
@@ -323,10 +330,24 @@ export function lockUnsupportedAccountModel(
   model: string,
   cooldownMs = ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS
 ): void {
-  accountModelUnsupported.set(
-    accountModelKey(provider, connectionId, model),
-    Date.now() + cooldownMs
-  );
+  const key = accountModelKey(provider, connectionId, model);
+  const now = Date.now();
+  if (!Number.isFinite(cooldownMs) || cooldownMs <= 0) {
+    accountModelUnsupported.delete(key);
+    return;
+  }
+  if (accountModelUnsupported.size >= MAX_ACCOUNT_MODEL_LOCKS) {
+    for (const [entryKey, until] of accountModelUnsupported) {
+      if (until <= now) accountModelUnsupported.delete(entryKey);
+    }
+    if (
+      !accountModelUnsupported.has(key) &&
+      accountModelUnsupported.size >= MAX_ACCOUNT_MODEL_LOCKS
+    ) {
+      accountModelUnsupported.delete(accountModelUnsupported.keys().next().value!);
+    }
+  }
+  accountModelUnsupported.set(key, now + cooldownMs);
 }
 
 export function isAccountModelUnsupported(
@@ -338,7 +359,7 @@ export function isAccountModelUnsupported(
   const key = accountModelKey(provider, connectionId, model);
   const until = accountModelUnsupported.get(key);
   if (until === undefined) return false;
-  if (Date.now() > until) {
+  if (Date.now() >= until) {
     accountModelUnsupported.delete(key);
     return false;
   }
@@ -353,6 +374,15 @@ export function isAccountScopedModelUnsupported400(status: number, errorText: st
   if (status !== HTTP_STATUS.BAD_REQUEST) return false;
   if (AUTH_CREDENTIAL_ERROR_PATTERNS.some((p) => p.test(errorText))) return false;
   return ACCOUNT_SCOPED_MODEL_UNSUPPORTED_PATTERNS.some((p) => p.test(errorText));
+}
+
+/** Only the explicit model-or-account access wording, never a generic route 404. */
+export function isAccountScopedModelUnavailable404(status: number, errorText: string): boolean {
+  if (status !== HTTP_STATUS.NOT_FOUND) return false;
+  if (AUTH_CREDENTIAL_ERROR_PATTERNS.some((pattern) => pattern.test(errorText))) return false;
+  return /\bmodel\b[^\r\n]{1,200}\bdoes not exist or you do not have access to it\b/i.test(
+    errorText
+  );
 }
 
 /**
