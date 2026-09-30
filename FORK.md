@@ -1049,3 +1049,38 @@ T11 any-budget and tracked-artifact gates passed. Build emitted filesystem-traci
 warnings in unchanged modules. All runtime checks used isolated data directories.
 The hook checks were also run directly, with `lint-staged --no-stash` to respect
 the maintenance policy against automatic stashing. No gate or threshold was weakened.
+
+## OAuth reauthentication lifetime reset (2026-09-30)
+
+Source: [diegosouzapw/OmniRoute #15135](https://github.com/diegosouzapw/OmniRoute/pull/15135),
+reviewed head `f9b915e4e0b5da7476398cac70eabd61b706eaf1`, **OPEN** on
+2026-09-30 (no merge commit). Decision: **adapt**. The exact head, discussion,
+reviews and CI were checked; upstream native unit/docs/quality checks are red,
+so validation is performed independently on this fork. Thanks @JxnLexn.
+
+Reauthentication replaced `expiresAt` but left the old `tokenExpiresAt` and
+OAuth error fields. The health scheduler prefers the stale clock and could
+immediately attempt an unnecessary refresh. Twelve regression scenarios fail
+on unchanged `d2137618859e3204811391356b0023f4ebeef2a8`.
+
+Adapt the shared `buildOAuthTokenUpdate` payload to the frozen persistence helper
+and four existing route updates (exchange, poll, poll-callback, import-token).
+Both expiry fields are replaced, including clearing unknown expiry, and obsolete
+error fields are cleared. Existing account matching, email requirements, public
+ticket `allowImplicitMatch: false`, active-state policy and creation behavior stay
+unchanged. The later upstream degraded-project handling is not imported.
+
+The new real-SQLite regression suite covers Codex/Kiro/Gemini known and unknown
+expiry, the next health check, four HTTP completion paths, concurrent separate
+accounts, bound versus unbound public-ticket persistence and a terminal result
+from an old health refresh after a new sign-in. Provider transport is mocked;
+no live account credentials are used. Existing auth, deduplication, refresh and
+compare-and-swap suites provide adjacent coverage.
+
+Validation on base `d213761885`: 23,568 unit tests passed with 14 skips;
+24 focused and 57 adjacent OAuth/refresh tests passed. Coverage passed with
+81.10% statements/lines, 78.43% branches and 86.68% functions. Full lint, core
+typecheck, build and static gates passed. Runtime checks used isolated data
+directories. Remote stable advanced during validation; the final integration
+checks are recorded separately below before publication. Publication uses the existing
+`[skip ci]` policy without workflow changes, image publication, release or deployment.
