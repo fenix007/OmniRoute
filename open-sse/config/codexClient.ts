@@ -1,8 +1,8 @@
 // Codex's OAuth backend gates newer models by client version: GPT-6 Astra rejects
 // older clients with "requires a newer version of Codex" (upstream issue #12761).
 // Keep this in lockstep with CODEX_CLI_PROFILE in src/shared/constants/clientIdentityProfiles.ts.
-// https://github.com/openai/codex/releases/tag/rust-v0.156.1
-const DEFAULT_CODEX_CLIENT_VERSION = "0.156.1";
+// https://github.com/openai/codex/releases/tag/rust-v0.159.2
+const DEFAULT_CODEX_CLIENT_VERSION = "0.159.2";
 const DEFAULT_CODEX_USER_AGENT_PLATFORM = "Windows 10.0.26200";
 const DEFAULT_CODEX_USER_AGENT_ARCH = "x64";
 const CODEX_VERSION_OVERRIDE_ENV = "CODEX_CLIENT_VERSION";

@@ -11,6 +11,14 @@ export const openaiProvider: RegistryEntry = {
   authHeader: "bearer",
   defaultContextLength: 128000,
   models: [
+    // Sol tool calling requires Responses (OpenAI's GPT-6.1 Sol model reference).
+    {
+      id: "gpt-6.1-sol",
+      name: "GPT-6.1 Sol",
+      ...GPT_5_6_API_CAPABILITIES,
+      targetFormat: "openai-responses",
+      unsupportedParams: ["temperature", "top_p", "top_logprobs", "logprobs"],
+    },
     { id: "gpt-6-sol", name: "GPT 6 sol", ...GPT_5_6_API_CAPABILITIES },
     { id: "gpt-6-luna", name: "GPT 6 luna", ...GPT_5_6_API_CAPABILITIES },
     { id: "gpt-5.6", name: "GPT-5.6", ...GPT_5_6_API_CAPABILITIES },

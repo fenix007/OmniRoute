@@ -92,6 +92,7 @@ export const MODEL_SPECS: Record<string, ModelSpec> = {
   },
 
   // Public model limits; the Codex registry supplies its smaller OAuth window.
+  "gpt-6.1-sol": { ...GPT_5_6_MODEL_SPEC, aliases: ["openai/gpt-6.1-sol"] },
   "gpt-6-sol": { ...GPT_5_6_MODEL_SPEC, aliases: ["openai/gpt-6-sol"] },
   "gpt-6-luna": { ...GPT_5_6_MODEL_SPEC, aliases: ["openai/gpt-6-luna"] },
   "gpt-6-astra": {

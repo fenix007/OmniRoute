@@ -24,6 +24,14 @@ export const codexProvider: RegistryEntry = {
     tokenUrl: "https://auth.openai.com/oauth/token",
   },
   models: [
+    // Codex OAuth uses the 872K window; the public API has a separate 1.05M limit.
+    { id: "gpt-6.1-sol", name: "GPT 6.1 Sol", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6.1-sol-low", name: "GPT 6.1 Sol (low)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6.1-sol-medium", name: "GPT 6.1 Sol (medium)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6.1-sol-high", name: "GPT 6.1 Sol (high)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6.1-sol-xhigh", name: "GPT 6.1 Sol (xhigh)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6.1-sol-max", name: "GPT 6.1 Sol (max)", ...GPT_5_6_CODEX_CAPABILITIES },
+    { id: "gpt-6.1-sol-ultra", name: "GPT 6.1 Sol (ultra)", ...GPT_5_6_CODEX_CAPABILITIES },
     { id: "gpt-6-sol", name: "GPT 6 sol", ...GPT_5_6_CODEX_CAPABILITIES },
     { id: "gpt-6-sol-low", name: "GPT 6 sol-low", ...GPT_5_6_CODEX_CAPABILITIES },
     { id: "gpt-6-sol-medium", name: "GPT 6 sol-medium", ...GPT_5_6_CODEX_CAPABILITIES },

@@ -188,6 +188,7 @@ export const providerModelMutationSchema = z.object({
     .array(
       z.enum([
         "chat",
+        "responses",
         "embeddings",
         "rerank",
         "images",
