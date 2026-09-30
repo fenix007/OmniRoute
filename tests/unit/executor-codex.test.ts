@@ -289,7 +289,9 @@ test("CodexExecutor.buildHeaders honors safe env overrides for Version and User-
       CODEX_USER_AGENT: undefined,
     },
     () => {
-      const headers = executor.buildHeaders({ accessToken: "codex-token" }, true);
+      const headers = executor.buildHeaders({ accessToken: "codex-token" }, true, {
+        version: "0.157.0",
+      });
       assert.equal(headers.Version, "0.144.0");
       assert.equal(headers["User-Agent"], "codex-cli/0.144.0 (Windows 10.0.26200; x64)");
     }
@@ -301,7 +303,9 @@ test("CodexExecutor.buildHeaders honors safe env overrides for Version and User-
       CODEX_USER_AGENT: "custom-codex/9.9.9",
     },
     () => {
-      const headers = executor.buildHeaders({ accessToken: "codex-token" }, true);
+      const headers = executor.buildHeaders({ accessToken: "codex-token" }, true, {
+        version: "0.157.0",
+      });
       assert.equal(headers.Version, "0.159.2");
       assert.equal(headers["User-Agent"], "custom-codex/9.9.9");
     }

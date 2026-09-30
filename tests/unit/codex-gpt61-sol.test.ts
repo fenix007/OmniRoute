@@ -195,7 +195,11 @@ test("Sol streams tool events and retains Ultra parallel calls with the updated 
       model,
       stream: true,
       credentials: { accessToken: "test-token" },
-      clientHeaders: { "X-OpenAI-Internal-Codex-Responses-Lite": "true" },
+      clientHeaders: {
+        "X-OpenAI-Internal-Codex-Responses-Lite": "true",
+        Version: "0.157.0",
+        "User-Agent": "codex-tui/0.157.0 (Ubuntu 24.4.0; x86_64)",
+      },
       body: {
         _nativeCodexPassthrough: true,
         model,

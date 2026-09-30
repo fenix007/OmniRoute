@@ -28,31 +28,13 @@ export function getCodexClientVersion(): string {
   );
 }
 
-export function getCodexClientVersionFromHeaders(
-  clientHeaders?: Record<string, string> | null
-): string | null {
-  const headers = Object.fromEntries(
-    Object.entries(clientHeaders || {}).map(([name, value]) => [name.toLowerCase(), value])
-  );
-  const version = headers.version?.trim();
-  if (version && SAFE_HEADER_TOKEN_PATTERN.test(version)) return version;
-  const match = /(?:codex[-_][A-Za-z0-9_]*|codex-cli)\/(\d+\.\d+\.\d+)/i.exec(
-    headers["user-agent"] || ""
-  );
-  return match?.[1] || null;
-}
-
-export function getCodexUserAgent(versionOverride?: string | null): string {
+export function getCodexUserAgent(): string {
   const override = getSafeEnvValue(CODEX_USER_AGENT_OVERRIDE_ENV, SAFE_HEADER_VALUE_PATTERN);
   if (override) {
     return override;
   }
 
-  const version =
-    versionOverride && SAFE_HEADER_TOKEN_PATTERN.test(versionOverride)
-      ? versionOverride
-      : getCodexClientVersion();
-  return `codex-cli/${version} (${DEFAULT_CODEX_USER_AGENT_PLATFORM}; ${DEFAULT_CODEX_USER_AGENT_ARCH})`;
+  return `codex-cli/${getCodexClientVersion()} (${DEFAULT_CODEX_USER_AGENT_PLATFORM}; ${DEFAULT_CODEX_USER_AGENT_ARCH})`;
 }
 
 export function getCodexDefaultHeaders(): Record<string, string> {

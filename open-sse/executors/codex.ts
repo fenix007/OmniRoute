@@ -34,7 +34,6 @@ import { FETCH_BODY_TIMEOUT_MS, HTTP_STATUS, PROVIDERS } from "../config/constan
 import { readCodexPeekChunk, buildCodexTimeoutSafePassthroughBody } from "./codex/bodyTimeout.ts";
 import {
   getCodexClientVersion,
-  getCodexClientVersionFromHeaders,
   getCodexUserAgent,
   normalizeCodexSessionId,
 } from "../config/codexClient.ts";
@@ -1046,9 +1045,10 @@ export class CodexExecutor extends BaseExecutor {
   ) {
     const isCompactRequest = isCompactResponsesEndpoint(credentials?.requestEndpointPath);
     const headers = super.buildHeaders(credentials, isCompactRequest ? false : true, clientHeaders);
-    const clientVersion = getCodexClientVersionFromHeaders(clientHeaders);
-    headers.Version = clientVersion ?? getCodexClientVersion();
-    setUserAgentHeader(headers, getCodexUserAgent(clientVersion));
+    // OmniRoute owns the upstream client identity. Forwarding an older caller's
+    // version can deny newer models and poison account-model eligibility locks.
+    headers.Version = getCodexClientVersion();
+    setUserAgentHeader(headers, getCodexUserAgent());
 
     // Add workspace binding header if workspaceId is persisted
     const workspaceId = resolveCodexAccountId(

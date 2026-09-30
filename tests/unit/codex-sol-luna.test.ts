@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { getModelsByProviderId } from "../../open-sse/config/providerModels.ts";
 import { CodexExecutor } from "../../open-sse/executors/codex.ts";
 import { resolveCodexAccountId } from "../../open-sse/utils/codexAccount.ts";
-import { getCodexClientVersionFromHeaders } from "../../open-sse/config/codexClient.ts";
 import { openaiToOpenAIResponsesRequest } from "../../open-sse/translator/request/openai-responses/toResponses.ts";
 import { CODEX_NATIVE_UNPREFIXED_MODELS } from "../../open-sse/services/model.ts";
 import { getReasoningVariantBaseModelId } from "../../src/lib/vscode/reasoningMetadata.ts";
@@ -105,16 +104,24 @@ test("executor and discovery bind the same token account over stale saved worksp
   assert.equal(resolveCodexAccountId(null, { workspaceId: "bad\r\nheader" }), null);
 });
 
-test("caller version passes through with safe pinned fallback", () => {
-  assert.equal(
-    getCodexClientVersionFromHeaders({ "User-Agent": "codex_cli_rs/0.156.1 (Mac OS)" }),
-    "0.156.1"
-  );
-  assert.equal(getCodexClientVersionFromHeaders({ version: "bad\r\nheader" }), null);
+test("upstream identity stays pinned regardless of caller version or User-Agent", () => {
   const executor = new CodexExecutor();
-  assert.equal(
-    executor.buildHeaders({ accessToken: "opaque" }, true, { version: "0.157.0" }).Version,
-    "0.157.0"
-  );
-  assert.equal(executor.buildHeaders({ accessToken: "opaque" }, true).Version, "0.159.2");
+  const callers = [
+    { version: "0.157.0", "user-agent": "codex-tui/0.157.0 (Ubuntu; x86_64)" },
+    { "User-Agent": "codex_cli_rs/0.156.1 (Mac OS)" },
+    { Version: "0.160.0", "User-Agent": "codex-cli/0.160.0" },
+    { version: "bad\r\nheader" },
+    {},
+  ];
+  for (const clientHeaders of callers) {
+    for (const requestEndpointPath of ["/responses", "/responses/compact"]) {
+      const headers = executor.buildHeaders(
+        { accessToken: "opaque", requestEndpointPath },
+        true,
+        clientHeaders
+      );
+      assert.equal(headers.Version, "0.159.2");
+      assert.equal(headers["User-Agent"], "codex-cli/0.159.2 (Windows 10.0.26200; x64)");
+    }
+  }
 });
