@@ -21,7 +21,7 @@ const STANDARD_EFFORT_SUFFIX_PATTERN = /-(xhigh|high|medium|low|none)$/i;
 // effort suffixes. Without a match here the base id never splits off, and VS Code
 // discovery expands the alias again into invalid ids like `gpt-6-astra-max-high`.
 const EXTENDED_EFFORT_SUFFIX_PATTERN =
-  /^(.*(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:astra|sol|luna)))-(max|ultra)$/i;
+  /^(.*(?:gpt-5\.6-(?:sol|terra|luna)|gpt-6-(?:astra|sol|luna)|gpt-6\.1-sol))-(max|ultra)$/i;
 const DEFAULT_REASONING_EFFORT = "none";
 const KNOWN_REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
@@ -182,7 +182,14 @@ export function getReasoningVariantBaseModelId(modelId: string) {
 }
 
 export function getDefaultReasoningEffort(model: VscodeCatalogModel, supportedValues?: string[]) {
-  return inferSelectedReasoningEffort(model, supportedValues) || DEFAULT_REASONING_EFFORT;
+  const selected = inferSelectedReasoningEffort(model, supportedValues);
+  if (selected) return selected;
+  const parsed = parseModel(getCatalogModelName(model));
+  const provider = parsed.provider || model.owned_by;
+  if ((provider === "codex" || provider === "cx") && parsed.model === "gpt-6.1-sol") {
+    return "low";
+  }
+  return DEFAULT_REASONING_EFFORT;
 }
 
 export function buildReasoningConfigSchema(

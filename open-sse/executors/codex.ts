@@ -332,6 +332,7 @@ function normalizeServiceTierValue(value: unknown): string | undefined {
  * Update this table when Codex releases new models with different caps.
  */
 const MAX_EFFORT_BY_MODEL: Record<string, EffortLevel> = {
+  "gpt-6.1-sol": "ultra",
   "gpt-6-astra": "ultra",
   "gpt-6-sol": "ultra",
   "gpt-6-luna": "max",
@@ -1331,7 +1332,7 @@ export class CodexExecutor extends BaseExecutor {
     const explicitReasoning = normalizeEffortValue(reasoningRecord?.effort);
     const requestReasoningEffort = normalizeEffortValue(body.reasoning_effort);
     const fallbackReasoningEffort = allowConnectionReasoningDefaults
-      ? requestDefaults.reasoningEffort || "medium"
+      ? requestDefaults.reasoningEffort || (cleanModel === "gpt-6.1-sol" ? "low" : "medium")
       : undefined;
     // Issue #2331: model suffix aliases (for example gpt-5.5-xhigh) represent an
     // explicit model selection, so they must override client-injected defaults such

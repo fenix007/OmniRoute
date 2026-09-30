@@ -116,5 +116,5 @@ test("caller version passes through with safe pinned fallback", () => {
     executor.buildHeaders({ accessToken: "opaque" }, true, { version: "0.157.0" }).Version,
     "0.157.0"
   );
-  assert.equal(executor.buildHeaders({ accessToken: "opaque" }, true).Version, "0.156.1");
+  assert.equal(executor.buildHeaders({ accessToken: "opaque" }, true).Version, "0.159.2");
 });

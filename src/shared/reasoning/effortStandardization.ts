@@ -34,6 +34,10 @@ export function extendCodexGpt56EffortValues(
     return values;
   }
 
+  if (/^gpt-6\.1-sol(?:-(?:low|medium|high|xhigh|max|ultra))?$/.test(normalizedModel)) {
+    return ["low", "medium", "high", "xhigh", "max", "ultra"];
+  }
+
   const match = normalizedModel.match(
     /^gpt-5\.6-(sol|terra|luna)(?:-(?:none|low|medium|high|xhigh|max|ultra))?$/
   );

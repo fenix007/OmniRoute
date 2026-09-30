@@ -20,6 +20,8 @@ import {
 
 export const DEFAULT_PRICING_FRONTIER = {
   openai: {
+    // Standard short-context USD/MTok; API cache writes have a separate rate.
+    "gpt-6.1-sol": { input: 2, output: 10, cached: 0.1, reasoning: 10, cache_creation: 2.5 },
     "gpt-5.6": GPT_5_6_SOL_PRICING,
     "gpt-5.6-sol": GPT_5_6_SOL_PRICING,
     "gpt-5.6-terra": GPT_5_6_TERRA_PRICING,

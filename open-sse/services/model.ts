@@ -139,6 +139,13 @@ const CODEX_PREFERRED_UNPREFIXED_MODELS = new Set([
 // `gpt-5.5 → gpt-5.5-medium` entry is removed to preserve #2877's bare-id contract.
 const CODEX_PREFERRED_UNPREFIXED_MODEL_ALIASES = new Map<string, string>([]);
 export const CODEX_NATIVE_UNPREFIXED_MODELS = new Set([
+  "gpt-6.1-sol",
+  "gpt-6.1-sol-low",
+  "gpt-6.1-sol-medium",
+  "gpt-6.1-sol-high",
+  "gpt-6.1-sol-xhigh",
+  "gpt-6.1-sol-max",
+  "gpt-6.1-sol-ultra",
   "codex-auto-review",
   "gpt-6-sol",
   "gpt-6-sol-low",

@@ -53,7 +53,7 @@ export function normalizeResponsesReasoningEffort(value: unknown, model?: unknow
   const effort = toString(value).toLowerCase();
   const codexModel =
     typeof model === "string" &&
-    /^(?:(?:codex|cx)\/)?gpt-6-(?:astra|sol|luna)(?:-(?:low|medium|high|xhigh|max|ultra))?$/.test(
+    /^(?:(?:codex|cx)\/)?(?:gpt-6-(?:astra|sol|luna)|gpt-6\.1-sol)(?:-(?:low|medium|high|xhigh|max|ultra))?$/.test(
       model
     );
   return effort === "max" && !codexModel ? "xhigh" : effort;

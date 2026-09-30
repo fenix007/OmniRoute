@@ -9,7 +9,7 @@ const EXPECTED_MODELS = ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-lun
 
 test("OpenAI API catalog exposes the public GPT-5.6 family and keeps GPT-5.4", () => {
   const models = getModelsByProviderId("openai");
-  const expectedLeadingModels = ["gpt-6-sol", "gpt-6-luna", ...EXPECTED_MODELS];
+  const expectedLeadingModels = ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", ...EXPECTED_MODELS];
 
   assert.deepEqual(
     models.slice(0, expectedLeadingModels.length).map((model) => model.id),
