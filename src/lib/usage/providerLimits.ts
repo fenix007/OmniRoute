@@ -39,6 +39,7 @@ import {
   isUsageQuotaKeyAllowed,
   normalizeUsageQuotasForProvider,
   sanitizeUsageQuotasForProvider,
+  toProviderLimitsCacheEntry,
 } from "./providerLimits/quotaNormalize";
 
 type JsonRecord = Record<string, unknown>;
@@ -91,22 +92,6 @@ const DEFAULT_PROVIDER_LIMITS_SYNC_INTERVAL_MINUTES = 70;
 const PROVIDER_LIMITS_AUTO_SYNC_SETTING_KEY = "provider_limits_auto_sync_last_run";
 const DEFAULT_PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS = 5_000;
 const pendingPostUsageRefreshes = new Set<string>();
-
-function toProviderLimitsCacheEntry(
-  usage: JsonRecord,
-  source: SyncSource,
-  fetchedAt = new Date().toISOString()
-): ProviderLimitsCacheEntry {
-  const value = Number(usage.bankedResetCredits);
-  return {
-    quotas: isRecord(usage.quotas) ? usage.quotas : null,
-    plan: usage.plan ?? null,
-    message: typeof usage.message === "string" ? usage.message : null,
-    fetchedAt,
-    source,
-    bankedResetCredits: Number.isFinite(value) ? value : undefined,
-  };
-}
 
 function getProviderLimitsPostUsageRefreshDelayMs(): number {
   const raw = Number(process.env.PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS ?? "");

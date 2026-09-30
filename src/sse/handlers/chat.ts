@@ -103,7 +103,8 @@ import { generateRequestId } from "../../shared/utils/requestId";
 import { logAuditEvent } from "../../lib/compliance/index";
 import { enforceApiKeyPolicy } from "../../shared/utils/apiKeyPolicy";
 import { hasProviderQuotaBypassScope } from "../../shared/constants/apiKeyPolicyScopes";
-import { cloneLogPayload } from "@/lib/logPayloads";
+import { buildClientRawRequest } from "./chatRequestUtils";
+export { buildClientRawRequest } from "./chatRequestUtils";
 import { handleInternalUsageCommand } from "@/lib/usage/internalUsageCommand";
 import {
   applyTaskAwareRouting,
@@ -900,8 +901,7 @@ export async function handleChat(
           describeRejectedComboFailure,
           readRejectedComboDiagnostics,
           recordRejectedRequestUsage,
-        } =
-          await import("./rejectedRequestUsage");
+        } = await import("./rejectedRequestUsage");
         await recordRejectedRequestUsage({
           status: response.status,
           model: body?.model || resolvedModelStr,
@@ -948,16 +948,6 @@ export async function handleChat(
   );
   recordTelemetry(telemetry);
   return withCorrelationId(withSessionHeader(response, sessionId), reqId);
-}
-
-export function buildClientRawRequest(request: Request, body: unknown) {
-  const url = new URL(request.url);
-  return {
-    endpoint: url.pathname,
-    body: cloneLogPayload(body),
-    headers: Object.fromEntries(request.headers.entries()),
-    signal: request.signal ?? null,
-  };
 }
 
 /**

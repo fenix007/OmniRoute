@@ -6,6 +6,11 @@ const h = await createChatPipelineHarness("combo-codex-account-timeout");
 const { updateProviderConnection } = await import("../../src/lib/db/providers.ts");
 const { clearSessions } = await import("../../open-sse/services/sessionManager.ts");
 
+// Exercise upstream account timeouts after module initialization. Cold transpilation
+// can otherwise exhaust the 1500ms target budget before the first mocked fetch.
+await import("../../open-sse/services/compression/strategySelector.ts");
+await import("../../open-sse/services/compression/stats.ts");
+
 test.beforeEach(async () => {
   await h.resetStorage();
 });

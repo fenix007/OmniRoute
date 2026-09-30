@@ -1,3 +1,5 @@
+import { cloneLogPayload } from "@/lib/logPayloads";
+
 function normalizeAllowedConnectionIds(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
   const ids = value.filter(
@@ -41,4 +43,14 @@ export async function readResponseErrorReason(response: Response): Promise<strin
   } catch {
     return null;
   }
+}
+
+export function buildClientRawRequest(request: Request, body: unknown) {
+  const url = new URL(request.url);
+  return {
+    endpoint: url.pathname,
+    body: cloneLogPayload(body),
+    headers: Object.fromEntries(request.headers.entries()),
+    signal: request.signal ?? null,
+  };
 }

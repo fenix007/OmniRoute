@@ -42,3 +42,19 @@ export function parseDayGranularityResetMs(msg: string, maxMs: number): number |
   if (!Number.isFinite(days) || days <= 0) return null;
   return Math.min(days * 24 * 3600 * 1000, maxMs);
 }
+
+/**
+ * Calculate milliseconds from now until tomorrow at midnight (00:00:00).
+ * Used to lock a model until the next day when daily quota is exhausted.
+ * @returns {number} Milliseconds until tomorrow
+ */
+export function getMsUntilTomorrow(): number {
+  const nowMs = Date.now();
+  const tomorrow = new Date(nowMs);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+  const ms = tomorrow.getTime() - nowMs;
+  // Guard against DST edge cases: if ms is negative (shouldn't happen) or
+  // unreasonably large (>25h due to spring-forward), cap at 24 hours.
+  return ms > 0 && ms <= 25 * 60 * 60 * 1000 ? ms : 24 * 60 * 60 * 1000;
+}
