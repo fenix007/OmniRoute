@@ -975,3 +975,77 @@ Tests: `tests/unit/perplexity-web-sources-research.test.ts` (fixture
   makes that a model-only lockout, so Pro search keeps routing to the account.
 
 Tests: `tests/unit/perplexity-web-quota.test.ts`.
+
+## Queued request context isolation (2026-09-30)
+
+Source: [diegosouzapw/OmniRoute PR #14621](https://github.com/diegosouzapw/OmniRoute/pull/14621),
+head `fe1b37ea24e3adaac150b74812c59f72d9a19b77`, merged as
+`854fd33e93003915debf85dc3c5d2b2c3fd57fac`. Status checked 2026-09-30:
+**merged**, with the same reviewed head. Thanks @maxmad64bis.
+
+Decision: **adapt**. A queued request on the frozen limiter can inherit the async
+context of the request releasing the slot. This also lets queued proxy diagnostics
+write into another request's capture sink. The regression suite reproduces nine
+failures on unchanged `7255a1707591b720665a729289399bfc148ecaf6`.
+
+The adaptation binds the caller's callback with Node's existing `AsyncResource.bind`
+at the frozen `withRateLimit` boundary, using it in both scheduling paths (with and
+without an abort signal). Upstream binds its newer `wrappedFn`; that wrapper and
+its unrelated architecture are not imported. No production dependency is added.
+The disabled limiter path, concurrency limits, timeout classification and abort
+listener cleanup retain their existing contracts. Cancelled jobs can still reach
+the old queue callback, where the executor checks the request signal before IO.
+
+`tests/unit/rate-limit-queue-context.test.ts` covers Codex, Kiro and Gemini with
+and without signals, callers without a context, context after an await, rejection,
+queued disconnect, pre-aborted requests, the disabled path and real proxy capture
+sinks without network access. All eleven cases pass after the adaptation.
+
+The accompanying maintenance tests correct two stale assertions against existing
+stable behavior: Codex uses the token-granted personal workspace rather than an
+organization membership, and OpenAI's catalog places GPT-6 Sol/Luna ahead of the
+GPT-5.6 family. The promptless image-route test mocks DNS for its already mocked
+HTTP input, while retaining public-address validation and checking the uploaded
+image bytes. Production OAuth, model catalogs and image handling are unchanged.
+
+Publication uses the existing `[skip ci]` policy; no workflow changes, release,
+image publication or deployment are included.
+
+### Gate repairs
+
+A full unit run exposed a separate preservation defect in the frozen compression
+code: all-decimal sentinel entropy let the `const_case` matcher extract an internal
+marker a second time, so restoration could leave that marker in place of protected
+text. Two deterministic regression cases fail on the unchanged implementation and
+pass with a lowercase prefix on the random seed, including the non-crypto fallback.
+The random byte count and public compression API are unchanged. This is a local
+repair, not an upstream port; the baseline implementation is
+[`preservation.ts` at 7255a170](https://github.com/fenix007/OmniRoute/blob/7255a1707591b720665a729289399bfc148ecaf6/open-sse/services/compression/preservation.ts).
+
+The environment documentation also now includes the already implemented
+`OMNIROUTE_PPLX_RESEARCH_TIMEOUT_MS` and `OMNIROUTE_PPLX_SEARCH_HINT`; their absence
+caused the existing environment-contract test to fail.
+
+The existing file-size violations were repaired without changing thresholds:
+Perplexity wire helpers now live in `open-sse/executors/perplexity-web/wire.ts`,
+re-exported through the existing protocol entry point; registry tests live in
+`tests/unit/perplexity-web-registry.test.ts`. Existing request-snapshot, midnight
+quota-reset and quota-cache helpers moved verbatim into `chatRequestUtils.ts`,
+`quotaResetParsing.ts` and `providerLimits/quotaNormalize.ts`. Public exports are
+preserved and the protocol modules do not introduce an import cycle. No provider
+behavior was added as part of this structural gate repair.
+
+The Codex timeout integration fixture preloads the existing compression modules
+before starting its 1500 ms account budget. This prevents cold TypeScript module
+initialization from consuming the budget before the first mocked upstream call;
+the timeout, failover and account-allowlist assertions are unchanged.
+
+Validation on the final implementation: `npm run test:unit` passed 23,519 tests
+with 14 skips; the five relevant integration suites passed all 29 cases.
+`npm run test:coverage` passed the unchanged 60% thresholds: statements/lines
+81.04%, branches 78.46%, functions 86.64%. Full lint, core typecheck, production
+build, file-size, test discovery, environment/docs synchronization, fabricated-doc,
+T11 any-budget and tracked-artifact gates passed. Build emitted filesystem-tracing
+warnings in unchanged modules. All runtime checks used isolated data directories.
+The hook checks were also run directly, with `lint-staged --no-stash` to respect
+the maintenance policy against automatic stashing. No gate or threshold was weakened.

@@ -8,6 +8,7 @@
  * Can be toggled per provider connection via dashboard.
  */
 
+import { AsyncResource } from "node:async_hooks";
 import Bottleneck from "bottleneck";
 import { applyBottleneckDoExpirePatch } from "./bottleneckPatch.ts";
 import { parseRetryAfterFromBody } from "./accountFallback.ts";
@@ -549,7 +550,8 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
   const limiter = getLimiter(provider, connectionId, model);
   const maxWaitMs = currentRequestQueueSettings.maxWaitMs;
   const scheduleOpts = maxWaitMs && maxWaitMs > 0 ? { expiration: maxWaitMs } : {};
-
+  // Queued jobs must retain their caller's context, not the slot-freer's.
+  const boundFn = AsyncResource.bind(fn);
   try {
     if (signal) {
       let abortListener: (() => void) | undefined;
@@ -572,14 +574,14 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
       });
 
       try {
-        return await Promise.race([limiter.schedule(scheduleOpts, fn), abortPromise]);
+        return await Promise.race([limiter.schedule(scheduleOpts, boundFn), abortPromise]);
       } finally {
         if (abortListener) {
           signal.removeEventListener("abort", abortListener);
         }
       }
     } else {
-      return await limiter.schedule(scheduleOpts, fn);
+      return await limiter.schedule(scheduleOpts, boundFn);
     }
   } catch (err) {
     // Bottleneck's raw `This job timed out after <maxWaitMs> ms.` is

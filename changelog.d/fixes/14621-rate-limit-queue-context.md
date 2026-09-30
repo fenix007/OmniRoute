@@ -1,0 +1,1 @@
+- **fix(rate-limit):** Keep each queued request in its caller's async context, preventing cross-request proxy capture and context attribution while preserving existing limits and cancellation behavior. Adapted from [#14621](https://github.com/diegosouzapw/OmniRoute/pull/14621) — thanks @maxmad64bis.
