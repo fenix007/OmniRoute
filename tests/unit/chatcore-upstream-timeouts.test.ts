@@ -6,6 +6,7 @@ import {
   createUpstreamStartTimeoutError,
   createAbortError,
   computeBillableTokens,
+  executeWithUpstreamStartTimeout,
   getExecutorTimeoutMs,
   normalizeExecutorResult,
 } from "../../open-sse/handlers/chatCore/upstreamTimeouts.ts";
@@ -38,6 +39,25 @@ test("getExecutorTimeoutMs floors valid values and falls back to default", () =>
   assert.equal(getExecutorTimeoutMs({ getTimeoutMs: () => 1234.9 }), 1234);
   assert.equal(getExecutorTimeoutMs({ getTimeoutMs: () => NaN }), getExecutorTimeoutMs(null));
   assert.ok(Number.isFinite(getExecutorTimeoutMs(null)));
+});
+
+test("executeWithUpstreamStartTimeout forwards the model to the executor timeout policy", async () => {
+  let receivedModel: string | undefined;
+  const result = await executeWithUpstreamStartTimeout({
+    executor: {
+      getTimeoutMs(model?: string) {
+        receivedModel = model;
+        return 1000;
+      },
+    },
+    provider: "perplexity-web",
+    model: "pplx-deep-research",
+    signal: new AbortController().signal,
+    execute: async () => "ok",
+  });
+
+  assert.equal(receivedModel, "pplx-deep-research");
+  assert.equal(result, "ok");
 });
 
 test("normalizeExecutorResult wraps bare Response and passes through rich result", () => {

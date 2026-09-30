@@ -309,6 +309,63 @@ test("deep research: research mode, long timeout, clarifications answered in-thr
   assert.equal(json.citations.length, 2);
 });
 
+test("deep research clarification turns share one TLS execution deadline", async () => {
+  const realNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  const requests = [];
+  const turns = [
+    [
+      {
+        status: "COMPLETED",
+        backend_uuid: "r-deadline",
+        read_write_token: "rw-deadline",
+        blocks: [
+          {
+            intended_usage: "workflow_root",
+            workflow_block: {
+              steps: [
+                {
+                  tool_name: "research_clarifying_questions",
+                  items: [
+                    {
+                      type: "WORKFLOW_ITEM_CLARIFYING_QUESTIONS",
+                      payload: { questions: ["Какой период?"] },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+    answerEvents("Итог.", { uuid: "r-done", rw: "rw-done" }),
+  ];
+  __setTlsFetchOverrideForTesting(async (url, opts) => {
+    if (url.includes("/rest/rate-limit/")) {
+      return { status: 403, headers: new Headers(), text: "challenge", body: null };
+    }
+    requests.push(opts);
+    const events = turns.shift();
+    now += 300_000;
+    return { status: 200, headers: new Headers(), text: null, body: sse(events) };
+  });
+
+  try {
+    const res = await run(
+      { messages: [{ role: "user", content: "Исследуй" }] },
+      { model: "pplx-deep-research" }
+    );
+    assert.equal(res.status, 200);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].timeoutMs, 899_000);
+    assert.equal(requests[1].timeoutMs, 599_000);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("deep research manual mode returns the clarifying questions", async () => {
   upstream([
     {

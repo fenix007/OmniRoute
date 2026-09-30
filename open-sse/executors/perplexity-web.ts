@@ -28,6 +28,10 @@ import { prepareToolMessages } from "../translator/webTools.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
 import {
+  PERPLEXITY_DEEP_RESEARCH_BUDGET_MS,
+  resolveModelRequestBudgetMs,
+} from "../config/modelRequestBudgets.ts";
+import {
   fetchPerplexityRateLimits,
   invalidatePerplexityRateLimits,
 } from "../services/perplexityQuotaFetcher.ts";
@@ -222,6 +226,7 @@ const ANSWER_TIMEOUT_MS =
   Number.parseInt(process.env.OMNIROUTE_PPLX_TLS_TIMEOUT_MS || "", 10) || 300_000;
 const RESEARCH_TIMEOUT_MS =
   Number.parseInt(process.env.OMNIROUTE_PPLX_RESEARCH_TIMEOUT_MS || "", 10) || 900_000;
+const RESEARCH_TIMEOUT_SAFETY_MS = 1_000;
 
 export function buildResearchContinuation(questions: string[]): string {
   const list = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
@@ -467,6 +472,10 @@ export class PerplexityWebExecutor extends BaseExecutor {
     super("perplexity-web", { id: "perplexity-web", baseUrl: PPLX_SSE_ENDPOINT });
   }
 
+  override getTimeoutMs(model?: string) {
+    return resolveModelRequestBudgetMs(this.provider, model, super.getTimeoutMs());
+  }
+
   async execute({ model, body, stream, credentials, signal, log }: ExecuteInput) {
     const bodyObj = (body || {}) as Record<string, unknown>;
     const rawMessages = bodyObj.messages as Array<Record<string, unknown>> | undefined;
@@ -514,6 +523,13 @@ export class PerplexityWebExecutor extends BaseExecutor {
       log?.info?.("PPLX-WEB", `Unmapped model ${model}, using as raw preference`);
     }
     const isResearch = pplxMode === RESEARCH_MODE;
+    // All TLS turns in one Deep Research execution share the outer model budget.
+    // Without a shared deadline, an automatic clarification continuation could
+    // start near the outer timeout and leave the opaque native request running
+    // for another full RESEARCH_TIMEOUT_MS after chatCore had already aborted.
+    const researchDeadlineAt = isResearch
+      ? Date.now() + PERPLEXITY_DEEP_RESEARCH_BUDGET_MS - RESEARCH_TIMEOUT_SAFETY_MS
+      : null;
 
     // Parse messages and check session continuity
     const scope = fnv1a(String(credentials.accessToken || credentials.apiKey || ""));
@@ -583,16 +599,27 @@ export class PerplexityWebExecutor extends BaseExecutor {
       readWriteToken,
     });
 
-    const send = async (pplxBody: Record<string, unknown>, requestId: string) =>
-      tlsFetchPerplexity(PPLX_SSE_ENDPOINT, {
+    const send = async (pplxBody: Record<string, unknown>, requestId: string) => {
+      const timeoutMs = isResearch
+        ? Math.min(RESEARCH_TIMEOUT_MS, Math.max(0, (researchDeadlineAt ?? 0) - Date.now()))
+        : ANSWER_TIMEOUT_MS;
+      if (timeoutMs <= 0) {
+        const timeoutError = new Error(
+          "Perplexity Deep Research execution budget exhausted before the next upstream request"
+        );
+        timeoutError.name = "TimeoutError";
+        throw timeoutError;
+      }
+      return tlsFetchPerplexity(PPLX_SSE_ENDPOINT, {
         method: "POST",
         headers: { ...baseHeaders, "x-request-id": requestId },
         body: JSON.stringify(pplxBody),
         signal: signal ?? null,
         stream: true,
         streamEofSymbol: PPLX_STREAM_EOF_SYMBOL,
-        timeoutMs: isResearch ? RESEARCH_TIMEOUT_MS : ANSWER_TIMEOUT_MS,
+        timeoutMs,
       });
+    };
 
     // Build Perplexity request
     const requestId = crypto.randomUUID();

@@ -62,12 +62,13 @@ export function computeBillableTokens(usage: unknown): number {
   return getLoggedInputTokens(usage) + getLoggedOutputTokens(usage) + getReasoningTokens(usage);
 }
 
-export function getExecutorTimeoutMs(executor: unknown): number {
-  const getTimeoutMs = (executor as { getTimeoutMs?: () => unknown } | null)?.getTimeoutMs;
+export function getExecutorTimeoutMs(executor: unknown, model?: string): number {
+  const getTimeoutMs = (executor as { getTimeoutMs?: (model?: string) => unknown } | null)
+    ?.getTimeoutMs;
   if (typeof getTimeoutMs !== "function") return FETCH_TIMEOUT_MS;
 
   try {
-    const timeoutMs = getTimeoutMs.call(executor);
+    const timeoutMs = getTimeoutMs.call(executor, model);
     if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) return FETCH_TIMEOUT_MS;
     return Math.max(0, Math.floor(timeoutMs));
   } catch {
@@ -111,7 +112,7 @@ export async function executeWithUpstreamStartTimeout<T>({
   log?: { warn?: (tag: string, message: string) => void } | null;
   execute: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
-  const timeoutMs = getExecutorTimeoutMs(executor);
+  const timeoutMs = getExecutorTimeoutMs(executor, model);
   if (timeoutMs <= 0) return execute(signal);
   if (signal.aborted) throw createAbortError(signal);
 

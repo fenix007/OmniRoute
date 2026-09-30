@@ -976,6 +976,28 @@ Tests: `tests/unit/perplexity-web-sources-research.test.ts` (fixture
 
 Tests: `tests/unit/perplexity-web-quota.test.ts`.
 
+### Perplexity Deep Research request budget
+
+`perplexity-web/pplx-deep-research` has a fixed 15-minute local request budget.
+The policy feeds both Bottleneck scheduling/execution expiration and chatCore's
+upstream-start timeout; other Perplexity models and providers retain the configured
+global defaults. The Perplexity TLS executor already applies the same 15-minute
+default to the native request through `OMNIROUTE_PPLX_RESEARCH_TIMEOUT_MS`. Automatic
+clarification turns share one execution deadline with a one-second margin, so a late
+continuation cannot start another full 15-minute native call after the outer timeout.
+
+Bottleneck expiration errors now describe a local scheduling/execution budget rather
+than claiming the whole interval was queue wait. Quotas, concurrency and authentication
+are unchanged.
+
+Sources: `open-sse/config/modelRequestBudgets.ts`,
+`open-sse/services/rateLimitManager.ts`,
+`open-sse/handlers/chatCore/upstreamTimeouts.ts`,
+`open-sse/executors/perplexity-web.ts`. Tests:
+`tests/unit/perplexity-deep-research-timeout-policy.test.ts`,
+`tests/unit/rate-limit-queue-timeout-message-4165.test.ts`,
+`tests/unit/perplexity-web-sources-research.test.ts`.
+
 ## Queued request context isolation (2026-09-30)
 
 Source: [diegosouzapw/OmniRoute PR #14621](https://github.com/diegosouzapw/OmniRoute/pull/14621),

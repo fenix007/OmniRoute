@@ -10,8 +10,8 @@
  * `last_error` carried that upstream-looking string across many providers.
  *
  * The fix rewrites that specific Bottleneck error into a clear, OmniRoute-owned
- * message that names the knob (`resilienceSettings.requestQueue.maxWaitMs`) and
- * explicitly says it is NOT an upstream timeout, while preserving the original
+ * message that identifies the local scheduling/execution budget and its source,
+ * while preserving the original
  * error as `.cause` and tagging `.code = "RATE_LIMIT_QUEUE_TIMEOUT"` so callers
  * can classify it. Behavior is unchanged: the job is still dropped.
  */
@@ -73,9 +73,18 @@ test("#4165 queue-timeout surfaces a clear OmniRoute error, not the raw upstream
   // Tagged so combo / callers can classify it as a local queue drop.
   assert.equal(caught.code, "RATE_LIMIT_QUEUE_TIMEOUT", "error must carry the queue-timeout code");
 
-  // The surfaced message must read as a local queue limit, naming the knob,
+  // The surfaced message must identify the local scheduling/execution deadline
   // and must NOT masquerade as an upstream "This job timed out" gateway error.
-  assert.match(caught.message, /maxWaitMs/, "message should name the maxWaitMs knob");
+  assert.match(
+    caught.message,
+    /scheduling\/execution budget/,
+    "message should identify the actual Bottleneck budget semantics"
+  );
+  assert.match(
+    caught.message,
+    /requestQueue\.maxWaitMs/,
+    "ordinary requests should name the settings source"
+  );
   assert.match(
     caught.message,
     /not an upstream/i,

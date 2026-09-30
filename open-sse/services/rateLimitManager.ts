@@ -16,6 +16,10 @@ import { getProviderCategory } from "../config/providerRegistry.ts";
 import { getCodexRateLimitKey } from "../executors/codex.ts";
 import { awaitProviderDefaultSlot } from "./providerDefaultRateLimit.ts";
 import {
+  hasModelRequestBudget,
+  resolveModelRequestBudgetMs,
+} from "../config/modelRequestBudgets.ts";
+import {
   DEFAULT_RESILIENCE_SETTINGS,
   resolveResilienceSettings,
   type RequestQueueSettings,
@@ -538,18 +542,19 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
     throw err;
   }
 
-  // Proactive sliding-window fallback for header-less providers with a declared cap
-  // (Fase 8.2). No-op unless PROVIDER_DEFAULT_RATE_LIMITS has an entry for `provider`.
-  await awaitProviderDefaultSlot(
+  const requestBudgetMs = resolveModelRequestBudgetMs(
     provider,
-    connectionId,
-    signal,
+    model,
     currentRequestQueueSettings.maxWaitMs
   );
 
+  // Proactive sliding-window fallback for header-less providers with a declared cap
+  // (Fase 8.2). No-op unless PROVIDER_DEFAULT_RATE_LIMITS has an entry for `provider`.
+  await awaitProviderDefaultSlot(provider, connectionId, signal, requestBudgetMs);
+
   const limiter = getLimiter(provider, connectionId, model);
-  const maxWaitMs = currentRequestQueueSettings.maxWaitMs;
-  const scheduleOpts = maxWaitMs && maxWaitMs > 0 ? { expiration: maxWaitMs } : {};
+  const scheduleOpts =
+    requestBudgetMs && requestBudgetMs > 0 ? { expiration: requestBudgetMs } : {};
   // Queued jobs must retain their caller's context, not the slot-freer's.
   const boundFn = AsyncResource.bind(fn);
   try {
@@ -584,7 +589,7 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
       return await limiter.schedule(scheduleOpts, boundFn);
     }
   } catch (err) {
-    // Bottleneck's raw `This job timed out after <maxWaitMs> ms.` is
+    // Bottleneck's raw `This job timed out after <requestBudgetMs> ms.` is
     // indistinguishable from an upstream gateway timeout, so it leaks into 502
     // bodies / call-log `last_error` and gets misdiagnosed as a provider outage
     // (#4165). Rewrite it into a clear, OmniRoute-owned error (knob named,
@@ -593,13 +598,17 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
     if (err?.message?.includes("This job timed out")) {
       const key = getLimiterKey(provider, connectionId, model);
       logRateLimit(
-        `⏰ [RATE-LIMIT] ${key} — job expired after ${Math.ceil((maxWaitMs || 0) / 1000)}s in queue, dropping`
+        `⏰ [RATE-LIMIT] ${key} — job exceeded its ${Math.ceil((requestBudgetMs || 0) / 1000)}s scheduling/execution budget, dropping`
       );
+      const usesModelPolicy = hasModelRequestBudget(provider, model);
+      const budgetSource = usesModelPolicy
+        ? "the built-in model policy"
+        : "resilienceSettings.requestQueue.maxWaitMs";
       const queueErr = new Error(
-        `Request dropped after exceeding the local rate-limit queue budget maxWaitMs (${maxWaitMs}ms) for ` +
-          `${model ? `${provider}/${model}` : provider} — this is OmniRoute's request queue ` +
-          `(resilienceSettings.requestQueue.maxWaitMs), not an upstream timeout. Raise it in ` +
-          `Settings → Resilience if this is queue saturation rather than a slow provider.`,
+        `Request dropped after exceeding the local rate-limit scheduling/execution budget ` +
+          `(${requestBudgetMs}ms) for ${model ? `${provider}/${model}` : provider}. ` +
+          `The budget comes from ${budgetSource}; this is an OmniRoute deadline, not an ` +
+          `upstream HTTP timeout.`,
         { cause: err }
       ) as Error & { code?: string };
       queueErr.code = "RATE_LIMIT_QUEUE_TIMEOUT";
