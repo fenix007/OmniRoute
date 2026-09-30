@@ -55,9 +55,12 @@ const {
 const { selectAccount } = accountSelector;
 
 /** Build a full ProviderProfile from partial overrides (test helper). */
-function makeProfile(overrides: Record<string, unknown> = {}): any {
+function makeProfile(
+  overrides: Partial<ReturnType<typeof getProviderProfile>> = {}
+): ReturnType<typeof getProviderProfile> {
   return {
     baseCooldownMs: 125,
+    maxCooldownMs: getProviderProfile("openai").maxCooldownMs,
     useUpstreamRetryHints: false,
     maxBackoffSteps: 3,
     failureThreshold: 60,
