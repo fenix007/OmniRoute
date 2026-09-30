@@ -1,0 +1,1 @@
+- **refactor(stable):** Restore frozen file-size gates by separating Perplexity wire helpers and registry tests, and moving existing request-snapshot, quota-reset and quota-cache helpers into focused modules. Preserve public imports and runtime behavior without changing size limits.

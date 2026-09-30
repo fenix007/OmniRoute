@@ -67,3 +67,33 @@ describe("preservation", () => {
     assert.equal(extracted, text);
   });
 });
+
+it("restores protected text when cryptographic entropy contains only decimal digits", (t) => {
+  t.mock.method(globalThis.crypto, "getRandomValues", (bytes: Uint8Array) => bytes.fill(0x11));
+  const input = "Please use `npm run build` with CONFIG_NAME unchanged.";
+  const { text, blocks } = extractPreservedBlocks(input);
+  assert.deepEqual(
+    blocks.map((block) => block.content),
+    ["`npm run build`", "CONFIG_NAME"]
+  );
+  assert.equal(restorePreservedBlocks(text, blocks), input);
+});
+
+it("restores protected text when the fallback entropy contains only decimal digits", () => {
+  const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+  const originalRandom = Math.random;
+  try {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+    Math.random = () => 0.25;
+    const input = "Keep `npm run build` and CONFIG_NAME intact.";
+    const { text, blocks } = extractPreservedBlocks(input);
+    assert.deepEqual(
+      blocks.map((block) => block.content),
+      ["`npm run build`", "CONFIG_NAME"]
+    );
+    assert.equal(restorePreservedBlocks(text, blocks), input);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", cryptoDescriptor!);
+    Math.random = originalRandom;
+  }
+});

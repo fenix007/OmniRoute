@@ -1,0 +1,1 @@
+- **fix(compression):** Preserve protected text when random sentinel entropy contains only decimal digits, including the non-crypto fallback. Prevent internal markers from being mistaken for constant names.

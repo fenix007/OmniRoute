@@ -1,3 +1,4 @@
+import type { ProviderLimitsCacheEntry } from "@/lib/db/providerLimits";
 import {
   isUserCallableAntigravityModelId,
   toClientAntigravityModelId,
@@ -69,4 +70,20 @@ export function sanitizeUsageQuotasForProvider(provider: string, usage: JsonReco
 
   const sanitizedQuotas = normalizeUsageQuotasForProvider(provider, usage.quotas);
   return sanitizedQuotas === usage.quotas ? usage : { ...usage, quotas: sanitizedQuotas };
+}
+
+export function toProviderLimitsCacheEntry(
+  usage: JsonRecord,
+  source: "manual" | "scheduled",
+  fetchedAt = new Date().toISOString()
+): ProviderLimitsCacheEntry {
+  const value = Number(usage.bankedResetCredits);
+  return {
+    quotas: isRecord(usage.quotas) ? usage.quotas : null,
+    plan: usage.plan ?? null,
+    message: typeof usage.message === "string" ? usage.message : null,
+    fetchedAt,
+    source,
+    bankedResetCredits: Number.isFinite(value) ? value : undefined,
+  };
 }

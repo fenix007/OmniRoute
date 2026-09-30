@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import dns from "node:dns";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-image-route-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
@@ -120,11 +121,19 @@ test("v1 image models GET exposes current Codex image models and hides inactive 
   assert.ok(!ids.some((id: string) => id.startsWith("xai/")));
 });
 
-test("v1 image generation POST accepts promptless requests for image-only models", async () => {
+test("v1 image generation POST accepts promptless requests for image-only models", async (t) => {
   await seedConnection("topaz", { apiKey: "topaz-key" });
+  // HTTP is mocked below; keep the real public-only guard without live DNS.
+  const lookup = t.mock.method(dns.promises, "lookup", async (hostname, options) => {
+    assert.equal(hostname, "example.com");
+    assert.deepEqual(options, { all: true });
+    return [{ address: "203.0.113.5", family: 4 }];
+  });
+  const requests: string[] = [];
 
   globalThis.fetch = async (url, options = {}) => {
     const stringUrl = String(url);
+    requests.push(stringUrl);
     if (stringUrl === "https://example.com/topaz-input.png") {
       return new Response(new Uint8Array([1, 2, 3]), {
         status: 200,
@@ -135,6 +144,9 @@ test("v1 image generation POST accepts promptless requests for image-only models
     if (stringUrl === "https://api.topazlabs.com/image/v1/enhance") {
       const formData = options.body as FormData;
       assert.ok(formData.get("image") instanceof File);
+      const image = formData.get("image") as File;
+      assert.equal(image.type, "image/png");
+      assert.deepEqual(new Uint8Array(await image.arrayBuffer()), new Uint8Array([1, 2, 3]));
       return new Response(new Uint8Array([7, 7, 7]), {
         status: 200,
         headers: { "content-type": "image/jpeg" },
@@ -160,6 +172,11 @@ test("v1 image generation POST accepts promptless requests for image-only models
 
   assert.equal(response.status, 200);
   assert.equal(body.data[0].b64_json, "BwcH");
+  assert.equal(lookup.mock.callCount(), 1);
+  assert.deepEqual(requests, [
+    "https://example.com/topaz-input.png",
+    "https://api.topazlabs.com/image/v1/enhance",
+  ]);
 });
 
 test("v1 image generation POST still requires prompts for text-input models", async () => {

@@ -44,7 +44,12 @@ import {
   buildSubscriptionQuotaFallback,
   buildWeeklyQuotaFallback,
 } from "./quotaTextCooldowns.ts";
-import { parseDayGranularityResetMs, shouldPreserveQuotaSignals } from "./quotaResetParsing.ts";
+import {
+  getMsUntilTomorrow,
+  parseDayGranularityResetMs,
+  shouldPreserveQuotaSignals,
+} from "./quotaResetParsing.ts";
+export { getMsUntilTomorrow } from "./quotaResetParsing.ts";
 
 export type ProviderProfile = {
   baseCooldownMs: number;
@@ -1410,22 +1415,6 @@ export function classifyError(
 }
 
 // ─── Daily Quota Helpers ────────────────────────────────────────────────────
-
-/**
- * Calculate milliseconds from now until tomorrow at midnight (00:00:00).
- * Used to lock a model until the next day when daily quota is exhausted.
- * @returns {number} Milliseconds until tomorrow
- */
-export function getMsUntilTomorrow(): number {
-  const nowMs = Date.now();
-  const tomorrow = new Date(nowMs);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
-  const ms = tomorrow.getTime() - nowMs;
-  // Guard against DST edge cases: if ms is negative (shouldn't happen) or
-  // unreasonably large (>25h due to spring-forward), cap at 24 hours.
-  return ms > 0 && ms <= 25 * 60 * 60 * 1000 ? ms : 24 * 60 * 60 * 1000;
-}
 
 /**
  * Check if error text indicates daily quota exhaustion (as opposed to rate limiting).

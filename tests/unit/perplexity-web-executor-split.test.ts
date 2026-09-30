@@ -6,19 +6,28 @@ import { dirname, join } from "node:path";
 
 // Split-guard for the perplexity-web executor protocol extraction.
 // The pure wire protocol (consts, types, SSE parsing, request/query building, content
-// extraction) lives in perplexity-web/protocol.ts (no host state/fetch/auth). Host imports
-// back the symbols it uses; everything is module-private (no re-export).
+// extraction) lives in protocol.ts and wire.ts (no host state/fetch/auth). The original
+// protocol entry point re-exports the wire helpers so host/client imports stay stable.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXE = join(HERE, "../../open-sse/executors");
 const HOST = join(EXE, "perplexity-web.ts");
 const LEAF = join(EXE, "perplexity-web/protocol.ts");
+const WIRE = join(EXE, "perplexity-web/wire.ts");
 
-test("leaf hosts the protocol helpers and does not import the host", () => {
-  const src = readFileSync(LEAF, "utf8");
-  for (const sym of ["cleanResponse", "buildPplxRequestBody", "extractContent", "sseChunk"]) {
-    assert.match(src, new RegExp(`export (async function\\*?|function\\*?|const) ${sym}\\b`));
+test("protocol modules host their helpers without importing the host", () => {
+  const protocol = readFileSync(LEAF, "utf8");
+  const wire = readFileSync(WIRE, "utf8");
+  for (const [src, symbols] of [
+    [protocol, ["extractContent", "sseChunk"]],
+    [wire, ["cleanResponse", "buildPplxRequestBody"]],
+  ] as const) {
+    for (const sym of symbols) {
+      assert.match(src, new RegExp(`export (async function\\*?|function\\*?|const) ${sym}\\b`));
+    }
+    assert.doesNotMatch(src, /from "\.\.\/perplexity-web\.ts"/);
   }
-  assert.doesNotMatch(src, /from "\.\.\/perplexity-web\.ts"/);
+  assert.match(protocol, /export \* from "\.\/wire\.ts"/);
+  assert.doesNotMatch(wire, /from "\.\/protocol\.ts"/);
 });
 
 test("host imports the protocol helpers back from the leaf", () => {

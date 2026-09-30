@@ -497,7 +497,7 @@ test("Qoder remains a safe special case when browser OAuth is disabled", () => {
   assert.ok(authUrl.startsWith("https://"));
 });
 
-test("Codex parses id_token metadata and prefers a team workspace when the JWT only marks the personal plan", async () => {
+test("Codex keeps the token-granted personal workspace despite team membership", async () => {
   const idToken = createJwt({
     email: "dev@example.com",
     "https://api.openai.com/auth": {
@@ -528,8 +528,10 @@ test("Codex parses id_token metadata and prefers a team workspace when the JWT o
 
   assert.equal(extra.authInfo.chatgpt_account_id, "personal-workspace");
   assert.equal(mapped.email, "dev@example.com");
-  assert.equal(mapped.providerSpecificData.workspaceId, "team-workspace");
-  assert.equal(mapped.providerSpecificData.workspacePlanType, "team");
+  assert.equal(mapped.providerSpecificData.workspaceId, "personal-workspace");
+  assert.equal(mapped.providerSpecificData.workspacePlanType, "free");
+  assert.equal(mapped.providerSpecificData.chatgptUserId, "user-123");
+  assert.deepEqual(mapped.providerSpecificData.organizations, extra.authInfo.organizations);
 });
 
 test("Cline decodes embedded callback payloads without using the network", async () => {
