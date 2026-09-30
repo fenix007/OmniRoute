@@ -422,8 +422,8 @@ async function getOpencodeUsage(connectionId: string, apiKey: string) {
  * reports no totals or reset times, so each window is a plain count flagged
  * `fractionReported: false`: the limits card shows the number, and the generic
  * preflight ignores it instead of parking the whole connection when only Deep
- * Research is exhausted (Pro search keeps working). Deep Research exhaustion is
- * enforced per model by the perplexity-web executor.
+ * Research is exhausted (Pro search keeps working). Account selection checks
+ * model counters before routing; the executor also guards Deep Research dispatch.
  */
 async function getPerplexityWebUsage(
   connectionId: string,

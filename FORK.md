@@ -1138,3 +1138,20 @@ core typecheck, static gates and production build also passed on this final base
 The full unit and coverage results above belong to base `7e20ea6273`; the second
 rebase was validated with the affected suites rather than repeating those full runs.
 No workflow, coverage threshold, runtime dependency or deployment was changed.
+
+### Маршрутизация Perplexity по доступной квоте модели
+
+Перед выбором аккаунта `src/sse/services/perplexityQuotaRouting.ts` проверяет
+оставшееся число запросов для запрошенной модели: Deep Research использует
+`remaining_research`, модели каталога с режимом `copilot` — `remaining_pro`.
+Аккаунты с нулём исключаются только для этой модели. При наличии подтверждённой
+квоты аккаунты с неизвестным остатком не выбираются; если подтверждённо доступных
+нет, неизвестный остаток допускается как резерв при сбое получения квот.
+
+Счётчики используют общий с исполнителем кеш на 60 секунд, который сбрасывается
+после запроса модели. Когда у всех разрешённых аккаунтов ноль, маршрутизатор
+возвращает 429 с областью модели и предложением повторить проверку через минуту;
+аккаунты не выключаются, время месячного сброса не выдумывается. Явные ограничения
+API-ключа, принудительный аккаунт и существующие ограничения доступности сохраняются.
+Поведение проверено `tests/unit/perplexity-quota-routing.test.ts` на пяти аккаунтах,
+при обновлении квоты, неизвестном остатке и устаревшей общей отметке исчерпания.

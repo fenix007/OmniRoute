@@ -80,6 +80,7 @@ import * as log from "../utils/logger";
 import { fisherYatesShuffle, getNextFromDeckSync } from "@/shared/utils/shuffleDeck";
 import { selectCodexDeadlineConnection } from "./codexQuotaDeadlineRouting";
 import { readHeaderValue } from "./authRequest";
+import { filterPerplexityConnectionsByQuota } from "./perplexityQuotaRouting";
 
 export { extractApiKey } from "./authRequest";
 
@@ -1457,13 +1458,38 @@ export async function getProviderCredentials(
       };
     }
 
-    // Quota-aware: filter out accounts with exhausted quota for the requested scope.
-    const withQuota = policyEligibleConnections.filter(
-      (c) => !isQuotaExhaustedForRequest(c.id, provider, requestedModel)
-    );
-    const exhaustedQuota = policyEligibleConnections.filter((c) =>
-      isQuotaExhaustedForRequest(c.id, provider, requestedModel)
-    );
+    // Perplexity publishes independent remaining counts, not account-wide quotas.
+    // Use fresh model counters before selecting an account; old aggregate snapshots
+    // must not veto a model that is currently available.
+    const perplexityQuota =
+      resolvedId === "perplexity-web"
+        ? await filterPerplexityConnectionsByQuota(policyEligibleConnections, requestedModel)
+        : null;
+    const withQuota =
+      perplexityQuota?.eligible ??
+      policyEligibleConnections.filter(
+        (c) => !isQuotaExhaustedForRequest(c.id, provider, requestedModel)
+      );
+    const exhaustedQuota =
+      perplexityQuota?.exhausted ??
+      policyEligibleConnections.filter((c) =>
+        isQuotaExhaustedForRequest(c.id, provider, requestedModel)
+      );
+
+    if (perplexityQuota && withQuota.length === 0 && exhaustedQuota.length > 0) {
+      // Perplexity exposes no reset timestamp. Recheck after the counter cache
+      // expires instead of inventing a monthly reset or disabling Pro Search.
+      const retryAfter = new Date(Date.now() + 60_000).toISOString();
+      return {
+        allRateLimited: true,
+        retryAfter,
+        retryAfterHuman: formatRetryAfter(retryAfter),
+        lastError: `All ${provider} accounts have exhausted quota for ${requestedModel}`,
+        lastErrorCode: 429,
+        cooldownScope: "model",
+        cooldownModel: requestedModel,
+      };
+    }
 
     if (exhaustedQuota.length > 0) {
       log.info(

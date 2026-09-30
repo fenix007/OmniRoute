@@ -697,8 +697,8 @@ export class PerplexityWebExecutor extends BaseExecutor {
 
     const state = createStreamState();
     const firstBody = response.body;
-    // A research run consumes the allowance; make the next check re-read it.
-    if (isResearch) invalidatePerplexityRateLimits(connectionId);
+    // A model request consumes its allowance; make the next selection re-read it.
+    invalidatePerplexityRateLimits(connectionId);
 
     // One logical turn. A Deep Research answer that stops at clarifying questions is
     // continued in the same thread (research_interaction=auto), so the caller gets
