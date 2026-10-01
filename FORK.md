@@ -1155,3 +1155,30 @@ No workflow, coverage threshold, runtime dependency or deployment was changed.
 API-ключа, принудительный аккаунт и существующие ограничения доступности сохраняются.
 Поведение проверено `tests/unit/perplexity-quota-routing.test.ts` на пяти аккаунтах,
 при обновлении квоты, неизвестном остатке и устаревшей общей отметке исчерпания.
+
+## Codex deferred tools for `tool_search` (2026-10-01)
+
+Fork-only fix. Codex CLI 0.159.x sends the `tool_search` hosted tool together with
+MCP/dynamic function tools marked `defer_loading: true`. `normalizeCodexTools`
+rebuilt flat function tools from a whitelist (`type`, `name`, `description`,
+`parameters`, `strict`) and dropped `defer_loading`. The Codex backend then
+rejected every such turn with `400 Invalid Value: 'tools.tool_search'.
+tools.tool_search requires at least one deferred tool`.
+
+Production symptom (airouter, 2026-10-01): Codex CLI 0.159.3 against same-named
+combos `gpt-6-astra` / `gpt-6.1-sol` failed on the codex target, and the combo
+fell through to `openai/*`, whose chat downgrade surfaced unrelated terminal
+errors (`tool_choice is only allowed when tools are specified`, `'messages' moved
+to 'input'`, `max_tokens is not supported`). Reproduced live: `codex/gpt-6-astra`
+with `[function, tool_search, function{defer_loading:true}]` → 400, while the same
+flag inside a `namespace` or on a `custom` tool passed.
+
+Change: `open-sse/executors/codex/tools.ts` keeps a boolean `defer_loading` from
+the flat tool or the nested chat-shaped `function` object when flattening.
+Non-deferred tools stay unmarked. Test: `tests/unit/codex-tool-search-deferred.test.ts`
+(red on unchanged `d56a63b`, green with the fix for the leaf normalizer; the
+`transformRequest` cases cover native and translated passthrough).
+
+Not changed here: the `openai` provider fallback for Codex-shaped bodies with
+`tool_search` (chat downgrade drops the hosted tool and leaves `tool_choice`);
+tracked separately.

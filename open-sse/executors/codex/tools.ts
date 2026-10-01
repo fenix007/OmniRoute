@@ -132,6 +132,16 @@ export function normalizeCodexTools(
         : typeof functionObject?.strict === "boolean"
           ? functionObject.strict
           : undefined;
+    // Codex CLI marks MCP/dynamic function tools as deferred (`defer_loading: true`)
+    // whenever it also sends the `tool_search` hosted tool. Upstream rejects
+    // `tool_search` without at least one deferred tool ("tools.tool_search requires
+    // at least one deferred tool"), so the flag must survive the flattening below.
+    const deferLoading =
+      typeof tool.defer_loading === "boolean"
+        ? tool.defer_loading
+        : typeof functionObject?.defer_loading === "boolean"
+          ? functionObject.defer_loading
+          : undefined;
 
     // Rewrite in-place to Responses format
     for (const key of Object.keys(tool)) {
@@ -142,6 +152,7 @@ export function normalizeCodexTools(
     if (description) tool.description = description;
     tool.parameters = parameters;
     if (strict !== undefined) tool.strict = strict;
+    if (deferLoading !== undefined) tool.defer_loading = deferLoading;
 
     validToolNames.add(name);
     return true;
