@@ -88,9 +88,7 @@ export function filterToOpenAIFormat(body, opts = {}) {
           // honors OpenAI-format cache breakpoints and preservation was requested (#2069).
           const { signature, cache_control, ...rest } = block;
           const cleanBlock =
-            preserveCacheControl && cache_control !== undefined
-              ? { ...rest, cache_control }
-              : rest;
+            preserveCacheControl && cache_control !== undefined ? { ...rest, cache_control } : rest;
           if (
             cleanBlock.type === "text" &&
             typeof cleanBlock.text === "string" &&
@@ -169,11 +167,6 @@ export function filterToOpenAIFormat(body, opts = {}) {
     return true;
   });
 
-  // Remove empty tools array (some providers like QWEN reject it)
-  if (body.tools && Array.isArray(body.tools) && body.tools.length === 0) {
-    delete body.tools;
-  }
-
   // Strip Claude-specific fields that OpenAI-compatible providers reject
   delete body.metadata;
   delete body.anthropic_version;
@@ -238,6 +231,15 @@ export function filterToOpenAIFormat(body, opts = {}) {
     } else if (choice.type === "tool" && choice.name) {
       body.tool_choice = { type: "function", function: { name: choice.name } };
     }
+  }
+
+  // Normalize before checking emptiness: Gemini declarations can flatten to no tools.
+  if (Array.isArray(body.tools) && body.tools.length === 0) {
+    delete body.tools;
+  }
+  // Optional choices are redundant without tools; forced choices still need validation.
+  if (!body.tools && (body.tool_choice === "auto" || body.tool_choice === "none")) {
+    delete body.tool_choice;
   }
 
   return body;

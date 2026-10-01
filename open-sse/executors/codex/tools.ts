@@ -32,7 +32,12 @@ export function normalizeCodexTools(
   body: Record<string, unknown>,
   options?: { dropImageGeneration?: boolean; preserveCustomTools?: boolean }
 ): void {
-  if (!Array.isArray(body.tools)) return;
+  if (!Array.isArray(body.tools)) {
+    if (body.tool_choice === "auto" || body.tool_choice === "none") {
+      delete body.tool_choice;
+    }
+    return;
+  }
 
   const validToolNames = new Set<string>();
   body.tools = body.tools.filter((toolValue) => {
@@ -157,6 +162,15 @@ export function normalizeCodexTools(
     validToolNames.add(name);
     return true;
   });
+
+  // Optional choices are redundant without tools and rejected by the Codex backend.
+  // Keep forced choices for upstream validation rather than silently changing their intent.
+  if (
+    (body.tools as unknown[]).length === 0 &&
+    (body.tool_choice === "auto" || body.tool_choice === "none")
+  ) {
+    delete body.tool_choice;
+  }
 
   if (
     body.tool_choice &&

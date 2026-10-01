@@ -1179,6 +1179,10 @@ Non-deferred tools stay unmarked. Test: `tests/unit/codex-tool-search-deferred.t
 (red on unchanged `d56a63b`, green with the fix for the leaf normalizer; the
 `transformRequest` cases cover native and translated passthrough).
 
-Not changed here: the `openai` provider fallback for Codex-shaped bodies with
-`tool_search` (chat downgrade drops the hosted tool and leaves `tool_choice`);
-tracked separately.
+Follow-up: Codex normalization and OpenAI-format cleanup now remove optional
+`tool_choice: "auto"` / `"none"` when tools are absent or become empty. OpenAI
+cleanup checks after tool normalization, including hosted-only Responses-to-Chat
+requests and empty Gemini declarations. Mixed hosted/function requests keep the
+surviving function and its choice; forced choices remain subject to existing
+validation. Regression coverage: `tests/unit/tool-choice-without-tools.test.ts`
+(red before the fix, green afterward; native and translated Codex paths covered).
