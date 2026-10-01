@@ -67,6 +67,16 @@ function sanitizeContentPart(part: unknown, role: string): unknown {
   const record = toRecord(part);
   if (!record) return part;
 
+  // Replayed assistant output can also appear in user/developer messages or
+  // tool results. Those positions accept input content, not output_text.
+  if (role !== "assistant" && record.type === "output_text") {
+    const next: JsonRecord = { ...record, type: "input_text" };
+    delete next.annotations;
+    delete next.logprobs;
+    delete next.obfuscation;
+    return next;
+  }
+
   if (record.type === "image_url") {
     const url = imageUrlToText(record.image_url);
     if (role === "user") {
@@ -75,7 +85,10 @@ function sanitizeContentPart(part: unknown, role: string): unknown {
       if (image?.detail !== undefined) next.detail = image.detail;
       return next;
     }
-    return { type: "output_text", text: url ? `[Image: ${url}]` : "[Image]" };
+    return {
+      type: role === "assistant" ? "output_text" : "input_text",
+      text: url ? `[Image: ${url}]` : "[Image]",
+    };
   }
 
   if (role === "assistant" && record.type === "input_image") {
@@ -101,7 +114,10 @@ function sanitizeOutputContent(record: JsonRecord): JsonRecord {
   // Responses input. In that shape OpenAI validates `input[n].output[m].type`
   // against output content part types, so legacy Chat-style `image_url` parts
   // must be normalized here too, not only in message.content.
-  const role = record.type === "function_call_output" ? "user" : "assistant";
+  const role =
+    record.type === "function_call_output" || record.type === "custom_tool_call_output"
+      ? "user"
+      : "assistant";
   const output = record.output.map((part) => sanitizeContentPart(part, role));
   return { ...record, output };
 }
