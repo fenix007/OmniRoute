@@ -1686,6 +1686,59 @@ paths:
         "200":
           description: Test result
 
+  /api/providers/{id}/diagnose-models:
+    post:
+      tags: [Providers]
+      summary: Diagnose model access for a Codex account
+      description: |
+        Runs minimal synthetic Responses requests using the selected active account.
+        These requests can consume upstream quota. The caller's prompts are never used.
+        Omit models to check up to 32 distinct base models from the Codex catalog.
+        Results are supported, unsupported or unknown; only explicit account/model
+        access errors exclude the account for that model and all effort aliases.
+        Supported evidence lasts 6 hours, explicit unsupported 400 lasts 24 hours,
+        ambiguous model/access 404 lasts 15 minutes, and unknown lasts 60 seconds.
+        Credential identity, workspace and plan changes invalidate cached evidence.
+        Routing checks uncached account/model pairs before sending the user payload.
+        Auth, quota, network failures and busy probes remain unknown and do not ban models.
+      security:
+        - ManagementSessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                models:
+                  type: array
+                  minItems: 1
+                  maxItems: 32
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+                refresh:
+                  type: boolean
+                  default: false
+            example:
+              models: [gpt-5.5, gpt-6.1-sol]
+              refresh: false
+      responses:
+        "200":
+          description: Account model diagnoses with status, reason and cache timestamps when available
+        "400":
+          description: Invalid input or unsupported provider
+        "401":
+          description: Dashboard authentication required
+        "404":
+          description: Account not found
+        "409":
+          description: Account inactive
+
   /api/providers/{id}/models:
     get:
       tags: [Providers]

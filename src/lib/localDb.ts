@@ -7,6 +7,13 @@
  */
 
 export {
+  getAccountModelSupport,
+  saveAccountModelSupport,
+  normalizeAccountModel,
+  publicModelSupport,
+} from "./db/accountModelSupport";
+
+export {
   // Provider Connections
   getProviderConnections,
   getProviderConnectionById,

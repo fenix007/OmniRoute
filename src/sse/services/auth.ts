@@ -1,4 +1,6 @@
 import { randomUUID, createHash } from "crypto";
+import { getAccountModelSupport, saveAccountModelSupport } from "@/lib/db/accountModelSupport";
+import { diagnoseAccountModel } from "./accountModelDiagnostics";
 import {
   getProviderConnections,
   getProviderNodes,
@@ -1220,7 +1222,13 @@ export async function getProviderCredentials(
         return false;
       }
       // The account's plan lacks this exact model (see markAccountUnavailable).
-      if (requestedModel && isAccountModelUnsupported(provider, c.id, requestedModel)) return false;
+      if (
+        requestedModel &&
+        (provider === "codex"
+          ? getAccountModelSupport(provider, c, requestedModel)?.status === "unsupported"
+          : isAccountModelUnsupported(provider, c.id, requestedModel))
+      )
+        return false;
       if (!allowSuppressedConnections) {
         if (!allowRateLimitedConnections && isAccountUnavailable(c.rateLimitedUntil)) {
           if (isTransportCooldownErrorCode(c.errorCode)) transportCooledIds.add(c.id);
@@ -1780,16 +1788,6 @@ export async function getProviderCredentialsWithQuotaPreflight(
   requestedModel: string | null = null,
   options: CredentialSelectionOptions = {}
 ) {
-  if (options.bypassQuotaPolicy === true) {
-    return getProviderCredentials(
-      provider,
-      excludeConnectionId,
-      allowedConnections,
-      requestedModel,
-      options
-    );
-  }
-
   const blockedByPreflight: Array<{
     id: string;
     quotaPercent?: number;
@@ -1850,6 +1848,21 @@ export async function getProviderCredentialsWithQuotaPreflight(
     if (!connectionId) {
       return credentials;
     }
+
+    // Diagnose only the selected account, outside the selection mutex. A known
+    // entitlement gap never receives the caller's payload, even on quota bypass.
+    if (provider === "codex" && requestedModel) {
+      const diagnosis = await diagnoseAccountModel(provider, credentials, requestedModel);
+      if (diagnosis?.status === "unsupported") {
+        excludedConnectionIds.add(connectionId);
+        log.info(
+          "MODEL_DIAGNOSTICS",
+          `${connectionId.slice(0, 8)} does not support ${requestedModel}; selecting another account`
+        );
+        continue;
+      }
+    }
+    if (options.bypassQuotaPolicy === true) return credentials;
 
     // Cascading resolver: per-connection override → per-(provider, window)
     // default → global default. Used per-window when the fetcher exposes
@@ -2046,6 +2059,13 @@ export async function markAccountUnavailable(
     ) {
       const lockMs =
         status === 404 ? ACCOUNT_MODEL_UNAVAILABLE_LOCK_MS : ACCOUNT_MODEL_UNSUPPORTED_LOCK_MS;
+      if (provider === "codex" && conn) {
+        saveAccountModelSupport(provider, conn, model, {
+          status: "unsupported",
+          reason: "account_model_unsupported",
+          httpStatus: status,
+        });
+      }
       lockUnsupportedAccountModel(provider ?? "", connectionId, model, lockMs);
       updateProviderConnection(connectionId, {
         lastErrorType: "account_model_unsupported",

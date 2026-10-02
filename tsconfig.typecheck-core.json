@@ -9,6 +9,9 @@
   },
   "include": [],
   "files": [
+    "src/lib/db/accountModelSupport.ts",
+    "src/sse/services/accountModelDiagnostics.ts",
+    "src/app/api/providers/[id]/diagnose-models/route.ts",
     "src/app/api/settings/proxy/test/route.ts",
     "src/app/(dashboard)/dashboard/batch/batch-utils.ts",
     "src/lib/batches/types.ts",
