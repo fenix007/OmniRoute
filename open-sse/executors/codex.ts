@@ -361,6 +361,7 @@ function clampEffort(model: string, requested: string): string {
 }
 
 const CODEX_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
+const CODEX_REASONING_WIRE_KEYS = new Set(["effort", "summary", "context"]);
 const CODEX_DEFAULT_REASONING_SUMMARY = "auto";
 
 function normalizeEffortValue(value: unknown): string | undefined {
@@ -1352,13 +1353,14 @@ export class CodexExecutor extends BaseExecutor {
       };
     }
     // Codex rejects client-only reasoning keys such as enabled, max_tokens and exclude.
+    // `context` is a wire field: Responses Lite requests require `all_turns`.
     const wireReasoning =
       body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)
         ? (body.reasoning as Record<string, unknown>)
         : null;
     if (wireReasoning) {
       for (const key of Object.keys(wireReasoning)) {
-        if (key !== "effort" && key !== "summary") delete wireReasoning[key];
+        if (!CODEX_REASONING_WIRE_KEYS.has(key)) delete wireReasoning[key];
       }
       if (Object.keys(wireReasoning).length === 0) delete body.reasoning;
     }

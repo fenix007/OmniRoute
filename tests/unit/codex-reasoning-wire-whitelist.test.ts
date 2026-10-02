@@ -57,6 +57,36 @@ for (const native of [false, true]) {
   }
 }
 
+// Codex CLI >= 0.159 sends `X-OpenAI-Internal-Codex-Responses-Lite: true` and the
+// upstream then rejects any request whose reasoning lacks `context: "all_turns"`.
+for (const native of [false, true]) {
+  for (const endpoint of ["/responses", "/responses/compact"]) {
+    test(`wire whitelist keeps Responses Lite reasoning.context: native=${native}, ${endpoint}`, () => {
+      const result = transform(
+        {
+          model: "gpt-6.1-sol",
+          _nativeCodexPassthrough: native,
+          input: [],
+          reasoning: { effort: "medium", context: "all_turns", max_tokens: 2048 },
+        },
+        "gpt-6.1-sol",
+        endpoint
+      );
+      assert.deepEqual(result.reasoning, {
+        effort: "medium",
+        context: "all_turns",
+        summary: "auto",
+      });
+    });
+  }
+}
+
+test("context alone survives when no effort resolves", () => {
+  setThinkingBudgetConfig({ mode: ThinkingMode.AUTO });
+  const result = transform({ reasoning: { context: "all_turns", exclude: true } });
+  assert.deepEqual(result.reasoning, { context: "all_turns", summary: "auto" });
+});
+
 test("explicit disable wins over connection default, without inventing summary", () => {
   setThinkingBudgetConfig({ mode: ThinkingMode.PASSTHROUGH });
   const result = transform({ reasoning: { enabled: false, max_tokens: 2048 } });
@@ -116,7 +146,7 @@ test("HTTP executor sends only wire reasoning fields for both stream intents", a
     bodies.push(body);
     const keys = Object.keys(body.reasoning);
     return new Response(JSON.stringify({ id: "resp_mock" }), {
-      status: keys.some((key) => !["effort", "summary"].includes(key)) ? 400 : 200,
+      status: keys.some((key) => !["effort", "summary", "context"].includes(key)) ? 400 : 200,
       headers: { "content-type": "application/json" },
     });
   };
@@ -126,7 +156,7 @@ test("HTTP executor sends only wire reasoning fields for both stream intents", a
       body: {
         model: "gpt-6-astra",
         input: [],
-        reasoning: { enabled: false, effort: "high", max_tokens: 1 },
+        reasoning: { enabled: false, effort: "high", context: "all_turns", max_tokens: 1 },
       },
       stream,
       credentials: { accessToken: "test-token", providerSpecificData: { codexTransport: "http" } },
@@ -135,7 +165,9 @@ test("HTTP executor sends only wire reasoning fields for both stream intents", a
     await result.response.text();
   }
   assert.equal(bodies.length, 2);
-  for (const body of bodies) assert.deepEqual(body.reasoning, { effort: "high", summary: "auto" });
+  for (const body of bodies) {
+    assert.deepEqual(body.reasoning, { effort: "high", context: "all_turns", summary: "auto" });
+  }
 });
 
 test("WebSocket response.create uses the same whitelist and closes normally", async () => {
