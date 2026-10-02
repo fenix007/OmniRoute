@@ -16,7 +16,12 @@ export function translateUsageOrFallback(
       return fallback;
     }
     const translated = values ? t(key, values) : t(key);
-    if (!translated || translated === key || translated === `usage.${key}`) {
+    if (
+      !translated ||
+      translated.startsWith("__MISSING__:") ||
+      translated === key ||
+      translated === `usage.${key}`
+    ) {
       return fallback;
     }
     return translated;

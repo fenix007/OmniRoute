@@ -33,13 +33,15 @@ test("QuotaCardHeader renders the expiry as a small blue (sky) informative line"
   assert.match(source, /tokenExpired/, "must use the tokenExpired i18n key");
 });
 
-test("token expiry i18n keys exist in en and pt-BR", () => {
-  for (const locale of ["en", "pt-BR"]) {
+test("token expiry i18n keys are translated in en, pt-BR and ru", () => {
+  for (const locale of ["en", "pt-BR", "ru"]) {
     const msgs = JSON.parse(
       fs.readFileSync(path.join(repoRoot, `src/i18n/messages/${locale}.json`), "utf8")
     );
     assert.ok(msgs.usage?.tokenExpiresIn, `${locale}: usage.tokenExpiresIn must exist`);
     assert.ok(msgs.usage?.tokenExpired, `${locale}: usage.tokenExpired must exist`);
+    assert.ok(!msgs.usage.tokenExpiresIn.startsWith("__MISSING__:"));
+    assert.ok(!msgs.usage.tokenExpired.startsWith("__MISSING__:"));
     assert.match(
       msgs.usage.tokenExpiresIn,
       /\{time\}/,
