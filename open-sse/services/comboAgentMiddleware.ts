@@ -180,35 +180,38 @@ export function applyComboAgentMiddleware(
 ): { body: Record<string, unknown>; pinnedModel: string | null } {
   if (!comboConfig) return { body, pinnedModel: null };
 
-  let messages: Message[] = Array.isArray(body.messages) ? [...body.messages] : [];
-  let pinnedModel: string | null = null;
-
   // Context cache pinning is handled server-side in combo.ts via
   // session_model_history. No client-side <omniModel> tag extraction needed.
-  pinnedModel = null;
-
-  // 2. System message override
-  if (comboConfig.system_message && comboConfig.system_message.trim()) {
-    messages = applySystemMessageOverride(messages, comboConfig.system_message);
-  }
-
-  // 3. Tool filter
+  const pinnedModel: string | null = null;
   const filteredTools = applyToolFilter(
     body.tools as unknown[] | undefined,
     comboConfig.tool_filter_regex
   );
+  const toolsPatch = filteredTools !== body.tools ? { tools: filteredTools } : {};
+  const systemMessage = comboConfig.system_message?.trim() ? comboConfig.system_message : null;
 
-  // 4. Strip internal <omniModel> tags before forwarding to provider (#454)
-  //    These tags are OmniRoute-internal markers and must never reach the provider
-  //    since providers would treat each tagged request as a new cache session.
+  // Responses API bodies carry the conversation in `input` and the system prompt in
+  // `instructions`; adding `messages` makes OpenAI Responses upstreams reject the request.
+  const isResponsesBody =
+    !Array.isArray(body.messages) &&
+    (Object.prototype.hasOwnProperty.call(body, "input") ||
+      Object.prototype.hasOwnProperty.call(body, "instructions"));
+  if (isResponsesBody) {
+    return {
+      body: { ...body, ...(systemMessage && { instructions: systemMessage }), ...toolsPatch },
+      pinnedModel,
+    };
+  }
+
+  let messages: Message[] = Array.isArray(body.messages) ? [...body.messages] : [];
+  if (systemMessage) {
+    messages = applySystemMessageOverride(messages, systemMessage);
+  }
+
+  // Strip internal <omniModel> tags before forwarding to provider (#454)
+  // These tags are OmniRoute-internal markers and must never reach the provider
+  // since providers would treat each tagged request as a new cache session.
   messages = stripModelTags(messages);
 
-  return {
-    body: {
-      ...body,
-      messages,
-      ...(filteredTools !== body.tools && { tools: filteredTools }),
-    },
-    pinnedModel,
-  };
+  return { body: { ...body, messages, ...toolsPatch }, pinnedModel };
 }
