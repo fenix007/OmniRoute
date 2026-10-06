@@ -625,6 +625,10 @@ export async function clearConnectionErrorIfUnchanged(
     testStatus: string | null | undefined;
     lastErrorAt: string | null | undefined;
     rateLimitedUntil: string | null | undefined;
+    /** Optional strict snapshot for background inference probes. */
+    isActive?: boolean;
+    updatedAt?: string | null;
+    clearPrimaryKeyHealth?: boolean;
   }
 ): Promise<boolean> {
   const db = getDbInstance() as unknown as DbLike;
@@ -640,19 +644,29 @@ export async function clearConnectionErrorIfUnchanged(
       error_code = NULL,
       rate_limited_until = NULL,
       backoff_level = 0,
+      provider_specific_data = CASE WHEN ? THEN
+        json_remove(COALESCE(NULLIF(provider_specific_data, ''), '{}'), '$.apiKeyHealth.primary')
+        ELSE provider_specific_data END,
       updated_at = ?
     WHERE id = ?
       AND IFNULL(test_status, '') = ?
       AND IFNULL(last_error_at, '') = ?
       AND IFNULL(rate_limited_until, '') = ?
+      AND (? IS NULL OR is_active = ?)
+      AND (? IS NULL OR IFNULL(updated_at, '') = ?)
     `
     )
     .run(
+      Number(expected.clearPrimaryKeyHealth === true),
       new Date().toISOString(),
       id,
       expected.testStatus ?? "",
       expected.lastErrorAt ?? "",
-      expected.rateLimitedUntil ?? ""
+      expected.rateLimitedUntil ?? "",
+      expected.isActive === undefined ? null : Number(expected.isActive),
+      expected.isActive === undefined ? null : Number(expected.isActive),
+      expected.updatedAt ?? null,
+      expected.updatedAt ?? ""
     );
   const applied = (result.changes ?? 0) > 0;
   if (applied) {

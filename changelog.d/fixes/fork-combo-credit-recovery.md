@@ -1,0 +1,1 @@
+- **fix(routing):** Recheck enabled OpenAI-compatible accounts with exhausted credits every 15 minutes using a bounded inference probe; restore routing only after successful output and an unchanged account snapshot. Local heap-pressure shedding no longer penalizes upstream accounts or triggers combo fallback. Bound diagnostic payloads and compression memo retention.

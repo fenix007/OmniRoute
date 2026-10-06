@@ -17,6 +17,10 @@ import {
   getModelTargetFormat,
   PROVIDER_ID_TO_ALIAS,
 } from "@omniroute/open-sse/config/providerModels.ts";
+import {
+  checkHeapPressureGuard,
+  isHeapPressureResponse,
+} from "@omniroute/open-sse/utils/heapPressure.ts";
 import { handleChatCore } from "@omniroute/open-sse/handlers/chatCore.ts";
 import {
   errorResponse,
@@ -402,6 +406,11 @@ export async function executeChatWithBreaker({
   modelPinned = false,
   modelAbortSignal = null,
 }: ExecuteChatWithBreakerOptions): Promise<{ result: any; tlsFingerprintUsed: boolean }> {
+  // Shed before breaker.execute: a local rejection is neither an upstream
+  // failure nor a successful provider probe.
+  const heapGuard = checkHeapPressureGuard(process.memoryUsage().heapUsed / (1024 * 1024));
+  if (heapGuard) return { result: heapGuard, tlsFingerprintUsed: false };
+
   let tlsFingerprintUsed = false;
   const normalizedTrafficType: TrafficType =
     typeof trafficType === "string" && trafficType.trim().toLowerCase() === "shadow"
@@ -530,11 +539,17 @@ export async function executeChatWithBreaker({
     }
 
     if (!proxyInfo?.proxy && isTlsFingerprintActive()) {
-      const tracked = await breaker.execute(async () => runWithTlsTracking(chatFn));
+      const tracked = await breaker.execute(
+        async () => runWithTlsTracking(chatFn),
+        (tracked) => !isHeapPressureResponse(tracked.result.response)
+      );
       return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
     }
 
-    const result = await breaker.execute(chatFn);
+    const result = await breaker.execute(
+      chatFn,
+      (result) => !isHeapPressureResponse(result.response)
+    );
     return { result, tlsFingerprintUsed: false };
   } catch (cbErr: any) {
     if (cbErr instanceof CircuitBreakerOpenError) {

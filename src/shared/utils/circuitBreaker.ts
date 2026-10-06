@@ -239,7 +239,11 @@ export class CircuitBreaker {
     );
   }
 
-  async execute<T>(fn: () => Promise<T>): Promise<T> {
+  // A resolved local rejection is not evidence of provider recovery.
+  async execute<T>(
+    fn: () => Promise<T>,
+    isSuccess: (result: T) => boolean = () => true
+  ): Promise<T> {
     this._refreshOpenState();
 
     if (this.state === STATE.OPEN) {
@@ -258,13 +262,13 @@ export class CircuitBreaker {
       );
     }
 
-    if (this.state === STATE.HALF_OPEN) {
-      this.halfOpenAllowed--;
-    }
+    const admittedHalfOpenProbe = this.state === STATE.HALF_OPEN;
+    if (admittedHalfOpenProbe) this.halfOpenAllowed--;
 
     try {
       const result = await fn();
-      this._onSuccess();
+      if (isSuccess(result)) this._onSuccess();
+      else if (admittedHalfOpenProbe && this.state === STATE.HALF_OPEN) this.halfOpenAllowed++;
       return result;
     } catch (error) {
       if (this.isFailure(error)) {

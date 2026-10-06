@@ -32,6 +32,7 @@ import {
   EMPTY_RESPONSE_ATTEMPT_LIMIT,
   EMPTY_RESPONSE_RETRY_EXHAUSTED,
 } from "@omniroute/open-sse/services/combo/emptyResponseRetryBudget.ts";
+import { isHeapPressureResponse } from "@omniroute/open-sse/utils/heapPressure.ts";
 import { getImageModelEntry } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
 import { applyNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias.ts";
@@ -844,11 +845,11 @@ export async function handleChat(
       correlationId: reqId,
     });
 
-    // ── Global Fallback Provider (#689) ────────────────────────────────────
-    // If combo exhausted all models, try the global fallback before giving up.
+    // Global fallback (#689) can recover upstream exhaustion, not local heap pressure.
     if (
       !response.ok &&
       [502, 503].includes(response.status) &&
+      !isHeapPressureResponse(response) &&
       typeof (settings as any)?.globalFallbackModel === "string" &&
       (settings as any).globalFallbackModel.trim()
     ) {
@@ -1425,6 +1426,10 @@ async function handleSingleModelChat(
         runtimeOptions
       );
       if (telemetry) telemetry.endPhase();
+
+      // Local heap shedding happens before upstream dispatch. Switching accounts
+      // cannot recover it and must not poison account/provider health.
+      if (isHeapPressureResponse(result.response)) return result.response;
 
       const proxyLatency = Date.now() - proxyStartTime;
       const providerAlias = PROVIDER_ID_TO_ALIAS[provider] || provider;

@@ -5,6 +5,7 @@
  * context-optimized, context-relay, and fusion strategies
  */
 
+import { isHeapPressureResponse } from "../utils/heapPressure.ts";
 import { EMPTY_RESPONSE_RETRY_EXHAUSTED } from "./combo/emptyResponseRetryBudget.ts";
 import {
   checkFallbackError,
@@ -2056,12 +2057,12 @@ export async function handleComboChat({
             // so the combo would wrongly fall through to the next model after a 499.
             return { ok: false, response: result };
           }
-          if (isLocalQueueCapacity) {
+          if (isLocalQueueCapacity || isHeapPressureResponse(result)) {
             log.info(
               "COMBO",
-              `Local rate-limit queue capacity reached for ${modelStr} — returning without upstream fallback`
+              `Local router capacity reached for ${modelStr} — returning without upstream fallback`
             );
-            recordComboRequest(combo.name, modelStr, {
+            recordComboRequest(combo.name, isHeapPressureResponse(result) ? null : modelStr, {
               success: false,
               latencyMs: Date.now() - startTime,
               fallbackCount,
@@ -2409,6 +2410,9 @@ export async function handleComboChat({
                 // Fatal error, abort combo
                 anySuccess = true;
                 globalResolve!(res.response);
+                for (const [idx, ac] of abortControllers.entries()) {
+                  if (idx !== i) ac.abort();
+                }
               }
             }
           } finally {
@@ -3096,12 +3100,12 @@ async function handleRoundRobinCombo({
         const isTokenLimitBreach = result.status === 429 && isTokenLimitBreachErrorBody(errorBody);
         const isLocalQueueCapacity = isLocalQueueCapacityErrorBody(errorBody);
 
-        if (isLocalQueueCapacity) {
+        if (isLocalQueueCapacity || isHeapPressureResponse(result)) {
           log.info(
             "COMBO-RR",
-            `Local rate-limit queue capacity reached for ${modelStr} — returning without upstream fallback`
+            `Local router capacity reached for ${modelStr} — returning without upstream fallback`
           );
-          recordComboRequest(combo.name, modelStr, {
+          recordComboRequest(combo.name, isHeapPressureResponse(result) ? null : modelStr, {
             success: false,
             latencyMs: Date.now() - startTime,
             fallbackCount,

@@ -370,6 +370,13 @@ export async function registerNodejs(): Promise<void> {
       console.warn("[STARTUP] Auto-refresh daemon failed to start (non-fatal):", msg);
     }
 
+    try {
+      const { initCreditsRecoveryScheduler } = await import("@/lib/quota/creditsRecovery");
+      initCreditsRecoveryScheduler();
+    } catch {
+      console.warn("[STARTUP] Credits recovery scheduler failed to start (non-fatal)");
+    }
+
     // Proactive connection-cooldown recovery (#8): re-validate connections whose
     // transient `rate_limited_until` window has elapsed OUTSIDE the request hot
     // path, so the first request after a cooldown does not pay the probe latency.

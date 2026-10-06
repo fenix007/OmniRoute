@@ -50,6 +50,8 @@ export type HeapPressureGuardResult = {
   success: false;
   status: 503;
   error: string;
+  errorCode: "heap_pressure";
+  errorType: "local_resource_pressure";
   response: Response;
 };
 
@@ -57,7 +59,8 @@ export type HeapPressureGuardResult = {
  * Memory-pressure shed guard for the chat pipeline (extracted from chatCore's handleChatCore).
  * Returns a ready-to-return 503 result when live heap usage exceeds the shed threshold, else null
  * to proceed. The heap figure is logged for INTERNAL telemetry only and is NEVER placed in the
- * client-facing response (Hard Rule #12). Behaviour is byte-identical to the previous inline guard.
+ * client-facing response (Hard Rule #12). The local error classification prevents callers
+ * from penalizing healthy upstreams.
  */
 export function checkHeapPressureGuard(
   heapUsedMb: number,
@@ -71,11 +74,27 @@ export function checkHeapPressureGuard(
     success: false,
     status: 503,
     error: HEAP_PRESSURE_MESSAGE,
+    errorCode: "heap_pressure",
+    errorType: "local_resource_pressure",
     response: new Response(
       JSON.stringify({
         error: { message: HEAP_PRESSURE_MESSAGE, type: "server_error", code: "heap_pressure" },
       }),
-      { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "5" } }
+      {
+        status: 503,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": "5",
+          "X-OmniRoute-Local-Error": "heap_pressure",
+        },
+      }
     ),
   };
+}
+
+/** Router-local load shedding must never be attributed to an upstream provider. */
+export function isHeapPressureResponse(response: Response): boolean {
+  return (
+    response.status === 503 && response.headers.get("X-OmniRoute-Local-Error") === "heap_pressure"
+  );
 }
