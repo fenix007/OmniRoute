@@ -566,6 +566,15 @@ For any non-trivial change, read the matching deep-dive first:
 
 ## Fork / Upstream Workflow
 
+The user requires and authorizes a Mattermost (mm) message for every maintained fork
+update. Use the configured ai-router production `MATTERMOST_NEWS_WEBHOOK_URL`; report
+the commit/image version, main changes, and actual publication/deployment status.
+Keep deployment start/success/failure notifications enabled and send the change
+summary after verification. Never claim production success before readiness passes
+and ingress is restored. For updates without deployment, explicitly say production
+was not updated. This notification policy is fork-only and does not belong in
+upstream contribution PRs.
+
 This repository is a fork of `diegosouzapw/OmniRoute`. Keep fork-only operational
 changes (for example GHCR image publishing, personal deployment workflows, or local
 automation) out of upstream contribution PRs.
