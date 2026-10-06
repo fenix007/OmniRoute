@@ -2237,6 +2237,39 @@ export async function handleComboChat({
           // skip the same-model retry when `nextTarget` (computed above)
           // actually gives us somewhere to fail over to — with no sibling
           // left, skipping just burns the last attempt for nothing.
+          // Final failure for this target. Lockout paths leave the retry loop early, but
+          // their failure must still reach the combo diagnostics and final error.
+          const recordTargetFailure = () => {
+            recordComboRequest(combo.name, modelStr, {
+              success: false,
+              latencyMs: Date.now() - startTime,
+              fallbackCount,
+              strategy,
+              target: toRecordedTarget(target),
+            });
+            // LKGP (#919) mirror of the success-path set below: a just-failed target
+            // must not keep re-pinning itself as the "last known good" choice for the
+            // *next* separate request. Circuit breaker / model lockout deliberately
+            // don't react to request-scoped failure classes (see scopedFailure below),
+            // so nothing else clears this stale pin.
+            void (async () => {
+              try {
+                const { clearLKGP } = await import("../../src/lib/localDb");
+                await Promise.all([
+                  clearLKGP(combo.name, target.executionKey),
+                  clearLKGP(combo.name, combo.id || combo.name),
+                ]);
+              } catch (err) {
+                log.warn("COMBO", "Failed to clear Last Known Good Provider. This is non-fatal.", {
+                  err,
+                });
+              }
+            })();
+            recordedAttempts++;
+            lastError = errorText || String(result.status);
+            if (!lastStatus) lastStatus = result.status;
+            if (i > 0) fallbackCount++;
+          };
           if (
             retry < maxRetries &&
             isTransient &&
@@ -2250,7 +2283,7 @@ export async function handleComboChat({
               isModelLocked(provider, targetWithConnection.connectionId || "", rawModel)
             ) {
               log.info("COMBO", `Skipping retry for ${modelStr} — model lockout active`);
-              if (i > 0) fallbackCount++;
+              recordTargetFailure();
               return null;
             }
             // Record model lockout immediately on the first transient failure —
@@ -2280,42 +2313,14 @@ export async function handleComboChat({
             }
             if (lockoutRecorded) {
               log.info("COMBO", `Skipping retry for ${modelStr} — model lockout active`);
-              if (i > 0) fallbackCount++;
+              recordTargetFailure();
               return null;
             }
             continue; // Retry same model (transient error, no lockout recorded)
           }
 
           // Done retrying this model
-          recordComboRequest(combo.name, modelStr, {
-            success: false,
-            latencyMs: Date.now() - startTime,
-            fallbackCount,
-            strategy,
-            target: toRecordedTarget(target),
-          });
-          // LKGP (#919) mirror of the success-path set below: a just-failed target
-          // must not keep re-pinning itself as the "last known good" choice for the
-          // *next* separate request. Circuit breaker / model lockout deliberately
-          // don't react to request-scoped failure classes (see scopedFailure below),
-          // so nothing else clears this stale pin.
-          void (async () => {
-            try {
-              const { clearLKGP } = await import("../../src/lib/localDb");
-              await Promise.all([
-                clearLKGP(combo.name, target.executionKey),
-                clearLKGP(combo.name, combo.id || combo.name),
-              ]);
-            } catch (err) {
-              log.warn("COMBO", "Failed to clear Last Known Good Provider. This is non-fatal.", {
-                err,
-              });
-            }
-          })();
-          recordedAttempts++;
-          lastError = errorText || String(result.status);
-          if (!lastStatus) lastStatus = result.status;
-          if (i > 0) fallbackCount++;
+          recordTargetFailure();
           // Wire combo failures into the resilience dashboard (model-level lockout)
           // alongside the provider-level cooldown below — they govern different scopes.
           if (provider && rawModel) {
