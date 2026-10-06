@@ -1,4 +1,5 @@
 import { getDbInstance } from "../db/core";
+import { truncatePendingPreview } from "./usageHistory/helpers";
 import type { PendingRequestDetail } from "./usageHistory";
 
 const COMPLETED_DETAIL_TTL_MS = 120_000;
@@ -71,20 +72,21 @@ export function maybeEnrichCompletedDetail(updated: PendingRequestDetail, connec
         const art = readCallArtifact(row.artifact_relpath);
         if (art.state !== "ready" || !art.artifact) continue;
         const pipeline = art.artifact.pipeline as
-          | { providerResponse?: unknown; clientResponse?: unknown }
-          | undefined;
+          { providerResponse?: unknown; clientResponse?: unknown } | undefined;
         if (missingProvider && pipeline?.providerResponse) {
-          updated.providerResponse = pipeline.providerResponse;
+          updated.providerResponse = truncatePendingPreview(pipeline.providerResponse);
         }
         if (missingClient && pipeline?.clientResponse) {
-          updated.clientResponse = pipeline.clientResponse;
+          updated.clientResponse = truncatePendingPreview(pipeline.clientResponse);
         }
         if (
           (missingProvider && art.artifact.responseBody) ||
           (missingClient && art.artifact.responseBody)
         ) {
-          if (missingProvider) updated.providerResponse = art.artifact.responseBody;
-          if (missingClient) updated.clientResponse = art.artifact.responseBody;
+          if (missingProvider)
+            updated.providerResponse = truncatePendingPreview(art.artifact.responseBody);
+          if (missingClient)
+            updated.clientResponse = truncatePendingPreview(art.artifact.responseBody);
         }
         if (updated.providerResponse || updated.clientResponse) {
           if (completedDetails.has(updated.id)) storeCompletedDetail(updated);

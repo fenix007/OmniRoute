@@ -49,3 +49,31 @@ test("cloneBoundedForLog: small tools array (<=MAX) passes through unchanged", (
   const result = cloneBoundedForLog({ tools }) as { tools: unknown[] };
   assert.equal(result.tools.length, 10);
 });
+
+test("cloneBoundedForLog: large tool inventories share a total string budget", async () => {
+  const { MAX_LOG_PAYLOAD_CHARS } = await import("../../open-sse/utils/requestLogger.ts");
+  const tools = Array.from({ length: 1000 }, (_, i) => ({
+    name: `tool_${i}`,
+    description: "x".repeat(64 * 1024),
+  }));
+  const result = cloneBoundedForLog({ tools });
+  const serialized = JSON.stringify(result);
+  assert.ok(serialized.length < MAX_LOG_PAYLOAD_CHARS + 4096, "one shared payload budget");
+  assert.ok(serialized.includes("_omniroute_truncated_payload"));
+  assert.equal(tools.length, 1000, "must not modify the upstream request");
+  assert.equal(tools[999].description.length, 64 * 1024);
+});
+
+test("cloneBoundedForLog: bounds node count even with tiny tool fields", async () => {
+  const { MAX_LOG_PAYLOAD_NODES } = await import("../../open-sse/utils/requestLogger.ts");
+  const result = cloneBoundedForLog({
+    tools: Array.from({ length: 100_000 }, () => ({ name: "x" })),
+  }) as { tools: unknown[] };
+  assert.ok(result.tools.length < MAX_LOG_PAYLOAD_NODES);
+  assert.ok(JSON.stringify(result.tools.at(-1)).includes("_omniroute_truncated_payload"));
+});
+
+test("cloneBoundedForLog: oversized object keys cannot bypass string budget", () => {
+  const result = cloneBoundedForLog({ ["x".repeat(1024 * 1024)]: "value" });
+  assert.deepEqual(result, { _omniroute_truncated_payload: true });
+});

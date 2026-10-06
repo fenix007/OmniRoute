@@ -313,7 +313,7 @@ function runCompression(
       config: { ...options.config, memoizeCompressionResults: false },
     });
     memoStore(key, result);
-    return memoLookup(key)!;
+    return memoLookup(key) ?? (JSON.parse(JSON.stringify(result)) as CompressionResult);
   }
   if (mode === "rtk") {
     return applyRtkCompression(body, {
@@ -496,7 +496,7 @@ async function runCompressionAsync(
       config: { ...options.config, memoizeCompressionResults: false },
     });
     memoStore(key, result);
-    return memoLookup(key)!;
+    return memoLookup(key) ?? (JSON.parse(JSON.stringify(result)) as CompressionResult);
   }
   // Single-mode omniglyph (async-only) — resolution lives in engines/omniglyphSingleMode.ts.
   if (mode === "omniglyph") return applyOmniglyphSingleMode(body, options);

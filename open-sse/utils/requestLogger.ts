@@ -109,52 +109,78 @@ function truncateLogString(value: string, maxLength = MAX_LOG_STRING_LENGTH): st
   return `${value.slice(0, Math.floor(maxLength / 2))}\n[...truncated ${value.length - maxLength} chars...]\n${value.slice(-Math.ceil(maxLength / 2))}`;
 }
 
+/** Total per-payload bounds also cover exempt tool arrays and wide nested schemas. */
+export const MAX_LOG_PAYLOAD_CHARS = 256 * 1024;
+export const MAX_LOG_PAYLOAD_NODES = 4096;
+
 /**
- * Recursively clone `value` for logging, with size bounds applied:
- * - Arrays longer than MAX_LOG_ARRAY_ITEMS are truncated to the tail with a
- *   sentinel marker prepended.
- * - The `tools` field is exempt from array truncation: the full tool inventory
- *   is debug-critical for understanding which tools the model had access to,
- *   and individual tool descriptions are independently bounded by
- *   truncateLogString, so the total size remains naturally capped.
- *
- * The optional `key` parameter carries the parent object's field name when
- * recursing into an object's values, enabling the per-field exemption above.
- * Top-level arrays (no key context) remain subject to truncation.
+ * Clone for logging. Keep complete small tool inventories, and the tail of other
+ * arrays, while sharing one string/node budget across the entire payload.
  */
 export function cloneBoundedForLog(value: unknown, depth = 0, key: string | null = null): unknown {
-  if (value === null || value === undefined) return value;
-  if (typeof value === "string") return truncateLogString(value);
-  if (typeof value !== "object") return value;
-  if (depth >= 6) return "[MaxDepth]";
-
-  if (Array.isArray(value)) {
-    const exempt = key === "tools";
-    const shouldTruncate = !exempt && value.length > MAX_LOG_ARRAY_ITEMS;
-    const source = shouldTruncate ? value.slice(-MAX_LOG_ARRAY_ITEMS) : value;
-    const mapped = source.map((item) => cloneBoundedForLog(item, depth + 1));
-    if (shouldTruncate) {
-      return [
-        {
-          _omniroute_truncated_array: true,
-          originalLength: value.length,
-          retainedTailItems: MAX_LOG_ARRAY_ITEMS,
-        },
-        ...mapped,
-      ];
+  let remainingChars = MAX_LOG_PAYLOAD_CHARS;
+  let remainingNodes = MAX_LOG_PAYLOAD_NODES;
+  const exhausted = () => remainingChars <= 0 || remainingNodes <= 0;
+  const clone = (input: unknown, currentDepth: number, field: string | null): unknown => {
+    if (exhausted()) return "[LogPayloadLimit]";
+    remainingNodes--;
+    if (input === null || input === undefined) return input;
+    if (typeof input === "string") {
+      const result = truncateLogString(input, Math.min(MAX_LOG_STRING_LENGTH, remainingChars));
+      remainingChars -= result.length;
+      return result;
     }
-    return mapped;
-  }
+    if (typeof input !== "object") return input;
+    if (currentDepth >= 6) return "[MaxDepth]";
 
-  const result: JsonRecord = {};
-  const entries = Object.entries(value as JsonRecord);
-  for (const [k, item] of entries.slice(0, MAX_LOG_OBJECT_KEYS)) {
-    result[k] = cloneBoundedForLog(item, depth + 1, k);
-  }
-  if (entries.length > MAX_LOG_OBJECT_KEYS) {
-    result._omniroute_truncated_keys = entries.length - MAX_LOG_OBJECT_KEYS;
-  }
-  return result;
+    if (Array.isArray(input)) {
+      const shouldTruncate = field !== "tools" && input.length > MAX_LOG_ARRAY_ITEMS;
+      const source = shouldTruncate ? input.slice(-MAX_LOG_ARRAY_ITEMS) : input;
+      const mapped: unknown[] = [];
+      for (const item of source) {
+        if (exhausted()) {
+          mapped.push({ _omniroute_truncated_payload: true, originalLength: input.length });
+          break;
+        }
+        mapped.push(clone(item, currentDepth + 1, null));
+      }
+      if (shouldTruncate) {
+        mapped.unshift({
+          _omniroute_truncated_array: true,
+          originalLength: input.length,
+          retainedTailItems: MAX_LOG_ARRAY_ITEMS,
+        });
+      }
+      return mapped;
+    }
+
+    const result: JsonRecord = {};
+    let processedKeys = 0;
+    let totalKeys = 0;
+    // Avoid materializing all values from arbitrarily wide objects.
+    for (const k in input as JsonRecord) {
+      if (!Object.hasOwn(input, k)) continue;
+      totalKeys++;
+      if (processedKeys >= MAX_LOG_OBJECT_KEYS) continue;
+      if (exhausted()) {
+        result._omniroute_truncated_payload = true;
+        break;
+      }
+      // Object keys consume memory too, and may themselves be oversized.
+      if (k.length > remainingChars) {
+        result._omniroute_truncated_payload = true;
+        break;
+      }
+      remainingChars -= k.length;
+      result[k] = clone((input as JsonRecord)[k], currentDepth + 1, k);
+      processedKeys++;
+    }
+    if (totalKeys > MAX_LOG_OBJECT_KEYS) {
+      result._omniroute_truncated_keys = totalKeys - MAX_LOG_OBJECT_KEYS;
+    }
+    return result;
+  };
+  return clone(value, depth, key);
 }
 
 function appendBoundedChunk(

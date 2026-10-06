@@ -341,3 +341,67 @@ describe("resultMemo — core review hardening", () => {
     assert.equal(k("gpt-4", true), k("gpt-4", true), "same inputs => same key (deterministic)");
   });
 });
+
+describe("resultMemo retained memory bounds", () => {
+  beforeEach(() => clearMemoStore());
+
+  it("evicts by aggregate UTF-16 bytes before reaching the entry cap", async () => {
+    const { MEMO_MAX_BYTES } = await import("../../../open-sse/services/compression/resultMemo.ts");
+    const result = { body: { content: "я".repeat(128 * 1024) }, compressed: false, stats: null };
+    const size = JSON.stringify(result).length * 2;
+    const count = Math.floor(MEMO_MAX_BYTES / size) + 1;
+    for (let i = 0; i < count; i++) memoStore(`large-${i}`, result);
+    assert.equal(memoLookup("large-0"), null);
+    assert.deepEqual(memoLookup(`large-${count - 1}`), result);
+  });
+
+  it("replacement accounts for the old entry's bytes", async () => {
+    const { MEMO_MAX_BYTES } = await import("../../../open-sse/services/compression/resultMemo.ts");
+    const result = {
+      body: { content: "x".repeat(MEMO_MAX_BYTES / 8) },
+      compressed: false,
+      stats: null,
+    };
+    memoStore("keep", { body: {}, compressed: false, stats: null });
+    for (let i = 0; i < 10; i++) memoStore("replace", result);
+    assert.notEqual(memoLookup("keep"), null);
+    assert.deepEqual(memoLookup("replace"), result);
+  });
+
+  it("expired results miss and expiration frees space without evicting fresh entries", async (t) => {
+    const { MEMO_TTL_MS, MEMO_MAX_BYTES } =
+      await import("../../../open-sse/services/compression/resultMemo.ts");
+    let now = 1000;
+    t.mock.method(Date, "now", () => now);
+    const result = {
+      body: { content: "x".repeat(MEMO_MAX_BYTES / 8) },
+      compressed: false,
+      stats: null,
+    };
+    memoStore("expired", result);
+    now += MEMO_TTL_MS;
+    assert.equal(memoLookup("expired"), null);
+    memoStore("fresh", result);
+    memoStore("fresh2", result);
+    assert.notEqual(memoLookup("fresh"), null);
+  });
+
+  it("oversized memo results still return correctly from sync and async compression", async () => {
+    const { MEMO_MAX_BYTES } = await import("../../../open-sse/services/compression/resultMemo.ts");
+    const { applyCompression, applyCompressionAsync } =
+      await import("../../../open-sse/services/compression/strategySelector.ts");
+    const body = { messages: [{ role: "system", content: "x".repeat(MEMO_MAX_BYTES) }] };
+    const options = { config: memoConfig, principalId: "large-payload" };
+    for (const result of [
+      applyCompression(body, "lite", options),
+      await applyCompressionAsync(body, "lite", options),
+    ]) {
+      assert.equal(
+        (result.body.messages as typeof body.messages)[0].content.length,
+        MEMO_MAX_BYTES
+      );
+      assert.notEqual(result.body, body);
+    }
+    assert.equal(memoLookup(makeMemoKey(body, "lite", memoConfig, "large-payload")), null);
+  });
+});

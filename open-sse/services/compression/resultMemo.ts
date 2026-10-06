@@ -3,7 +3,29 @@ import type { CompressionConfig, CompressionMode, CompressionResult } from "./ty
 
 export const MEMO_CAP = 5_000;
 
-const memoMap = new Map<string, CompressionResult>();
+export const MEMO_MAX_BYTES = 16 * 1024 * 1024;
+export const MEMO_TTL_MS = 5 * 60 * 1000;
+
+interface MemoEntry {
+  serialized: string;
+  bytes: number;
+  expiresAt: number;
+}
+const memoMap = new Map<string, MemoEntry>();
+let memoBytes = 0;
+
+function deleteMemoEntry(key: string): void {
+  const entry = memoMap.get(key);
+  if (!entry) return;
+  memoBytes -= entry.bytes;
+  memoMap.delete(key);
+}
+
+function purgeExpired(now: number): void {
+  for (const [key, entry] of memoMap) {
+    if (now >= entry.expiresAt) deleteMemoEntry(key);
+  }
+}
 
 // Opt-IN whitelist (NOT opt-out): cache only engines proven pure + STATELESS across
 // requests. Excluded on purpose: `ccr` and `session-dedup` write to the cross-request
@@ -57,31 +79,37 @@ export function makeMemoKey(
   );
 }
 
-function boundedSet(key: string, value: CompressionResult): void {
-  if (!memoMap.has(key) && memoMap.size >= MEMO_CAP) {
-    const firstKey = memoMap.keys().next().value;
-    if (firstKey !== undefined) {
-      memoMap.delete(firstKey);
-    }
-  }
-  memoMap.set(key, value);
-}
-
 export function memoLookup(key: string): CompressionResult | null {
   const hit = memoMap.get(key);
   if (!hit) return null;
-  // Return a clone so downstream mutation cannot corrupt the cached value.
-  return JSON.parse(JSON.stringify(hit)) as CompressionResult;
+  if (Date.now() >= hit.expiresAt) {
+    deleteMemoEntry(key);
+    return null;
+  }
+  // JSON storage avoids retaining the complete object graph and isolates each read.
+  return JSON.parse(hit.serialized) as CompressionResult;
 }
 
 export function memoStore(key: string, result: CompressionResult): void {
-  // Clone on STORE too (memoLookup already clones on read). Storing the caller's live
-  // object would let a later mutation of it (e.g. an async engine holding a sub-ref)
-  // corrupt the cached entry. Both ends isolated ⇒ the cache is immutable once stored.
-  boundedSet(key, JSON.parse(JSON.stringify(result)) as CompressionResult);
+  const serialized = JSON.stringify(result);
+  // Conservative UTF-16 accounting covers non-ASCII content and oversized keys.
+  const bytes = (serialized.length + key.length) * 2;
+  const now = Date.now();
+  purgeExpired(now);
+  deleteMemoEntry(key);
+  // Memoization is optional: large results still reach the client via the caller.
+  if (bytes > MEMO_MAX_BYTES) return;
+  while (memoMap.size >= MEMO_CAP || memoBytes + bytes > MEMO_MAX_BYTES) {
+    const firstKey = memoMap.keys().next().value;
+    if (firstKey === undefined) break;
+    deleteMemoEntry(firstKey);
+  }
+  memoMap.set(key, { serialized, bytes, expiresAt: now + MEMO_TTL_MS });
+  memoBytes += bytes;
 }
 
 /** For tests only — clears the in-process memo store. */
 export function clearMemoStore(): void {
   memoMap.clear();
+  memoBytes = 0;
 }
