@@ -10,13 +10,10 @@
  *   - banked reset credits, each lost at its own expiry (again capped by the
  *     end of the subscription).
  *
- * The urgency of an account is the highest burn rate any prefix of its buckets
- * demands, i.e. `max over deadlines d of (quota lost by d) / (days until d)`.
- * Taking the maximum over cumulative prefixes keeps the score monotone in the
- * data: learning about an *earlier* deadline can only raise urgency, never
- * lower it. The previous revision collapsed all deadlines into a single
- * `Math.min`, which let a distant subscription date hide an imminent weekly
- * reset and *reduce* the account's weight.
+ * Each bucket contributes its own required burn rate, in percentage points
+ * per day. The account's urgency is their sum, so even one reset credit with
+ * a later expiry adds pressure instead of being hidden by a nearer weekly
+ * reset. Subscription expiry caps each bucket's deadline independently.
  */
 
 import { getQuotaCache } from "@/domain/quotaCache";
@@ -144,26 +141,12 @@ function cachedWindows(connectionId: string) {
   };
 }
 
-/**
- * Highest sustained burn rate the buckets demand, in percentage points per day.
- *
- * Buckets are walked from the nearest deadline outwards; each step asks what
- * rate would be needed to clear everything lost by that point.
- */
+/** Sum the deadline pressure of every bucket so no spendable credit is hidden. */
 function requiredBurnRate(buckets: readonly QuotaBucket[], nowMs: number): number {
-  const ordered = [...buckets]
-    .filter((bucket) => bucket.amount > 0)
-    .sort((left, right) => daysUntil(left.deadlineMs, nowMs) - daysUntil(right.deadlineMs, nowMs));
-
-  let cumulative = 0;
-  let rate = 0;
-
-  for (const bucket of ordered) {
-    cumulative += bucket.amount;
-    rate = Math.max(rate, cumulative / daysUntil(bucket.deadlineMs, nowMs));
-  }
-
-  return rate;
+  return buckets.reduce(
+    (rate, bucket) => rate + Math.max(0, bucket.amount) / daysUntil(bucket.deadlineMs, nowMs),
+    0
+  );
 }
 
 export function scoreCodexDeadlineConnection(

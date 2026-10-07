@@ -240,6 +240,33 @@ test("a single reset credit increases urgency and wins with equal idle time", ()
   );
 });
 
+test("a single credit expiring after the weekly reset still increases urgency", () => {
+  const now = Date.parse("2026-10-07T12:00:00Z");
+  for (const id of ["late-single-credit", "late-no-credit"]) {
+    quotaCache.setQuotaCache(id, "codex", {
+      session: { remainingPercentage: 95, resetAt: "2026-10-07T17:00:00Z" },
+      weekly: { remainingPercentage: 89, resetAt: "2026-10-14T12:00:00Z" },
+    });
+  }
+  credits.__setCachedCodexResetCreditsForTests("late-single-credit", {
+    availableCount: 1,
+    credits: [{ expiresAt: "2026-10-29T18:00:00Z" }],
+  });
+
+  const single = connection("late-single-credit", "2026-10-29T12:00:00Z");
+  const plain = connection("late-no-credit", "2026-10-29T12:00:00Z");
+  single.priority = 10;
+  const score = routing.scoreCodexDeadlineConnection(single, now);
+
+  assert.equal(score.deadlineAt, "2026-10-14T12:00:00.000Z");
+  assert.ok(score.weight > routing.scoreCodexDeadlineConnection(plain, now).weight);
+  assert.equal(score.weight, 1 + (84 / 7 + 95 / 22) / 20);
+  assert.equal(
+    routing.selectCodexDeadlineConnection([plain, single], now)?.connection.id,
+    "late-single-credit"
+  );
+});
+
 test("a single reset credit is capped by an earlier subscription deadline", () => {
   const now = Date.parse("2026-09-16T12:00:00Z");
   quotaCache.setQuotaCache("single-expiring-subscription", "codex", {
