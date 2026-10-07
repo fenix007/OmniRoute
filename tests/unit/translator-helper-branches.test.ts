@@ -213,13 +213,13 @@ test("openaiHelper filters content, normalizes tools and removes OpenAI-incompat
   assert.equal("anthropic_version" in result, false);
 });
 
-test("openaiHelper keeps unmatched tool choices and deletes empty tools arrays", () => {
+test("openaiHelper removes optional tool choice with empty tools and retains required choice", () => {
   const autoChoice = openaiHelper.filterToOpenAIFormat({
     messages: [{ role: "assistant", content: "" }],
     tools: [],
     tool_choice: { type: "auto" },
   });
-  assert.equal(autoChoice.tool_choice, "auto");
+  assert.equal("tool_choice" in autoChoice, false);
   assert.equal("tools" in autoChoice, false);
 
   const requiredChoice = openaiHelper.filterToOpenAIFormat({

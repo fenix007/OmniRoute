@@ -1,10 +1,4 @@
-/**
- * localDb.js — Re-export layer for backward compatibility.
- *
- * All 27+ consumer files import from "@/lib/localDb".
- * This thin layer re-exports everything from the domain-specific DB modules,
- * so zero consumer changes are needed.
- */
+/** Backward-compatible exports; persistence belongs in the domain DB modules. */
 
 export {
   getAccountModelSupport,
@@ -766,9 +760,7 @@ export type {
   PresetCostModelRow,
 } from "./db/usageAnalytics";
 
-// ---------------------------------------------------------------------------
 // usage_logs — auto-routing analytics (#3500 slice 4)
-// ---------------------------------------------------------------------------
 export {
   getAutoRoutingTotalCount,
   getAutoRoutingVariantBreakdown,

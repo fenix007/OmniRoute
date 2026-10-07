@@ -75,11 +75,18 @@ for (const mode of ["recover", "both-timeout", "allowlist", "cooldown", "disable
         ? await h.seedApiKey({ allowedConnections: [first.id, fallback.id] })
         : null;
     const attempts: string[] = [];
+    let probes = 0;
     globalThis.fetch = async (url, init: RequestInit = {}) => {
       const address = String(url);
       if (address.includes("/usage"))
         return new Response("{}", { headers: { "Content-Type": "application/json" } });
       if (address.includes("chatgpt.com/backend-api/codex/responses")) {
+        const body = JSON.parse(String(init.body));
+        // Account-model diagnostic probes share the provider URL but not the user request.
+        if (body.instructions === "Reply with OK only.") {
+          probes++;
+          return codexResponse();
+        }
         const token = new Headers(init.headers).get("authorization");
         const account = token === "Bearer test-first" ? "first" : "second";
         attempts.push(account);
@@ -106,6 +113,7 @@ for (const mode of ["recover", "both-timeout", "allowlist", "cooldown", "disable
     );
     assert.equal(result.status, 200, await result.clone().text());
     const payload = await result.json();
+    assert.ok(probes >= 1, "account support probe must remain enabled");
     assert.deepEqual(
       attempts,
       mode === "recover"

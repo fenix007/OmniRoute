@@ -102,6 +102,7 @@ const ENV_VAR_ALLOWLIST = new Set([
   // docker-compose/electron-build pipeline, or are injected into a spawned
   // subprocess — never read via `process.env.X` in OmniRoute's own source, so the
   // code-read index can't see them. Documented (correctly) in the relevant guides.
+  "MATTERMOST_NEWS_WEBHOOK_URL", // ai-router production notification env, required by fork AGENTS.md; not an OmniRoute runtime variable
   "COPILOT_PROVIDER_BASE_URL", // GitHub Copilot CLI ≥v1.0.19's own env var (AGENTBRIDGE.md)
   "OPENAI_BASE_URL", // env var OmniRoute passes to downstream CLIs (AGENT_PROTOCOLS_GUIDE.md)
   "NINEROUTER_API_KEY", // injected into the 9router subprocess at spawn (EMBEDDED-SERVICES.md)
