@@ -147,6 +147,7 @@ type TranslateState = ReturnType<typeof initState> & {
   signatureNamespace?: string | null;
   usage?: unknown;
   finishReason?: unknown;
+  responsesTerminalSeen?: boolean;
   copilotCompatibleReasoning?: boolean;
   /** Suppress the `</think>` close marker for clients that render it verbatim (#5245). */
   suppressThinkClose?: boolean;
@@ -916,6 +917,7 @@ export function createSSEStream(options: StreamOptions = {}) {
     controller.error(markPendingRequestCleared(new Error(msg)));
   };
 
+  let failureTerminalEmitted = false;
   const emitTranslatedClientItem = (
     controller: TransformStreamDefaultController,
     item: Record<string, unknown>
@@ -959,6 +961,7 @@ export function createSSEStream(options: StreamOptions = {}) {
     }
 
     const output = formatSSE(itemSanitized, sourceFormat);
+    if (itemSanitized.event === "response.failed") failureTerminalEmitted = true;
     clientPayloadCollector.push(itemSanitized);
     reqLogger?.appendConvertedChunk?.(output);
     controller.enqueue(encoder.encode(output));
@@ -1911,6 +1914,7 @@ export function createSSEStream(options: StreamOptions = {}) {
           providerPayloadCollector.push(parsed);
 
           if (parsed && parsed.done) {
+            if (targetFormat === FORMATS.OPENAI) state.responsesTerminalSeen = true;
             continue;
           }
 
@@ -2421,6 +2425,7 @@ export function createSSEStream(options: StreamOptions = {}) {
           // Translate mode: process remaining buffer
           if (buffer.trim()) {
             const parsed = parseSSELine(buffer.trim());
+            if (parsed?.done && targetFormat === FORMATS.OPENAI) state.responsesTerminalSeen = true;
             if (parsed && !parsed.done) {
               providerPayloadCollector.push(parsed);
               // Extract usage from remaining buffer — if the usage-bearing event
@@ -2466,25 +2471,29 @@ export function createSSEStream(options: StreamOptions = {}) {
             }
           }
 
+          // Flush remaining events (only once at stream end)
+          let flushed;
+          try {
+            flushed = translateResponse(targetFormat, sourceFormat, null, state);
+          } catch (error) {
+            // Keep known upstream failures on the accounting/cleanup path even if finalization fails.
+            if (!state?.upstreamError) throw error;
+          }
+
+          // Log OpenAI intermediate chunks for flushed events
+          for (const item of getOpenAIIntermediateChunks(flushed)) {
+            const openaiOutput = formatSSE(item, FORMATS.OPENAI);
+            reqLogger?.appendOpenAIChunk?.(openaiOutput);
+          }
+
+          if (flushed?.length > 0) {
+            for (const item of flushed) {
+              emitTranslatedClientItem(controller, item);
+            }
+          }
+
           if (state?.upstreamError) {
             const err = state.upstreamError;
-
-            // Flush pending translation events BEFORE erroring the stream.
-            // This lets the openai-responses translator emit a proper
-            // `response.completed` with `status: "failed"` and close any
-            // open items (reasoning, tool calls, etc.), instead of silently
-            // aborting the stream and leaving partial items dangling.
-            try {
-              const flushed = translateResponse(targetFormat, sourceFormat, null, state);
-              if (flushed?.length > 0) {
-                for (const item of flushed) {
-                  emitTranslatedClientItem(controller, item);
-                }
-              }
-            } catch {
-              // Swallow flush errors — the controller.error below is the
-              // terminal signal for the client.
-            }
 
             let failureHandled = false;
             if (onFailure) {
@@ -2504,6 +2513,7 @@ export function createSSEStream(options: StreamOptions = {}) {
               try {
                 onComplete({
                   status: err.status,
+                  interrupted: true,
                   usage: state?.usage,
                   responseBody: errorBody,
                   error: err.message,
@@ -2528,25 +2538,11 @@ export function createSSEStream(options: StreamOptions = {}) {
             if (!failureHandled) {
               clearPendingRequestFromStream();
             }
-            controller.error(
-              markPendingRequestCleared(new Error(err.message || "Upstream failure"))
-            );
-            return;
-          }
-
-          // Flush remaining events (only once at stream end)
-          const flushed = translateResponse(targetFormat, sourceFormat, null, state);
-
-          // Log OpenAI intermediate chunks for flushed events
-          for (const item of getOpenAIIntermediateChunks(flushed)) {
-            const openaiOutput = formatSSE(item, FORMATS.OPENAI);
-            reqLogger?.appendOpenAIChunk?.(openaiOutput);
-          }
-
-          if (flushed?.length > 0) {
-            for (const item of flushed) {
-              emitTranslatedClientItem(controller, item);
+            // Erroring a TransformStream discards queued deltas and the failure terminal.
+            if (!failureTerminalEmitted) {
+              controller.error(markPendingRequestCleared(new Error(errorBody.error.message)));
             }
+            return;
           }
 
           if (sourceFormat === FORMATS.CLAUDE) {

@@ -14,6 +14,7 @@ import {
   normalizeUpstreamFailure,
   extractResponsesReasoningSummaryText,
 } from "./openai-responses/pureHelpers.ts";
+import { sendCompleted } from "./openai-responses/terminal.ts";
 import { createEventEmitter } from "./openai-responses/eventEmitter.ts";
 
 // normalizeUpstreamFailure is re-exported for external importers (tests).
@@ -216,6 +217,7 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
 
   // Handle finish_reason
   if (choice.finish_reason) {
+    state.responsesTerminalSeen = true;
     for (const i in state.msgItemAdded) closeMessage(state, emit, i);
     closeReasoning(state, emit);
     for (const i in state.funcCallIds) closeToolCall(state, emit, i);
@@ -240,20 +242,6 @@ function recordCompletedItem(state, outputIndex, item) {
   const normalized = normalizeOutputIndex(outputIndex);
   state.completedOutputItems.push({ output_index: normalized, item, seq: state.seq });
   return normalized;
-}
-
-// Build a dense, deterministic output array sorted by output_index then by seq
-function buildDenseOutput(state) {
-  const items = Array.isArray(state.completedOutputItems) ? state.completedOutputItems : [];
-  return items
-    .slice()
-    .sort((left, right) => {
-      if (left.output_index !== right.output_index) {
-        return left.output_index - right.output_index;
-      }
-      return left.seq - right.seq;
-    })
-    .map(({ item }) => item);
 }
 
 // Helper functions
@@ -551,53 +539,16 @@ function closeToolCall(state, emit, idx, recordAsCompleted = true) {
   }
 }
 
-function sendCompleted(state, emit) {
-  if (!state.completedSent) {
-    state.completedSent = true;
-
-    // Build a dense, deterministic output array from items recorded as they were emitted
-    // (each close*() call records its item via recordCompletedItem — including the
-    // #1007 custom_tool_call shape for apply_patch). Sorted by output_index then by
-    // emission sequence for stable ordering.
-    const output = buildDenseOutput(state);
-
-    // Surface upstream mid-stream errors (e.g. Gemini 503) in the
-    // Responses-API `response.completed` event instead of silently emitting
-    // `status: "completed"`. The error is set by the Gemini-to-OpenAI
-    // translator or the OpenAI-Responses translator itself when the upstream
-    // SSE stream emits a JSON error object after partial content.
-    const upstreamErr = state.upstreamError;
-
-    const response: Record<string, unknown> = {
-      id: state.responseId,
-      object: "response",
-      created_at: state.created,
-      status: upstreamErr ? "failed" : "completed",
-      background: false,
-      error: upstreamErr
-        ? { code: String(upstreamErr.status ?? ""), message: upstreamErr.message ?? "" }
-        : null,
-      output,
-    };
-
-    // #3697: same model echo as response.created/in_progress above.
-    if (state.model) {
-      response.model = state.model;
-    }
-
-    if (state.usage) {
-      response.usage = state.usage;
-    }
-
-    emit("response.completed", {
-      type: "response.completed",
-      response,
-    });
-  }
-}
-
 function flushEvents(state) {
   if (state.completedSent) return [];
+  if (!state.responsesTerminalSeen && !state.upstreamError) {
+    state.upstreamError = {
+      status: 502,
+      type: "server_error",
+      code: "stream_early_eof",
+      message: "Upstream stream ended without a terminal marker",
+    };
+  }
 
   const { events, emit } = createEventEmitter(state);
 

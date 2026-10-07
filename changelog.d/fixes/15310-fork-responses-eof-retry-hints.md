@@ -1,0 +1,3 @@
+- **fix(stream):** Report truncated translated Responses streams as failed while retaining partial output and queued terminal events ([#15310](https://github.com/diegosouzapw/OmniRoute/pull/15310) — thanks @fidelix).
+- **fix(retry):** Reject malformed Retry-After values and interpret HTTP dates in GMT; adapt the parsing contract from [CLIProxyAPI #6383](https://github.com/router-for-me/CLIProxyAPI/pull/6383) — thanks @jroth1111.
+- **fix(combo):** Generate internal context-relay summaries in Chat format when the original Codex client uses Responses, preserving handoff delivery on account switches.

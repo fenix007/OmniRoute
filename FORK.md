@@ -1186,3 +1186,78 @@ requests and empty Gemini declarations. Mixed hosted/function requests keep the
 surviving function and its choice; forced choices remain subject to existing
 validation. Regression coverage: `tests/unit/tool-choice-without-tools.test.ts`
 (red before the fix, green afterward; native and translated Codex paths covered).
+
+## Production maintenance — 2026-10-07 (Responses EOF, retry hints, context relay)
+
+Based on `origin/stable` `7f6b411be0e74c876f134f22d1e1de2b19d4f906`.
+This is a targeted continuation of the partial September 11–October 7 source review;
+it does not advance either source's completed-review boundary.
+
+- **Adapt:** [diegosouzapw/OmniRoute #15310](https://github.com/diegosouzapw/OmniRoute/pull/15310),
+  head `e803669fc6b1eb576367e8ad060d011274013856`, merged as
+  `841d1809dfc6e04f30b789c1c98e85f6efa7186b` (merged status checked October 7),
+  thanks @fidelix. Chat-to-Responses EOF without a finish signal previously
+  fabricated success. Emit a sanitized `response.failed` with partial output and
+  failed completion accounting; preserve queued deltas for slow readers. Unlike
+  upstream's newer terminal/boundary architecture, this adaptation uses the old
+  translator and stream callbacks. It accepts OpenAI `[DONE]` and explicit finish
+  reasons, uses a Responses-specific terminal flag, and preserves the frozen
+  `length`/`content_filter` success contract. Claude's existing `message_delta`
+  stop-reason contract is preserved. No Chat/Claude terminal redesign is included.
+  The small terminal builder extraction keeps the frozen file-size ceiling intact.
+- **Adapt behavior only:** [router-for-me/CLIProxyAPI #6383](https://github.com/router-for-me/CLIProxyAPI/pull/6383),
+  head `376b4780b3e671b5ee8f9dd908cb49123a830c1f` (open, unmerged on October 7),
+  thanks @jroth1111. OmniRoute already preserved upstream error headers, but its
+  `parseInt` accepted malformed Retry-After prefixes. Accept nonnegative integer
+  seconds and HTTP dates, reject malformed/overflow values, and interpret all three
+  HTTP-date forms in GMT. Retain the 24-hour cap, provider-specific Antigravity
+  override, and existing downstream default cooldown for zero/elapsed hints. No Go
+  code, new dependency, runtime, scheduler or error-interface migration is copied.
+- **Local repairs found by the full gates:** the original stable reproduces a
+  Responses-native Codex context-relay failure: the internal Chat summary inherited
+  the outer `/responses` endpoint. Give only the internal handoff request its own
+  Chat endpoint/body metadata for both context and universal handoffs; preserve the
+  user request, authentication and account selection. The guard requires Chat
+  messages with no Responses input, so a client-supplied marker cannot reclassify
+  a Responses-shaped request. Correct fixtures to exclude quota probes and to expect the optional
+  tool-choice removal already introduced by fork commit `5bdb7520b6`.
+  Remove stale comments from `localDb.ts` to restore its frozen size ceiling;
+  parsed code/export equivalence was checked and no ceiling was raised. Repair two
+  pre-existing non-bullet changelog fragments. The documentation checker now
+  recognizes the fork-mandated ai-router Mattermost webhook as an external-tool
+  environment variable, alongside its existing explicit external-variable list.
+
+Regression coverage exercises partial text/reasoning/tool EOF, explicit finishes,
+trailing usage, `[DONE]` with/without newline, shared hub-state isolation, Gemini and
+Antigravity stop/error/usage-only endings, Claude finish/EOF, slow-reader failure
+terminals emitted before or during flush, known-error flush exceptions, pending
+cleanup with an unrelated concurrent request, and cancellation/abort propagation.
+Retry tests cover invalid numbers, overflow, all HTTP-date forms under a non-UTC
+host timezone, body fallback, zero, cap and concurrent isolation. Context-relay
+pipeline tests verify summary generation, unchanged Responses input/instructions,
+real account failover and one-shot handoff consumption. All runtime tests use an
+isolated data directory, without live provider credentials.
+
+Independent consultation used Claude Opus 5.5 through the local advisor workflow.
+Its confirmed EOF terminal/queue and asctime timezone findings are covered above;
+shared-state, cooldown and completion-consumer concerns were checked against this
+frozen implementation. Partial failure usage is passed to existing failure logging;
+this change does not add success billing or token estimation for failed streams.
+Publication follows the existing `[skip ci]` policy without workflow edits, release,
+image publication or deployment.
+
+Validation: the full unit run passes 23,734 tests (14 skipped); the coverage run
+passes its 60% gates with 81.15% lines/statements, 78.52% branches and 86.68%
+functions. Full lint, core typecheck, production Turbopack build, file-size,
+test-discovery, any-budget, docs-sync, fabricated-docs, tracked-artifact,
+changelog-integrity and build-scope checks pass. The build used an isolated copy
+of installed dependencies with its inherited cyclic nested dependency link removed;
+the original checkout's dependencies were not modified.
+
+Before publication, `origin/stable` advanced by two disjoint Codex reset-credit
+routing commits to `ca373532b0aabd4b4951ea25dfcbaaca9b6c50b6`. All four maintenance
+commits were rebased without conflicts. The 132 affected routing, quota, handoff,
+streaming and retry tests, full lint, core typecheck and static gates pass again
+on that base; the earlier full-suite/coverage/build results are recorded separately
+in the local maintenance ledger. Neither source patch changed at final head-SHA
+revalidation.
