@@ -745,7 +745,6 @@ export async function handleChat(
       return true;
     };
 
-    // Fetch settings and all combos for config cascade and nested resolution
     const [settings, allCombos] = await Promise.all([
       getCachedSettings().catch(() => ({})),
       getCombosCachedForChat(),
@@ -772,8 +771,7 @@ export async function handleChat(
         : undefined;
     telemetry.endPhase();
 
-    // Context-relay keeps generation in combo.ts, but handoff injection lives here
-    // because only this layer knows which connectionId was actually selected.
+    // Inject handoffs after auth selects the connection.
     const response = await (handleComboChat as any)({
       body,
       combo,
@@ -988,8 +986,15 @@ async function handleSingleModelChat(
   isCombo: boolean = false
 ) {
   const emptyResponseBudget = runtimeOptions.emptyResponseBudget ?? new EmptyResponseRetryBudget();
+  // Handoff summaries are Chat-shaped; never override a Responses-shaped client body.
+  if (
+    ["context-handoff", "universal-handoff"].includes(body?._omnirouteInternalRequest) &&
+    Array.isArray(body.messages) &&
+    body.input === undefined
+  ) {
+    clientRawRequest = { ...clientRawRequest, endpoint: "/v1/chat/completions", body };
+  }
 
-  // 1. Resolve model → provider/model
   const resolved = await resolveModelOrError(
     modelStr,
     body,
@@ -1120,7 +1125,6 @@ async function handleSingleModelChat(
       ? "fixed combo step connection"
       : undefined;
 
-  // 2. Pipeline gates (availability + provider circuit breaker)
   const providerProfile = await getRuntimeProviderProfile(provider);
   const gate = await checkPipelineGates(provider, model, {
     ignoreCircuitBreaker: forceLiveComboTest || hasForcedConnection,
@@ -1202,7 +1206,6 @@ async function handleSingleModelChat(
     );
   }
 
-  // 3. Credential retry loop
   let requestRetryAttempt = 0;
   let requestRetryLastError = null;
   let requestRetryLastStatus = null;
@@ -1393,7 +1396,6 @@ async function handleSingleModelChat(
       const appliedProxySink: { proxy: unknown } = { proxy: null };
       const proxyStartTime = Date.now();
 
-      // 4. Execute chat via core after breaker gate checks (with optional TLS tracking)
       if (telemetry) telemetry.startPhase("connect");
       const { result, tlsFingerprintUsed } = await dispatchChatWithAffinityEviction(
         {
@@ -1427,8 +1429,6 @@ async function handleSingleModelChat(
       );
       if (telemetry) telemetry.endPhase();
 
-      // Local heap shedding happens before upstream dispatch. Switching accounts
-      // cannot recover it and must not poison account/provider health.
       if (isHeapPressureResponse(result.response)) return result.response;
 
       const proxyLatency = Date.now() - proxyStartTime;

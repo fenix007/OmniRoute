@@ -128,12 +128,14 @@ test("handleChat generates and injects context-relay handoffs across Codex accou
     }
 
     const body = init.body ? JSON.parse(String(init.body)) : {};
+    if (body.instructions === "Reply with OK only.") return buildResponsesResponse("OK");
     const serializedBody = JSON.stringify(body);
     const isSummaryRequest =
       body._omnirouteInternalRequest === "context-handoff" ||
       serializedBody.includes("You are a context summarizer");
 
     if (isSummaryRequest) {
+      assertSummaryWireBody(body);
       summaryBodies.push({ body, serializedBody });
       return buildResponsesResponse(
         JSON.stringify({
@@ -146,7 +148,11 @@ test("handleChat generates and injects context-relay handoffs across Codex accou
       );
     }
 
-    upstreamBodies.push({ body, serializedBody });
+    upstreamBodies.push({
+      body,
+      serializedBody,
+      authHeader: headers.authorization || headers.Authorization,
+    });
     return buildResponsesResponse("relay-success", "gpt-5.6-sol");
   };
 
@@ -171,6 +177,7 @@ test("handleChat generates and injects context-relay handoffs across Codex accou
   assert.equal(savedHandoff.fromAccount, primary.id);
   assert.equal(summaryBodies.length, 1);
   assert.match(summaryBodies[0].serializedBody, /You are a context summarizer/);
+  assertSummaryWireBody(summaryBodies[0].body);
 
   await providersDb.updateProviderConnection((primary as any).id, {
     rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
@@ -191,8 +198,10 @@ test("handleChat generates and injects context-relay handoffs across Codex accou
   assert.equal(secondResponse.status, 200);
   assert.equal(secondJson.choices[0].message.content, "relay-success");
   assert.equal(upstreamBodies.length >= 2, true);
-  assert.match(upstreamBodies[1].serializedBody, /<context_handoff>/);
-  assert.match(upstreamBodies[1].serializedBody, /Carry over the router implementation state/);
+  const delivered = upstreamBodies.find((call) => call.authHeader === "Bearer token-b");
+  assert.ok(delivered, "secondary account must receive the continuation, excluding quota probes");
+  assert.match(delivered.serializedBody, /<context_handoff>/);
+  assert.match(delivered.serializedBody, /Carry over the router implementation state/);
   assert.equal(handoffDb.getHandoff(sessionId, "relay-combo"), null);
   await new Promise((resolve) => setTimeout(resolve, 50));
 });
@@ -242,12 +251,14 @@ test("handleChat injects context-relay handoffs during live failover for Respons
     }
 
     const body = init.body ? JSON.parse(String(init.body)) : {};
+    if (body.instructions === "Reply with OK only.") return buildResponsesResponse("OK");
     const serializedBody = JSON.stringify(body);
     const isSummaryRequest =
       body._omnirouteInternalRequest === "context-handoff" ||
       serializedBody.includes("You are a context summarizer");
 
     if (isSummaryRequest) {
+      assertSummaryWireBody(body);
       return buildResponsesResponse(
         JSON.stringify({
           summary: "Carry over the Responses-native Codex session",
@@ -356,4 +367,110 @@ test("handleChat injects context-relay handoffs during live failover for Respons
   // Delivered handoffs are one-shot: consumed (deleted) after a successful
   // injected request (src/sse/handlers/chat.ts deleteHandoff-on-success).
   assert.equal(handoffDb.getHandoff(sessionId, "relay-live-combo"), null);
+});
+
+function assertSummaryWireBody(body) {
+  assert.ok(Array.isArray(body.input), "Codex summary must reach upstream as Responses input");
+  assert.equal("messages" in body, false);
+  assert.equal("temperature" in body, false);
+  assert.equal("max_tokens" in body, false);
+  assert.ok(!Object.keys(body).some((key) => key.startsWith("_omniroute")));
+}
+
+test("universal handoff summaries inherited from Responses reach Codex in wire format", async () => {
+  const { maybeGenerateUniversalHandoff } =
+    await import("../../open-sse/services/contextHandoff.ts");
+  await seedCodexOAuthConnection({
+    name: "universal",
+    email: "u@example.com",
+    accessToken: "token-u",
+    refreshToken: "refresh-u",
+    workspaceId: "ws-u",
+    priority: 1,
+  });
+  let summaries = 0;
+  globalThis.fetch = async (_url, init = {}) => {
+    const body = JSON.parse(String(init.body || "{}"));
+    if (body.instructions === "Reply with OK only.") return buildResponsesResponse("OK");
+    assertSummaryWireBody(body);
+    assert.match(JSON.stringify(body.input), /You are a context summarizer/);
+    summaries++;
+    return buildResponsesResponse(
+      JSON.stringify({
+        summary: "Carry universal session",
+        keyDecisions: [],
+        taskProgress: "Continue",
+        activeEntities: [],
+      })
+    );
+  };
+  maybeGenerateUniversalHandoff({
+    sessionId: "universal-session",
+    comboName: "universal-combo",
+    messages: [{ role: "user", content: "Continue implementation" }],
+    prevModel: "openai/gpt-4o",
+    currModel: "codex/gpt-5.6-sol",
+    universalConfig: {
+      enabled: true,
+      ttlMinutes: 5,
+      maxMessagesForSummary: 12,
+      handoffModel: "",
+      providerAllowlist: [],
+    },
+    handleSingleModel: async (body) => {
+      const raw = {
+        endpoint: "/v1/responses",
+        headers: {},
+        body: { input: "Original user input" },
+      };
+      const result = await handleChat(
+        buildRequest({ url: "http://localhost/v1/responses", body }),
+        raw
+      );
+      assert.equal(raw.endpoint, "/v1/responses");
+      assert.deepEqual(raw.body, { input: "Original user input" });
+      return result;
+    },
+  });
+  const handoff = await waitFor(
+    () => handoffDb.getHandoff("universal-session", "universal-combo"),
+    3000
+  );
+  assert.equal(handoff?.summary, "Carry universal session");
+  assert.equal(summaries, 1);
+});
+
+test("client handoff marker cannot reclassify a Responses-shaped body", async () => {
+  await seedCodexOAuthConnection({
+    name: "client",
+    email: "c@example.com",
+    accessToken: "token-c",
+    refreshToken: "refresh-c",
+    workspaceId: "ws-c",
+    priority: 1,
+  });
+  let upstream;
+  globalThis.fetch = async (_url, init = {}) => {
+    const body = JSON.parse(String(init.body || "{}"));
+    if (body.instructions === "Reply with OK only.") return buildResponsesResponse("OK");
+    upstream = body;
+    return buildResponsesResponse("Client response");
+  };
+  const result = await handleChat(
+    buildRequest({
+      url: "http://localhost/v1/responses",
+      body: {
+        model: "codex/gpt-5.6-sol",
+        stream: false,
+        input: "Keep this input",
+        instructions: "Keep these instructions",
+        _omnirouteInternalRequest: "context-handoff",
+      },
+    })
+  );
+  assert.equal(result.status, 200);
+  assert.equal((await result.json()).object, "response");
+  assert.match(JSON.stringify(upstream.input), /Keep this input/);
+  assert.equal(upstream.instructions, "Keep these instructions");
+  assert.equal("messages" in upstream, false);
 });
