@@ -204,13 +204,81 @@ test("credits are burned against their own expiry, not the weekly reset", () => 
   assert.equal(plain.requiredWeeklyBurn, 15);
   assert.equal(plain.deadlineAt, "2026-09-23T12:00:00.000Z");
 
-  // Two spendable credits (the first is held in reserve) worth 95 points each,
+  // All three credits are spendable and worth 95 points each,
   // due at the earliest credit expiry two days out — far more urgent than the
   // 15 points of weekly headroom due in a week.
   const banked = routing.scoreCodexDeadlineConnection(connection("banked", null), now);
-  assert.equal(banked.requiredWeeklyBurn, 15 + 190);
+  assert.equal(banked.requiredWeeklyBurn, 15 + 285);
   assert.equal(banked.deadlineAt, "2026-09-18T12:00:00.000Z");
   assert.ok(banked.weight > plain.weight);
+});
+
+test("a single reset credit increases urgency and wins with equal idle time", () => {
+  const now = Date.parse("2026-09-16T12:00:00Z");
+  for (const id of ["single-credit", "no-credit"]) {
+    quotaCache.setQuotaCache(id, "codex", {
+      session: { remainingPercentage: 60, resetAt: "2026-09-16T17:00:00Z" },
+      weekly: { remainingPercentage: 80, resetAt: "2026-09-23T12:00:00Z" },
+    });
+  }
+  credits.__setCachedCodexResetCreditsForTests("single-credit", {
+    availableCount: 1,
+    credits: [{ expiresAt: "2026-09-18T12:00:00Z" }],
+  });
+
+  const single = connection("single-credit", null, "2026-09-16T11:59:00Z");
+  const plain = connection("no-credit", null, "2026-09-16T11:59:00Z");
+  single.priority = 10;
+  const score = routing.scoreCodexDeadlineConnection(single, now);
+
+  assert.equal(score.requiredWeeklyBurn, 75 + 95);
+  assert.equal(score.deadlineAt, "2026-09-18T12:00:00.000Z");
+  assert.ok(score.weight > routing.scoreCodexDeadlineConnection(plain, now).weight);
+  assert.equal(
+    routing.selectCodexDeadlineConnection([plain, single], now)?.connection.id,
+    "single-credit"
+  );
+});
+
+test("a single reset credit is capped by an earlier subscription deadline", () => {
+  const now = Date.parse("2026-09-16T12:00:00Z");
+  quotaCache.setQuotaCache("single-expiring-subscription", "codex", {
+    session: { remainingPercentage: 60, resetAt: "2026-09-16T17:00:00Z" },
+    weekly: { remainingPercentage: 80, resetAt: "2026-09-23T12:00:00Z" },
+  });
+  credits.__setCachedCodexResetCreditsForTests("single-expiring-subscription", {
+    availableCount: 1,
+    credits: [{ expiresAt: "2026-09-20T12:00:00Z" }],
+  });
+
+  const score = routing.scoreCodexDeadlineConnection(
+    connection("single-expiring-subscription", "2026-09-17T12:00:00Z"),
+    now
+  );
+
+  assert.equal(score.requiredWeeklyBurn, 75 + 95);
+  assert.equal(score.deadlineAt, "2026-09-17T12:00:00.000Z");
+  assert.equal(score.weight, 6);
+});
+
+test("a single reset credit with unknown expiry uses the default horizon", () => {
+  const now = Date.parse("2026-09-16T12:00:00Z");
+  quotaCache.setQuotaCache("single-unknown-expiry", "codex", {
+    session: { remainingPercentage: 60, resetAt: "2026-09-16T17:00:00Z" },
+    weekly: { remainingPercentage: 80, resetAt: "2026-09-23T12:00:00Z" },
+  });
+  credits.__setCachedCodexResetCreditsForTests("single-unknown-expiry", {
+    availableCount: 1,
+    credits: [{ expiresAt: null }],
+  });
+
+  const score = routing.scoreCodexDeadlineConnection(
+    connection("single-unknown-expiry", null),
+    now
+  );
+
+  assert.equal(score.requiredWeeklyBurn, 75 + 95);
+  assert.equal(score.weight, 1 + 170 / 7 / 20);
 });
 
 test("numeric garbage never produces a NaN weight or burn", () => {

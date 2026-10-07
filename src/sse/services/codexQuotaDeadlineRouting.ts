@@ -196,7 +196,7 @@ export function scoreCodexDeadlineConnection(
       deadlineMs: earliest(weeklyResetMs, subscriptionDeadlineMs),
     },
     {
-      amount: CREDIT_PERCENT * Math.max(resetCredits - 1, 0),
+      amount: CREDIT_PERCENT * resetCredits,
       deadlineMs: earliest(creditExpiryMs, subscriptionDeadlineMs),
     },
   ];
