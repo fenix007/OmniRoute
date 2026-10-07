@@ -1,3 +1,4 @@
+import { parseRetryAfterHeader } from "./retryAfter.ts";
 import { CORS_HEADERS } from "./cors.ts";
 import { unwrapClinepassEnvelope } from "./clinepassEnvelope.ts";
 import { getDefaultErrorMessage, getErrorInfo } from "../config/errorConfig.ts";
@@ -333,18 +334,7 @@ export async function parseUpstreamError(response: Response, provider: string | 
 
   const messageStr = typeof message === "string" ? message : JSON.stringify(message);
 
-  const retryAfterHeader = response.headers?.get?.("retry-after");
-  if (retryAfterHeader && !retryAfterMs) {
-    const retryAfterSec = Number.parseInt(retryAfterHeader, 10);
-    if (Number.isFinite(retryAfterSec) && retryAfterSec > 0) {
-      retryAfterMs = retryAfterSec * 1000;
-    } else {
-      const retryAfterDate = new Date(retryAfterHeader).getTime();
-      if (Number.isFinite(retryAfterDate) && retryAfterDate > Date.now()) {
-        retryAfterMs = retryAfterDate - Date.now();
-      }
-    }
-  }
+  retryAfterMs = parseRetryAfterHeader(response.headers?.get?.("retry-after"));
 
   // Parse Antigravity-specific retry time from error message
   if (provider === "antigravity" && response.status === 429) {
@@ -352,12 +342,12 @@ export async function parseUpstreamError(response: Response, provider: string | 
   }
 
   // Also parse retry time for other providers (Qwen, etc.) with "quota will reset after XhYmZs" format
-  if (response.status === 429 && !retryAfterMs) {
+  if (response.status === 429 && retryAfterMs === null) {
     retryAfterMs = parseAntigravityRetryTime(messageStr);
   }
 
   // Generic providers: "Please retry after 20s"
-  if (response.status === 429 && !retryAfterMs) {
+  if (response.status === 429 && retryAfterMs === null) {
     const retryMatch = messageStr.match(/retry\s+after\s+(\d+)\s*s/i);
     if (retryMatch) {
       retryAfterMs = Number.parseInt(retryMatch[1], 10) * 1000;
