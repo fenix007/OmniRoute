@@ -30,12 +30,23 @@ const INTERNAL_ROUTE = "/api/internal/codex-responses-ws";
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const WS_QUERY_TOKEN_KEYS = ["api_key", "token", "access_token"];
 const CODEX_NATIVE_HEADER_NAMES = [
+  "x-codex-session-id",
+  "x-session-id",
+  "x_session_id",
+  "x-omniroute-session-id",
+  "x-omniroute-session",
+  "session_id",
   "x-codex-turn-state",
   "x-codex-turn-metadata",
   "x-client-request-id",
   "x-codex-window-id",
   "thread-id",
   "session-id",
+  "conversation",
+  "conversation-id",
+  "conversation_id",
+  "thread",
+  "thread_id",
   "x-openai-internal-codex-responses-lite",
   "x-responsesapi-include-timing-metrics",
 ];
@@ -357,11 +368,13 @@ function sanitizeResponseCreateMessage(message) {
   sanitizeCodexInputItemIds(responseBody);
   delete responseBody.max_tokens;
   delete responseBody.max_output_tokens;
+  delete responseBody.sessionRouting;
   return withPreparedResponseCreate(message, responseBody);
 }
 
 function withPreparedResponseCreate(message, preparedBody) {
   const next = { ...message };
+  delete next.sessionRouting;
   if (
     message.response &&
     typeof message.response === "object" &&
@@ -636,6 +649,9 @@ class ResponsesWsSession {
         requestedModel: toStringOrNull(responseBody.model),
         serviceTier:
           toStringOrNull(responseBody.service_tier) || toStringOrNull(responseBody.serviceTier),
+        sessionRouting: isRecord(prepared.json?.sessionRouting)
+          ? prepared.json.sessionRouting
+          : null,
       };
 
       const wsOptions = {

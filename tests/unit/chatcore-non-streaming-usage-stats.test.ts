@@ -14,9 +14,8 @@ process.env.DATA_DIR = testDataDir;
 
 const coreDb = await import("../../src/lib/db/core.ts");
 const { getUsageHistory } = await import("../../src/lib/usage/usageHistory.ts");
-const { recordNonStreamingUsageStats } = await import(
-  "../../open-sse/handlers/chatCore/nonStreamingUsageStats.ts"
-);
+const { recordNonStreamingUsageStats } =
+  await import("../../open-sse/handlers/chatCore/nonStreamingUsageStats.ts");
 
 function baseCtx(overrides: Record<string, unknown> = {}) {
   return {
@@ -107,6 +106,28 @@ test("falls back to 'unknown' provider/model when absent", async () => {
   const rows = await waitForRows("unknown", 1);
   const mine = rows.find((r) => (r as { model?: string }).model === "unknown");
   assert.ok(mine, "expected a row with provider/model 'unknown'");
+});
+
+test("persists request-scoped routing diagnostics", async () => {
+  const sessionHash = "b".repeat(64);
+  recordNonStreamingUsageStats(
+    { prompt_tokens: 4, completion_tokens: 2 },
+    baseCtx({
+      provider: "routing-nonstream",
+      sessionRouting: {
+        sessionHash,
+        sessionSource: "conversation",
+        routingReason: "affinity_reassigned",
+        previousConnectionId: "conn-old",
+      },
+    })
+  );
+
+  const [row] = await waitForRows("routing-nonstream", 1);
+  assert.equal(row.sessionHash, sessionHash);
+  assert.equal(row.sessionSource, "conversation");
+  assert.equal(row.routingReason, "affinity_reassigned");
+  assert.equal(row.previousConnectionId, "conn-old");
 });
 
 test("trace log emits a [USAGE] line with the upper-cased provider when traceEnabled", () => {

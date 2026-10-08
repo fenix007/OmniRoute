@@ -21,8 +21,8 @@
  */
 
 import { isRecord } from "./comboData.ts";
+import { deriveComboConversationFingerprint } from "./sessionFingerprint.ts";
 import type { AutoProviderCandidate, ComboLike, ResolvedComboTarget } from "./types.ts";
-import { extractSessionAffinityKey } from "@/sse/services/auth";
 import { DEFAULT_INTENT_CONFIG, type IntentClassifierConfig } from "../intentClassifier.ts";
 import { getTaskFitness } from "../autoCombo/taskFitness.ts";
 import {
@@ -459,16 +459,15 @@ export async function expandAutoComboCandidatePool(
  * Most OpenAI-compatible clients send no session id, so the server-side pin added by
  * #3399 (gated on `relayOptions?.sessionId`) never engaged → combos rotated every turn,
  * causing upstream prompt-cache misses, cold high-reasoning starts and intermittent
- * 504s. We reuse `extractSessionAffinityKey(body)` (the same conversation fingerprint
- * used for codex failover affinity), which hashes the first user/system message — stable
- * across turns of the same conversation and identical on turn 2 of a continued chat.
+ * 504s. The combo-local fingerprint preserves the original body-only behavior without
+ * coupling context-cache pinning to authenticated account-affinity scope.
  *
  * Returns null when no stable fingerprint is available (e.g. empty body), in which case
  * the caller falls back to NO pinning — preserving prior behavior rather than guessing.
  */
 export function deriveComboSessionKey(body: Record<string, unknown>): string | null {
   try {
-    return extractSessionAffinityKey(body) ?? null;
+    return deriveComboConversationFingerprint(body);
   } catch {
     return null;
   }

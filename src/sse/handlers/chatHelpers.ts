@@ -49,6 +49,7 @@ import { resolveUseUpstream429BreakerHints } from "../../shared/utils/providerHi
 import { logProxyEvent } from "../../lib/proxyLogger";
 import { logTranslationEvent } from "../../lib/translatorEvents";
 import { getRuntimeProviderProfile } from "@omniroute/open-sse/services/accountFallback.ts";
+import type { SessionRouting } from "@/lib/usage/sessionRouting";
 
 // Models that explicitly cannot run on the codex/ChatGPT-Pro OAuth pool — when
 // a caller writes `codex/deepseek-v4-pro` we transparently reroute to the
@@ -70,6 +71,8 @@ type TrafficType = "production" | "shadow";
 
 type ExecuteChatWithBreakerOptions = {
   trafficType?: TrafficType;
+  sessionRouting?: SessionRouting | null;
+  allowedConnectionIds?: string[] | null;
   [key: string]: any;
 };
 
@@ -405,6 +408,8 @@ export async function executeChatWithBreaker({
   correlationId = null,
   modelPinned = false,
   modelAbortSignal = null,
+  sessionRouting = null,
+  allowedConnectionIds,
 }: ExecuteChatWithBreakerOptions): Promise<{ result: any; tlsFingerprintUsed: boolean }> {
   // Shed before breaker.execute: a local rejection is neither an upstream
   // failure nor a successful provider probe.
@@ -448,6 +453,8 @@ export async function executeChatWithBreaker({
             correlationId,
             modelPinned,
             upstreamAbortSignal: modelAbortSignal,
+            sessionRouting,
+            allowedConnectionIds,
             onCredentialsRefreshed: async (newCreds: any) => {
               await updateProviderCredentials(credentials.connectionId, {
                 accessToken: newCreds.accessToken,

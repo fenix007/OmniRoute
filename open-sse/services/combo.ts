@@ -48,7 +48,6 @@ import {
   getLastSessionModel,
   getHandoff,
 } from "../../src/lib/db/contextHandoffs.ts";
-import { extractSessionAffinityKey } from "@/sse/services/auth";
 import { getHiddenModelsByProvider } from "@/models";
 import { resolveModelLockoutSettings } from "../../src/lib/resilience/modelLockoutSettings";
 import { fetchCodexQuota } from "./codexQuotaFetcher.ts";

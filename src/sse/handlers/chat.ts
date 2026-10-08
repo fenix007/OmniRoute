@@ -1,3 +1,5 @@
+import { resolveSessionIdentity } from "@omniroute/open-sse/services/sessionIdentity.ts";
+import type { ChatRuntimeOptions } from "./chatRuntimeOptions";
 import type { ComboAccountSelection } from "@omniroute/open-sse/services/combo/types.ts";
 import { getCombosCachedForChat } from "./chatComboCache";
 import {
@@ -14,7 +16,6 @@ import {
   markAccountUnavailable,
   extractApiKey,
   isValidApiKey,
-  extractSessionAffinityKey,
 } from "../services/auth";
 import {
   getRuntimeProviderProfile,
@@ -404,7 +405,6 @@ export async function handleChat(
   // T04: client-provided external session header has priority over generated fingerprint.
   const externalSessionId = extractExternalSessionId(request.headers);
   const sessionId = externalSessionId || generateStableSessionId(body);
-  const sessionAffinityKey = extractSessionAffinityKey(body, request.headers) || sessionId;
   const requestedConnectionId = request.headers.get("x-omniroute-connection")?.trim() || null;
   if (sessionId) {
     touchSession(sessionId);
@@ -421,6 +421,8 @@ export async function handleChat(
     return policy.rejection;
   }
   const apiKeyInfo = policy.apiKeyInfo;
+  const sessionIdentity = resolveSessionIdentity(body, request.headers, apiKeyInfo?.id ?? null);
+  const sessionAffinityKey = sessionIdentity.key;
   const bypassProviderQuotaPolicy = hasProviderQuotaBypassScope(apiKeyInfo?.scopes);
   telemetry.endPhase();
 
@@ -734,6 +736,7 @@ export async function handleChat(
         resolvedModel,
         {
           sessionKey: sessionAffinityKey,
+          sessionSource: sessionIdentity.source,
           ...(target?.allowRateLimitedConnection ? { allowRateLimitedConnections: true } : {}),
           ...(target?.connectionId ? { forcedConnectionId: target.connectionId } : {}),
           ...(bypassProviderQuotaPolicy ? { bypassQuotaPolicy: true } : {}),
@@ -801,6 +804,7 @@ export async function handleChat(
           {
             sessionId,
             sessionAffinityKey,
+            sessionSource: sessionIdentity.source,
             forceLiveComboTest: isComboLiveTest,
             forcedConnectionId: target?.connectionId ?? null,
             allowedConnectionIds: target?.allowedConnectionIds ?? null,
@@ -868,6 +872,7 @@ export async function handleChat(
           {
             sessionId,
             sessionAffinityKey,
+            sessionSource: sessionIdentity.source,
             emergencyFallbackTried: true,
             forceLiveComboTest: isComboLiveTest,
           },
@@ -937,6 +942,7 @@ export async function handleChat(
     {
       sessionId,
       sessionAffinityKey,
+      sessionSource: sessionIdentity.source,
       forceLiveComboTest: isComboLiveTest,
       forcedConnectionId: requestedConnectionId,
       correlationId: reqId,
@@ -964,24 +970,7 @@ async function handleSingleModelChat(
   comboName: string | null = null,
   apiKeyInfo: any = null,
   telemetry: any = null,
-  runtimeOptions: ComboAccountSelection & {
-    emptyResponseBudget?: EmptyResponseRetryBudget;
-    emergencyFallbackTried?: boolean;
-    forceLiveComboTest?: boolean;
-    sessionId?: string | null;
-    sessionAffinityKey?: string | null;
-    forcedConnectionId?: string | null;
-    allowedConnectionIds?: string[] | null;
-    comboStepId?: string | null;
-    comboExecutionKey?: string | null;
-    skipUpstreamRetry?: boolean;
-    allowRateLimitedConnection?: boolean;
-    preselectedCredentials?: any;
-    cachedSettings?: any;
-    providerId?: string | null;
-    correlationId?: string | null;
-    modelAbortSignal?: AbortSignal | null;
-  } = {},
+  runtimeOptions: ChatRuntimeOptions = {},
   comboStrategy: string | null = null,
   isCombo: boolean = false
 ) {
@@ -1215,6 +1204,7 @@ async function handleSingleModelChat(
   // loops so it can never reset and loop.
   let streamEarlyEofRetries = 0;
   const sameAccountTransportRetries = new Map<string, number>();
+  let previousConnectionId: string | null = null;
 
   requestAttemptLoop: while (true) {
     const excludedConnectionIds = new Set<string>(runtimeOptions.excludeConnectionIds);
@@ -1236,7 +1226,9 @@ async function handleSingleModelChat(
               effectiveAllowedConnections,
               model,
               {
-                sessionKey: runtimeOptions.sessionAffinityKey ?? runtimeOptions.sessionId ?? null,
+                sessionKey: runtimeOptions.sessionAffinityKey ?? null,
+                sessionSource: runtimeOptions.sessionSource,
+                previousConnectionId,
                 excludeConnectionIds: Array.from(excludedConnectionIds),
                 ...(runtimeOptions.allowRateLimitedConnection
                   ? { allowRateLimitedConnections: true }
@@ -1410,6 +1402,8 @@ async function handleSingleModelChat(
           log,
           clientRawRequest,
           credentials,
+          sessionRouting: credentials.sessionRouting,
+          allowedConnectionIds: effectiveAllowedConnections,
           apiKeyInfo,
           userAgent,
           comboName,
@@ -1551,6 +1545,7 @@ async function handleSingleModelChat(
             }
           }
           excludedConnectionIds.add(credentials.connectionId);
+          previousConnectionId = credentials.connectionId;
           lastError = result.error;
           lastStatus = result.status;
           requestRetryLastError = result.error;
@@ -1601,6 +1596,7 @@ async function handleSingleModelChat(
             }
           }
           excludedConnectionIds.add(credentials.connectionId);
+          previousConnectionId = credentials.connectionId;
           lastError = result.error;
           lastStatus = result.status;
           requestRetryLastError = result.error;
@@ -1623,6 +1619,7 @@ async function handleSingleModelChat(
           `Account ${accountId}... at local concurrency cap, trying fallback account`
         );
         excludedConnectionIds.add(credentials.connectionId);
+        previousConnectionId = credentials.connectionId;
         lastError = result.error;
         lastStatus = result.status;
         requestRetryLastError = result.error;
@@ -1835,6 +1832,7 @@ async function handleSingleModelChat(
           }
         }
         excludedConnectionIds.add(credentials.connectionId);
+        previousConnectionId = credentials.connectionId;
         lastError = result.error;
         lastStatus = result.status;
         requestRetryLastError = result.error;

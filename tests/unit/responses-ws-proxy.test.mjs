@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 
-const { createResponsesWsProxy } = await import("../../scripts/dev/responses-ws-proxy.mjs");
+const { createResponsesWsProxy, getAuthHeaders } =
+  await import("../../scripts/dev/responses-ws-proxy.mjs");
 
 function listen(server) {
   return new Promise((resolve) => {
@@ -51,6 +52,42 @@ function waitFor(predicate, { timeoutMs = 3000, intervalMs = 10 } = {}) {
   });
 }
 
+test("responses ws proxy forwards supported session identity headers to prepare", () => {
+  const headers = getAuthHeaders("/api/v1/responses", {
+    authorization: "Bearer local-token",
+    "x-codex-session-id": "codex-session",
+    "x-session-id": "x-session",
+    x_session_id: "underscore-session",
+    "x-omniroute-session-id": "omniroute-session-id",
+    "x-omniroute-session": "omniroute-session",
+    session_id: "session-underscore",
+    "session-id": "session-hyphen",
+    conversation: "conversation",
+    "conversation-id": "conversation-id",
+    conversation_id: "conversation-underscore",
+    thread: "thread",
+    "thread-id": "thread-id",
+    thread_id: "thread-underscore",
+  });
+
+  assert.deepEqual(headers, {
+    authorization: "Bearer local-token",
+    "x-codex-session-id": "codex-session",
+    "x-session-id": "x-session",
+    x_session_id: "underscore-session",
+    "x-omniroute-session-id": "omniroute-session-id",
+    "x-omniroute-session": "omniroute-session",
+    session_id: "session-underscore",
+    "session-id": "session-hyphen",
+    conversation: "conversation",
+    "conversation-id": "conversation-id",
+    conversation_id: "conversation-underscore",
+    thread: "thread",
+    "thread-id": "thread-id",
+    thread_id: "thread-underscore",
+  });
+});
+
 test("responses ws proxy prepares and forwards OpenAI Responses websocket events", async () => {
   const internalRequests = [];
   const upstreamSends = [];
@@ -84,6 +121,12 @@ test("responses ws proxy prepares and forwards OpenAI Responses websocket events
             // #5611: prepare resolves the configured proxy and threads it through.
             proxy: "http://test-proxy:8888",
             model: "gpt-5.5",
+            sessionRouting: {
+              sessionHash: "a".repeat(64),
+              sessionSource: "header",
+              routingReason: "affinity_reused",
+              previousConnectionId: "conn_0",
+            },
             response: {
               ...body.response,
               model: "gpt-5.5",
@@ -167,6 +210,11 @@ test("responses ws proxy prepares and forwards OpenAI Responses websocket events
       model: "gpt-5.5",
       input: [{ role: "user", content: "hello" }],
       reasoning: { effort: "xhigh" },
+      sessionRouting: {
+        sessionHash: "raw-client-value",
+        sessionSource: "input",
+        routingReason: "strategy",
+      },
     })
   );
 
@@ -180,6 +228,8 @@ test("responses ws proxy prepares and forwards OpenAI Responses websocket events
   assert.equal(upstreamSends[0].model, "gpt-5.5");
   assert.equal(upstreamSends[0].reasoning.effort, "xhigh");
   assert.equal("stream" in upstreamSends[0], false);
+  assert.equal("sessionRouting" in upstreamSends[0], false);
+  assert.equal("sessionRouting" in internalRequests[1].response, false);
   assert.equal(logRequest.transport, "responses_websocket");
   assert.equal(logRequest.status, 200);
   assert.equal(logRequest.success, true);
@@ -191,6 +241,12 @@ test("responses ws proxy prepares and forwards OpenAI Responses websocket events
   assert.equal(logRequest.responseBody.usage.input_tokens, 29);
   assert.equal(logRequest.responseBody.usage.output_tokens, 42);
   assert.equal(logRequest.terminalMessage.type, "response.completed");
+  assert.deepEqual(logRequest.sessionRouting, {
+    sessionHash: "a".repeat(64),
+    sessionSource: "header",
+    routingReason: "affinity_reused",
+    previousConnectionId: "conn_0",
+  });
 
   ws.close();
   await close(server);

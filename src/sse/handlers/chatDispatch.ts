@@ -10,12 +10,15 @@
 
 import { executeChatWithBreaker } from "./chatHelpers";
 import { evictSessionAffinityOnComboTimeout } from "../services/sessionAffinityPin";
+import type { SessionRouting } from "@/lib/usage/sessionRouting";
 
 /** The dispatch arguments chat.ts already assembles, plus what the eviction reads. */
 type DispatchArgs = {
   provider: string;
   credentials: { connectionId: string };
   clientRawRequest: any;
+  sessionRouting?: SessionRouting | null;
+  allowedConnectionIds?: string[] | null;
   [key: string]: unknown;
 };
 

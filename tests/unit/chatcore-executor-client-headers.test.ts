@@ -40,3 +40,23 @@ test("does not overwrite an existing user-agent header", () => {
 test("a trimmed-empty user agent does not create headers on its own", () => {
   assert.equal(buildExecutorClientHeaders({}, "   "), null);
 });
+
+test("Codex metadata identity survives translation through fresh executor headers", () => {
+  const headers = { "user-agent": "test", "X-Codex-Session-Id": "invalid\nheader" };
+  const body = { metadata: { session_id: "metadata-session" }, prompt_cache_key: "cache-only" };
+  const out = buildExecutorClientHeaders(headers, null, body);
+  assert.equal(out?.["x-codex-session-id"], "metadata-session");
+  assert.equal(out?.["X-Codex-Session-Id"], undefined);
+  assert.equal(headers["X-Codex-Session-Id"], "invalid\nheader", "client headers stay unchanged");
+  assert.equal(body.prompt_cache_key, "cache-only");
+});
+
+test("Codex original header wins and derived user content never becomes an upstream ID", () => {
+  assert.equal(
+    buildExecutorClientHeaders({ "Session-Id": "header" }, null, {
+      session_id: "body",
+    })?.["x-codex-session-id"],
+    "header"
+  );
+  assert.equal(buildExecutorClientHeaders(null, null, { input: "user prompt" }), null);
+});

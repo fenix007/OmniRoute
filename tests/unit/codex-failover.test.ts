@@ -12,10 +12,24 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omni-codex-failover-"));
+process.env.DATA_DIR = testDataDir;
 
 // ── Helpers imported directly (no SQLite dependency) ────────────────────────
 const authModule = await import("../../src/sse/services/auth.ts");
 const { extractSessionAffinityKey } = authModule;
+const core = await import("../../src/lib/db/core.ts");
+const { applyCodexFailoverCredentials, buildCodexFailoverSelectionContext } =
+  await import("../../open-sse/handlers/chatCore/codexFailover.ts");
+
+test.after(() => {
+  core.resetDbInstance();
+  fs.rmSync(testDataDir, { recursive: true, force: true });
+});
 
 // ── Test 1: session affinity key extraction for codex headers ────────────────
 test("extractSessionAffinityKey extracts x-codex-session-id header for codex failover", () => {
@@ -25,7 +39,7 @@ test("extractSessionAffinityKey extracts x-codex-session-id header for codex fai
       return null;
     },
   };
-  const key = extractSessionAffinityKey({}, headers);
+  const key = extractSessionAffinityKey({}, headers, "authenticated-client");
   assert.ok(key, "Should return a session affinity key from x-codex-session-id header");
   assert.ok(
     key.includes("codex-session-abc123") || key.length > 0,
@@ -40,13 +54,13 @@ test("extractSessionAffinityKey extracts x-session-id header as fallback", () =>
       return null;
     },
   };
-  const key = extractSessionAffinityKey({}, headers);
+  const key = extractSessionAffinityKey({}, headers, "authenticated-client");
   assert.ok(key, "Should return a session affinity key from x-session-id header");
 });
 
 test("extractSessionAffinityKey derives key from body session_id", () => {
   const body = { session_id: "body-session-001" };
-  const key = extractSessionAffinityKey(body, null);
+  const key = extractSessionAffinityKey(body, null, "authenticated-client");
   assert.ok(key, "Should return a session affinity key from body session_id");
   assert.ok(key.includes("body-session-001") || key.length > 0, "Key should reflect body session");
 });
@@ -201,4 +215,82 @@ test("codex failover: stops rotation when getProviderCredentials returns null", 
     "CONTINUE_ROTATION",
     "valid creds → continue rotation"
   );
+});
+
+test("inner 429 failover preserves scoped session identity and account policy", () => {
+  const sessionHash = "d".repeat(64);
+  const context = buildCodexFailoverSelectionContext({
+    initialSessionRouting: {
+      sessionHash,
+      sessionSource: "metadata",
+      routingReason: "affinity_reused",
+      previousConnectionId: null,
+    },
+    failedConnectionId: "conn-failed",
+    allowedConnectionIds: ["conn-failed", "conn-next", "", 42, "conn-next"],
+  });
+
+  assert.deepEqual(context, {
+    canRotate: true,
+    sessionKey: `session:sha256:${sessionHash}`,
+    sessionSource: "metadata",
+    previousConnectionId: "conn-failed",
+    allowedConnectionIds: ["conn-failed", "conn-next"],
+  });
+});
+
+test("inner 429 rotation requires an authoritative non-empty account scope", () => {
+  const base = {
+    initialSessionRouting: null,
+    failedConnectionId: "conn-failed",
+  };
+  assert.equal(
+    buildCodexFailoverSelectionContext({ ...base, allowedConnectionIds: undefined }).canRotate,
+    false
+  );
+  assert.equal(
+    buildCodexFailoverSelectionContext({ ...base, allowedConnectionIds: [] }).canRotate,
+    false
+  );
+  assert.equal(
+    buildCodexFailoverSelectionContext({ ...base, allowedConnectionIds: [42, ""] }).canRotate,
+    false
+  );
+  assert.deepEqual(buildCodexFailoverSelectionContext({ ...base, allowedConnectionIds: null }), {
+    canRotate: true,
+    sessionKey: null,
+    sessionSource: "none",
+    previousConnectionId: "conn-failed",
+    allowedConnectionIds: null,
+  });
+});
+
+test("inner 429 credential rotation updates final execution diagnostics", () => {
+  const initialRouting = {
+    sessionHash: "e".repeat(64),
+    sessionSource: "header" as const,
+    routingReason: "affinity_reused" as const,
+    previousConnectionId: null,
+  };
+  const nextRouting = {
+    sessionHash: "e".repeat(64),
+    sessionSource: "header" as const,
+    routingReason: "affinity_reassigned" as const,
+    previousConnectionId: "conn-old",
+  };
+  const credentials: Record<string, unknown> = {
+    connectionId: "conn-old",
+    accessToken: "token-old",
+  };
+
+  const finalRouting = applyCodexFailoverCredentials(
+    credentials,
+    { connectionId: "conn-new", accessToken: "token-new", sessionRouting: nextRouting },
+    initialRouting
+  );
+
+  assert.equal(credentials.connectionId, "conn-new");
+  assert.equal(credentials.accessToken, "token-new");
+  assert.deepEqual(finalRouting, nextRouting);
+  assert.deepEqual(credentials.sessionRouting, nextRouting);
 });

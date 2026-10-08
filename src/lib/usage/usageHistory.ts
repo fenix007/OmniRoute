@@ -25,6 +25,7 @@ import {
   storeCompletedDetail,
 } from "./completedRequestDetails";
 import { shouldPersistToDisk } from "./migrations";
+import * as routing from "./sessionRouting";
 import { emitUsageRecorded } from "./usageEvents";
 import {
   getLoggedInputTokens,
@@ -535,6 +536,7 @@ export async function getUsageDb(sinceIso?: string | null, limit?: number, curso
       connectionId: toStringOrNull(r.connection_id),
       apiKeyId: toStringOrNull(r.api_key_id),
       apiKeyName: toStringOrNull(r.api_key_name),
+      ...routing.mapStoredSessionRouting(r),
       serviceTier: normalizeServiceTier(r.service_tier),
       tokens: {
         input: toNumber(r.tokens_input),
@@ -585,7 +587,7 @@ export interface UsageEntry {
   status?: string | null;
   success?: boolean;
   latencyMs?: number;
-  timeToFirstTokenMs?: number;
+  timeToFirstTokenMs?: number | null;
   errorCode?: string | null;
   /** ISO timestamp; defaults to `new Date().toISOString()` when omitted. */
   timestamp?: string;
@@ -599,6 +601,7 @@ export interface UsageEntry {
   /** @deprecated legacy snake_case fallback, read only if `comboStrategy` is unset. */
   combo_strategy?: string | null;
   endpoint?: string | null;
+  sessionRouting?: routing.SessionRouting | null;
 }
 
 /**
@@ -611,6 +614,7 @@ export async function saveRequestUsage(entry: UsageEntry) {
     const db = getDbInstance();
     const timestamp = entry.timestamp || new Date().toISOString();
     const serviceTier = normalizeServiceTier(entry.serviceTier ?? entry.service_tier);
+    const sessionRouting = routing.parseSessionRouting(entry.sessionRouting);
 
     const tokensInput = getLoggedInputTokens(entry.tokens);
     const tokensOutput = getLoggedOutputTokens(entry.tokens);
@@ -627,7 +631,8 @@ export async function saveRequestUsage(entry: UsageEntry) {
     db.transaction(() => {
       const existing = db
         .prepare(
-          `SELECT id, endpoint FROM usage_history
+          `SELECT id, endpoint, session_hash, session_source, routing_reason, previous_connection_id
+           FROM usage_history
            WHERE timestamp = ?
              AND COALESCE(provider, '')     = COALESCE(?, '')
              AND COALESCE(model, '')        = COALESCE(?, '')
@@ -645,13 +650,22 @@ export async function saveRequestUsage(entry: UsageEntry) {
           entry.apiKeyId || null,
           tokensInput,
           tokensOutput
-        ) as { id: number; endpoint: string | null } | undefined;
+        ) as routing.UsageRoutingBackfillRow | undefined;
 
       if (existing) {
-        // Back-fill endpoint if the original row missed it.
-        if (!existing.endpoint && entry.endpoint) {
-          db.prepare(`UPDATE usage_history SET endpoint = ? WHERE id = ?`).run(
-            entry.endpoint,
+        // Back-fill diagnostics when an earlier callback lacked routing metadata.
+        if (routing.needsSessionRoutingBackfill(existing, entry.endpoint, sessionRouting)) {
+          db.prepare(
+            `UPDATE usage_history SET endpoint = COALESCE(NULLIF(endpoint, ''), ?),
+             session_hash = COALESCE(session_hash, ?), session_source = COALESCE(session_source, ?),
+             routing_reason = COALESCE(routing_reason, ?), previous_connection_id = COALESCE(previous_connection_id, ?)
+             WHERE id = ?`
+          ).run(
+            entry.endpoint || null,
+            sessionRouting?.sessionHash ?? null,
+            sessionRouting?.sessionSource ?? null,
+            sessionRouting?.routingReason ?? null,
+            sessionRouting?.previousConnectionId ?? null,
             existing.id
           );
         }
@@ -662,8 +676,9 @@ export async function saveRequestUsage(entry: UsageEntry) {
         `
         INSERT INTO usage_history (provider, model, connection_id, api_key_id, api_key_name,
           tokens_input, tokens_output, tokens_cache_read, tokens_cache_creation, tokens_reasoning,
-          service_tier, status, success, latency_ms, ttft_ms, error_code, combo_strategy, endpoint, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          service_tier, status, success, latency_ms, ttft_ms, error_code, combo_strategy, endpoint,
+          session_hash, session_source, routing_reason, previous_connection_id, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
       ).run(
         entry.provider || null,
@@ -688,6 +703,10 @@ export async function saveRequestUsage(entry: UsageEntry) {
         entry.errorCode || null,
         entry.comboStrategy || entry.combo_strategy || null,
         entry.endpoint || null,
+        sessionRouting?.sessionHash ?? null,
+        sessionRouting?.sessionSource ?? null,
+        sessionRouting?.routingReason ?? null,
+        sessionRouting?.previousConnectionId ?? null,
         timestamp
       );
 
@@ -754,6 +773,7 @@ export async function getUsageHistory(filter: UsageHistoryFilter = {}) {
       connectionId: toStringOrNull(r.connection_id),
       apiKeyId: toStringOrNull(r.api_key_id),
       apiKeyName: toStringOrNull(r.api_key_name),
+      ...routing.mapStoredSessionRouting(r),
       serviceTier: normalizeServiceTier(r.service_tier),
       tokens: {
         input: toNumber(r.tokens_input),

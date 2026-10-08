@@ -46,6 +46,8 @@ Live count: `ls open-sse/services/*.ts | wc -l` (currently 134). More including 
 - **`backgroundTaskDetector.ts`** — Long-running task detection for batch routing.
 - **`ipFilter.ts`** — IP-based routing rules.
 - **`signatureCache.ts`** — Request signature caching for deduplication.
+- **`sessionIdentity.ts`** — Scoped, opaque session identity resolution for affinity and caching.
+- **`combo/sessionFingerprint.ts`** — Legacy body fingerprint for combo model continuity, separate from account affinity.
 - **`volumeDetector.ts`** — Volume spike detection for rate-limit escalation.
 - **`contextHandoff.ts`** — Session context serialization for A2A handoff.
 

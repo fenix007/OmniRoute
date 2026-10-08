@@ -60,6 +60,18 @@ function deleteAffinityKey(key: string): void {
     .run(NAMESPACE, key);
 }
 
+/** Read the stored pin, including expiry, before selection can evict it. */
+export function inspectSessionAccountAffinity(
+  sessionKey: string,
+  provider: string
+): SessionAccountAffinityRecord | null {
+  if (!sessionKey || !provider) return null;
+  const row = getDbInstance()
+    .prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?")
+    .get(NAMESPACE, affinityKey(sessionKey, provider)) as { value?: unknown } | undefined;
+  return parseRecord(row?.value);
+}
+
 export function getSessionAccountAffinity(
   sessionKey: string,
   provider: string,
@@ -69,10 +81,7 @@ export function getSessionAccountAffinity(
   if (!sessionKey || !provider || normalizePositiveTtl(ttlMs) <= 0) return null;
 
   const key = affinityKey(sessionKey, provider);
-  const row = getDbInstance()
-    .prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?")
-    .get(NAMESPACE, key) as { value?: unknown } | undefined;
-  const record = parseRecord(row?.value);
+  const record = inspectSessionAccountAffinity(sessionKey, provider);
   if (!record) return null;
 
   if (Date.parse(record.expiresAt) <= now) {

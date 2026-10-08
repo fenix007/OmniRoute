@@ -13,9 +13,8 @@ process.env.DATA_DIR = testDataDir;
 
 const coreDb = await import("../../src/lib/db/core.ts");
 const { getUsageHistory } = await import("../../src/lib/usage/usageHistory.ts");
-const { recordStreamingUsageStats } = await import(
-  "../../open-sse/handlers/chatCore/streamingUsageStats.ts"
-);
+const { recordStreamingUsageStats } =
+  await import("../../open-sse/handlers/chatCore/streamingUsageStats.ts");
 
 function baseCtx(overrides: Record<string, unknown> = {}) {
   return {
@@ -101,4 +100,40 @@ test("non-200 stream persists a failure row (success=false, status string)", asy
   assert.equal(row.success, false);
   assert.equal(row.status, "503");
   assert.equal(row.errorCode, "upstream_5xx");
+});
+
+test("concurrent delayed streams retain their own routing diagnostics", async () => {
+  const firstHash = "1".repeat(64);
+  const secondHash = "2".repeat(64);
+  recordStreamingUsageStats(
+    { prompt_tokens: 2, completion_tokens: 1 },
+    baseCtx({
+      provider: "routing-stream",
+      connectionId: "conn-first",
+      sessionRouting: {
+        sessionHash: firstHash,
+        sessionSource: "header",
+        routingReason: "affinity_reused",
+      },
+    })
+  );
+  recordStreamingUsageStats(
+    { prompt_tokens: 3, completion_tokens: 1 },
+    baseCtx({
+      provider: "routing-stream",
+      connectionId: "conn-second",
+      sessionRouting: {
+        sessionHash: secondHash,
+        sessionSource: "metadata",
+        routingReason: "affinity_created",
+      },
+    })
+  );
+
+  const rows = await waitForRows("routing-stream", 2);
+  const byConnection = new Map(rows.map((row) => [row.connectionId, row]));
+  assert.equal(byConnection.get("conn-first")?.sessionHash, firstHash);
+  assert.equal(byConnection.get("conn-first")?.routingReason, "affinity_reused");
+  assert.equal(byConnection.get("conn-second")?.sessionHash, secondHash);
+  assert.equal(byConnection.get("conn-second")?.routingReason, "affinity_created");
 });

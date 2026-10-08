@@ -32,11 +32,7 @@ import {
 } from "../config/codexInstructions.ts";
 import { FETCH_BODY_TIMEOUT_MS, HTTP_STATUS, PROVIDERS } from "../config/constants.ts";
 import { readCodexPeekChunk, buildCodexTimeoutSafePassthroughBody } from "./codex/bodyTimeout.ts";
-import {
-  getCodexClientVersion,
-  getCodexUserAgent,
-  normalizeCodexSessionId,
-} from "../config/codexClient.ts";
+import { getCodexClientVersion, getCodexUserAgent } from "../config/codexClient.ts";
 import {
   applyCodexClientIdentityHeaders,
   applyCodexClientMetadata,
@@ -46,6 +42,7 @@ import {
 import { getAccessToken } from "../services/tokenRefresh.ts";
 import { sanitizeResponsesInputItems } from "../services/responsesInputSanitizer.ts";
 import { normalizeCodexVerbosity } from "../services/codexVerbosity.ts";
+import { resolveSessionIdentity } from "../services/sessionIdentity.ts";
 import { getThinkingBudgetConfig, ThinkingMode } from "../services/thinkingBudget.ts";
 import { CORS_HEADERS } from "../utils/cors.ts";
 import { errorResponse } from "../utils/error.ts";
@@ -761,10 +758,11 @@ export class CodexExecutor extends BaseExecutor {
       input.model
     );
     const requestInput = requestBody === input.body ? input : { ...input, body: requestBody };
-    const sessionId = this.getPromptCacheSessionId(
-      requestInput.credentials,
-      requestInput.body as Record<string, unknown> | null
-    );
+    const sessionId = resolveSessionIdentity(
+      requestInput.body,
+      requestInput.clientHeaders,
+      null
+    ).upstreamSessionId;
     const identity = createCodexClientIdentity(
       sessionId,
       requestInput.credentials?.providerSpecificData ?? null
@@ -1066,13 +1064,8 @@ export class CodexExecutor extends BaseExecutor {
     // Ref: openai/codex login/src/auth/default_client.rs DEFAULT_ORIGINATOR = "codex_cli_rs"
     headers["originator"] = "codex_cli_rs";
 
-    // session_id header — enables prompt cache affinity on the Codex backend.
-    // The official Codex client sets this to conversation_id (a stable UUID per session).
-    // Ref: openai/codex codex-api/src/requests/headers.rs build_conversation_headers()
-    const cacheSessionId = this.getPromptCacheSessionId(credentials, null);
-    if (cacheSessionId) {
-      headers["session_id"] = cacheSessionId;
-    }
+    // The request-scoped client identity carries the explicit session selected in execute().
+    // applyCodexClientIdentityHeaders emits the same value for HTTP and WebSocket transports.
     applyCodexClientIdentityHeaders(headers, clientIdentity);
     for (const name of CODEX_FORWARDED_CLIENT_HEADERS) {
       const value = getHeaderValueCaseInsensitive(clientHeaders, name);
@@ -1080,31 +1073,6 @@ export class CodexExecutor extends BaseExecutor {
     }
 
     return headers;
-  }
-
-  /**
-   * Derive a stable session ID for prompt cache affinity.
-   * Priority: per-conversation session_id/conversation_id from request body → workspaceId.
-   * The official Codex client uses conversation_id (a unique UUID per session), NOT
-   * the account-wide workspaceId. Using workspaceId caps cache hit-rate at ~49%
-   * because all conversations share the same cache partition. (#1643)
-   * Ref: openai/codex core/src/client.rs line 853
-   */
-  private getPromptCacheSessionId(
-    credentials: ProviderCredentials | null | undefined,
-    body: Record<string, unknown> | null
-  ): string | null {
-    const promptCacheKey = normalizeCodexSessionId(body?.prompt_cache_key);
-    if (promptCacheKey) return promptCacheKey;
-
-    // Prefer per-session identifiers from the client request body
-    const sessionId = body?.session_id ?? body?.conversation_id;
-    const normalizedSessionId = normalizeCodexSessionId(sessionId);
-    if (normalizedSessionId) {
-      return normalizedSessionId;
-    }
-    // Fall back to workspaceId (account-wide) — better than nothing
-    return normalizeCodexSessionId(credentials?.providerSpecificData?.workspaceId) || null;
   }
 
   /**
@@ -1402,8 +1370,11 @@ export class CodexExecutor extends BaseExecutor {
     // Ref: openai/codex core/src/client.rs line 853:
     //   let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
     // IMPORTANT: Capture session/conversation IDs BEFORE deletion below (#1643).
-    if (!body.prompt_cache_key) {
-      const cacheSessionId = this.getPromptCacheSessionId(credentials, body);
+    if (!Object.prototype.hasOwnProperty.call(body, "prompt_cache_key")) {
+      const clientIdentity = credentials?.providerSpecificData?.codexClientIdentity as
+        CodexClientIdentity | null | undefined;
+      const cacheSessionId =
+        clientIdentity?.sessionId ?? resolveSessionIdentity(body, null, null).upstreamSessionId;
       if (cacheSessionId) {
         body.prompt_cache_key = cacheSessionId;
       }

@@ -11,6 +11,7 @@
  */
 
 import { saveRequestUsage } from "@/lib/usageDb";
+import type { SessionRouting } from "@/lib/usage/sessionRouting";
 import { formatUsageLog } from "@/lib/usage/tokenAccounting";
 import { COLORS } from "../../utils/stream.ts";
 import { recordTokenUsage } from "../../services/tokenLimitCounter.ts";
@@ -30,6 +31,7 @@ export type RecordNonStreamingUsageStatsContext = {
   endpoint?: string | null | undefined;
   statusCode?: number;
   errorCode?: string | null;
+  sessionRouting?: SessionRouting | null;
 };
 
 function logUsageTrace(
@@ -59,6 +61,7 @@ function persistUsageRow(usage: object, ctx: RecordNonStreamingUsageStatsContext
     serviceTier: effectiveServiceTier,
     comboStrategy: ctx.isCombo ? ctx.comboStrategy || undefined : undefined,
     endpoint: ctx.endpoint || undefined,
+    sessionRouting: ctx.sessionRouting,
   }).catch((err) => {
     console.error("Failed to save usage stats:", err.message);
   });

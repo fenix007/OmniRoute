@@ -26,7 +26,11 @@ import {
   resolveCompressionHeader,
   isStripReasoningRequested,
 } from "./chatCore/headers.ts";
-import { markCodexScopeRateLimited } from "./chatCore/codexFailover.ts";
+import {
+  applyCodexFailoverCredentials,
+  buildCodexFailoverSelectionContext,
+  markCodexScopeRateLimited,
+} from "./chatCore/codexFailover.ts";
 import { isTerminalCodexOAuthFailure } from "./chatCore/codexAuthFailure.ts";
 import { isCodexOriginatedHeaders } from "../config/codexIdentity.ts";
 import { trackDevice, extractIpFromHeaders } from "../services/deviceTracker.ts";
@@ -189,6 +193,7 @@ import { adaptBodyForCompression } from "../services/compression/bodyAdapter.ts"
 import { ensureEngineBreakdown } from "../services/compression/engineBreakdown.ts";
 import { handleBypassRequest } from "../utils/bypassHandler.ts";
 import { saveRequestUsage, trackPendingRequest, appendRequestLog } from "@/lib/usageDb";
+import { markSessionRoutingDeduplicated, parseSessionRouting } from "@/lib/usage/sessionRouting";
 import { finalizePendingScope, updatePendingScope } from "@/lib/usage/pendingRequestScope";
 import { recordCost } from "@/domain/costRules";
 import { calculateCost } from "@/lib/usage/costCalculator";
@@ -234,8 +239,8 @@ import {
   executeWithUpstreamStartTimeout,
 } from "./chatCore/upstreamTimeouts.ts";
 import { getModelNormalizeToolCallId, getModelPreserveOpenAIDeveloperRole } from "@/lib/localDb";
-import { getProviderCredentials, extractSessionAffinityKey } from "@/sse/services/auth";
-import { deleteSessionAccountAffinity } from "@/lib/db/sessionAccountAffinity";
+import { getProviderCredentials } from "@/sse/services/auth";
+import { evictSessionAccountAffinityForConnection } from "@/lib/db/sessionAccountAffinity";
 import { getCacheControlSettings } from "@/lib/cacheControlSettings";
 import { guardrailRegistry } from "@/lib/guardrails";
 import { shouldPreserveCacheControl } from "../utils/cacheControlPolicy.ts";
@@ -388,6 +393,8 @@ export async function handleChatCore({
   correlationId = null,
   modelPinned = false,
   upstreamAbortSignal = null,
+  sessionRouting = null,
+  allowedConnectionIds,
 }) {
   let { provider, model, extendedContext } = modelInfo;
   // ── Memory pressure guard ────────────────────────────────────────────
@@ -409,6 +416,11 @@ export async function handleChatCore({
   );
   const isModelScope = () => isModelScopeProvider(provider, credentials?.providerSpecificData);
   const startTime = Date.now();
+  // Capture a validated copy now. Streaming completion may run after dispatch has
+  // returned, so usage persistence must not depend on mutable request context.
+  const initialSessionRouting = parseSessionRouting(sessionRouting);
+  let executionSessionRouting = initialSessionRouting;
+  let deduplicatedExecutionCredentials: Record<string, unknown> | null = null;
   // Per-request trace id + checkpoint helper. Lets us see exactly which await
   // a hung request was sitting on in `[STAGE_TRACE]` log lines. Uses crypto RNG
   // (not Math.random) purely to satisfy CodeQL js/insecure-randomness — this id
@@ -518,6 +530,7 @@ export async function handleChatCore({
         endpoint: endpointPath,
         statusCode,
         errorCode,
+        sessionRouting: executionSessionRouting,
       });
       return;
     }
@@ -534,6 +547,7 @@ export async function handleChatCore({
         errorCode,
         latencyMs: Date.now() - startTime,
         endpoint: endpointPath,
+        sessionRouting: executionSessionRouting,
       })
     ).catch(() => {});
   };
@@ -546,13 +560,19 @@ export async function handleChatCore({
   ): void => recordKeyHealthStatusFor(status, creds, log);
 
   const persistCodexQuotaState = async (headers: Record<string, string> | null, status = 0) => {
-    const currentConnectionId = getCurrentConnectionId();
+    const usageCredentials = deduplicatedExecutionCredentials || credentials;
+    const currentConnectionId =
+      typeof usageCredentials?.connectionId === "string" &&
+      usageCredentials.connectionId.trim().length > 0
+        ? usageCredentials.connectionId.trim()
+        : getCurrentConnectionId();
     if (provider !== "codex" || !currentConnectionId || !headers) return;
 
     try {
       const existingProviderData =
-        credentials?.providerSpecificData && typeof credentials.providerSpecificData === "object"
-          ? (credentials.providerSpecificData as Record<string, unknown>)
+        usageCredentials?.providerSpecificData &&
+        typeof usageCredentials.providerSpecificData === "object"
+          ? (usageCredentials.providerSpecificData as Record<string, unknown>)
           : {};
       // Pure payload build extracted to chatCore/codexQuota.ts (#3501). Returns null when the
       // response carries no quota headers (nothing to persist).
@@ -578,7 +598,7 @@ export async function handleChatCore({
         providerSpecificData: built.nextProviderData,
       });
 
-      credentials.providerSpecificData = built.nextProviderData;
+      usageCredentials.providerSpecificData = built.nextProviderData;
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : String(err);
       log?.debug?.("CODEX", `Failed to persist codex quota state: ${errMessage}`);
@@ -2356,12 +2376,6 @@ export async function handleChatCore({
           // ── Codex 429 account-rotation state ─────────────────────────────────
           // Track excluded connection IDs for codex failover across attempts.
           const codexExcludedIds: string[] = [];
-          // Derive session affinity key once for codex failover (used to clear affinity on 429).
-          const codexSessionAffinityKey =
-            provider === "codex"
-              ? (extractSessionAffinityKey(body, clientRawRequest?.headers) ?? null)
-              : null;
-
           while (attempts < maxAttempts) {
             trace("pre_executor", { attempt: attempts });
             updatePendingScope(pendingScope, {
@@ -2428,7 +2442,8 @@ export async function handleChatCore({
                           upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
                           clientHeaders: buildExecutorClientHeaders(
                             clientRawRequest?.headers,
-                            userAgent
+                            userAgent,
+                            provider === "codex" ? body : undefined
                           ),
                           onCredentialsRefreshed,
                           skipUpstreamRetry,
@@ -2509,6 +2524,25 @@ export async function handleChatCore({
                 const retryAfterMs = retryAfterHeader
                   ? Number.parseFloat(retryAfterHeader) * 1000
                   : null;
+                const failoverSelection = buildCodexFailoverSelectionContext({
+                  initialSessionRouting,
+                  failedConnectionId: failedConnectionId ? String(failedConnectionId) : null,
+                  allowedConnectionIds,
+                });
+
+                // Only the outer HTTP pipeline can provide an authoritative account scope.
+                // Direct callers without it return the 429 for their caller to handle.
+                if (!failoverSelection.canRotate) {
+                  if (stream) {
+                    releaseAccountSemaphore();
+                    return { ...res, _executionCredentials: execCreds };
+                  }
+                  return {
+                    ...res,
+                    _accountSemaphoreRelease: releaseAccountSemaphore,
+                    _executionCredentials: execCreds,
+                  };
+                }
 
                 log?.warn?.(
                   "CODEX_FAILOVER",
@@ -2543,10 +2577,14 @@ export async function handleChatCore({
                   }
                 }
 
-                // Clear session affinity so next request won't be pinned to the failing account
-                if (codexSessionAffinityKey) {
+                // Evict only a pin that still points at this failed account.
+                if (failoverSelection.sessionKey && failedConnectionId) {
                   try {
-                    deleteSessionAccountAffinity(codexSessionAffinityKey, "codex");
+                    evictSessionAccountAffinityForConnection(
+                      failoverSelection.sessionKey,
+                      "codex",
+                      String(failedConnectionId)
+                    );
                   } catch {
                     // best-effort
                   }
@@ -2556,10 +2594,13 @@ export async function handleChatCore({
                 const nextCreds = await getProviderCredentials(
                   "codex",
                   null,
-                  null,
+                  failoverSelection.allowedConnectionIds,
                   modelToCall || model || requestedModel || null,
                   {
                     excludeConnectionIds: [...codexExcludedIds],
+                    sessionKey: failoverSelection.sessionKey,
+                    sessionSource: failoverSelection.sessionSource,
+                    previousConnectionId: failoverSelection.previousConnectionId,
                   }
                 ).catch(() => null);
 
@@ -2597,8 +2638,12 @@ export async function handleChatCore({
                   },
                 });
 
-                // Update credentials in-place so getExecutionCredentials() picks up the new account
-                Object.assign(credentials, nextCreds);
+                // Update both execution credentials and immutable routing diagnostics.
+                executionSessionRouting = applyCodexFailoverCredentials(
+                  credentials,
+                  nextCreds,
+                  executionSessionRouting
+                );
 
                 releaseAccountSemaphore();
                 attempts++;
@@ -2674,7 +2719,8 @@ export async function handleChatCore({
                               upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
                               clientHeaders: buildExecutorClientHeaders(
                                 clientRawRequest?.headers,
-                                userAgent
+                                userAgent,
+                                provider === "codex" ? body : undefined
                               ),
                               onCredentialsRefreshed,
                               skipUpstreamRetry,
@@ -2763,20 +2809,24 @@ export async function handleChatCore({
         if (stream) {
           return rawResult;
         }
+        const rawResultMetadata = rawResult as typeof rawResult & {
+          _accountSemaphoreRelease?: () => void;
+          _executionCredentials?: Record<string, unknown>;
+        };
 
         // Non-stream: release semaphore immediately after reading full response body.
         const status = rawResult.response.status;
 
         // Use execution credentials captured during request processing
         if (
-          rawResult._executionCredentials?.connectionId &&
-          rawResult._executionCredentials?.apiKey
+          rawResultMetadata._executionCredentials?.connectionId &&
+          rawResultMetadata._executionCredentials?.apiKey
         ) {
-          recordKeyHealthStatus(status, rawResult._executionCredentials);
+          recordKeyHealthStatus(status, rawResultMetadata._executionCredentials);
         }
         releaseRawResultAccountSemaphore =
-          typeof rawResult._accountSemaphoreRelease === "function"
-            ? rawResult._accountSemaphoreRelease
+          typeof rawResultMetadata._accountSemaphoreRelease === "function"
+            ? rawResultMetadata._accountSemaphoreRelease
             : () => {};
 
         const statusText = rawResult.response.statusText;
@@ -2826,7 +2876,10 @@ export async function handleChatCore({
           return execute();
         }
       }
-      return materializeDeduplicatedExecutionResult(dedupResult.result);
+      const materialized = materializeDeduplicatedExecutionResult(dedupResult.result);
+      return dedupResult.wasDeduplicated
+        ? { ...materialized, _wasDeduplicated: true }
+        : materialized;
     }
 
     return execute();
@@ -2908,12 +2961,34 @@ export async function handleChatCore({
 
   try {
     const result = await executeProviderRequest(effectiveModel, true);
+    const resultMetadata = result as typeof result & {
+      _executionCredentials?: Record<string, unknown>;
+      _wasDeduplicated?: boolean;
+    };
 
     providerResponse = result.response;
     providerUrl = result.url;
     providerHeaders = result.headers;
     finalBody = providerRequestCapture.body(result.transformedBody);
-    const responseConnectionId = getCurrentConnectionId();
+    const selectedConnectionId = getCurrentConnectionId();
+    const executionConnectionId =
+      typeof resultMetadata._executionCredentials?.connectionId === "string" &&
+      resultMetadata._executionCredentials.connectionId.trim().length > 0
+        ? resultMetadata._executionCredentials.connectionId.trim()
+        : null;
+    const responseConnectionId =
+      resultMetadata._wasDeduplicated === true && executionConnectionId
+        ? executionConnectionId
+        : selectedConnectionId;
+    if (resultMetadata._wasDeduplicated === true) {
+      deduplicatedExecutionCredentials = resultMetadata._executionCredentials ?? null;
+      executionSessionRouting = markSessionRoutingDeduplicated(
+        initialSessionRouting,
+        selectedConnectionId !== responseConnectionId
+          ? selectedConnectionId
+          : (initialSessionRouting?.previousConnectionId ?? null)
+      );
+    }
     effectiveServiceTier = resolveEffectiveServiceTier(finalBody);
     claudePromptCacheLogMeta = buildClaudePromptCacheLogMeta(
       targetFormat,
@@ -3205,7 +3280,11 @@ export async function handleChatCore({
             log,
             extendedContext,
             upstreamExtraHeaders: buildUpstreamHeadersForExecute(retryModelId),
-            clientHeaders: buildExecutorClientHeaders(clientRawRequest?.headers, userAgent),
+            clientHeaders: buildExecutorClientHeaders(
+              clientRawRequest?.headers,
+              userAgent,
+              provider === "codex" ? body : undefined
+            ),
             onCredentialsRefreshed,
             skipUpstreamRetry: isCombo,
             contextEditing: { enabled: contextEditingEnabled },
@@ -3914,7 +3993,11 @@ export async function handleChatCore({
     );
     effectiveServiceTier = resolveReportedServiceTier(responseBody) ?? effectiveServiceTier;
 
-    const successConnectionId = getCurrentConnectionId();
+    const successConnectionId =
+      typeof deduplicatedExecutionCredentials?.connectionId === "string" &&
+      deduplicatedExecutionCredentials.connectionId.trim().length > 0
+        ? deduplicatedExecutionCredentials.connectionId.trim()
+        : getCurrentConnectionId();
 
     // Log usage for non-streaming responses
     const usage = extractUsageFromResponse(responseBody, provider);
@@ -4155,7 +4238,8 @@ export async function handleChatCore({
     await maybeSyncClaudeExtraUsageState({
       provider,
       connectionId: successConnectionId,
-      providerSpecificData: credentials?.providerSpecificData,
+      providerSpecificData:
+        deduplicatedExecutionCredentials?.providerSpecificData ?? credentials?.providerSpecificData,
       log,
     });
 
@@ -4178,6 +4262,7 @@ export async function handleChatCore({
       isCombo,
       comboStrategy,
       endpoint: endpointPath,
+      sessionRouting: executionSessionRouting,
     });
 
     // ── Phase 9.1: Cache store (non-streaming, temp=0) ──
@@ -4222,7 +4307,7 @@ export async function handleChatCore({
     // === Quota Share POST-hook (B/F7) — fire-and-forget, fail-open ===
     await scheduleQuotaShareConsumption({
       apiKeyId: apiKeyInfo?.id,
-      connectionId: credentials?.connectionId,
+      connectionId: successConnectionId,
       provider,
       model,
       usage,
@@ -4447,6 +4532,7 @@ export async function handleChatCore({
       isCombo,
       comboStrategy,
       endpoint: endpointPath,
+      sessionRouting: executionSessionRouting,
     });
 
     persistAttemptLogs({

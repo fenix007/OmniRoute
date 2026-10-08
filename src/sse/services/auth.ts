@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "crypto";
+import { randomUUID } from "crypto";
 import { getAccountModelSupport, saveAccountModelSupport } from "@/lib/db/accountModelSupport";
 import { diagnoseAccountModel } from "./accountModelDiagnostics";
 import {
@@ -81,7 +81,10 @@ import { resolveAccountProxiesFromRegistry } from "./noAuthProxyResolution";
 import * as log from "../utils/logger";
 import { fisherYatesShuffle, getNextFromDeckSync } from "@/shared/utils/shuffleDeck";
 import { selectCodexDeadlineConnection } from "./codexQuotaDeadlineRouting";
-import { readHeaderValue } from "./authRequest";
+import { resolveSessionIdentity } from "@omniroute/open-sse/services/sessionIdentity.ts";
+import { inspectSessionAccountAffinity } from "@/lib/db/sessionAccountAffinity";
+import { buildSessionRouting } from "./sessionRoutingDiagnostics";
+import type { SessionSource } from "@/lib/usage/sessionRouting";
 import { filterPerplexityConnectionsByQuota } from "./perplexityQuotaRouting";
 
 export { extractApiKey } from "./authRequest";
@@ -135,6 +138,8 @@ interface CredentialSelectionOptions {
   forcedConnectionId?: string | null;
   excludeConnectionIds?: string[] | null;
   sessionKey?: string | null;
+  sessionSource?: SessionSource;
+  previousConnectionId?: string | null;
   sessionAffinityTtlMs?: number | null;
 }
 
@@ -219,83 +224,12 @@ function toBooleanOrDefault(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
-function normalizeSessionKey(value: unknown, prefix: string): string | null {
-  if (typeof value !== "string" || value.trim().length === 0) return null;
-  const trimmed = value.trim();
-  if (trimmed.length <= 180 && /^[A-Za-z0-9._:-]+$/.test(trimmed)) {
-    return `${prefix}:${trimmed}`;
-  }
-  return `${prefix}:sha256:${createHash("sha256").update(trimmed).digest("hex")}`;
-}
-
-function extractTextForSessionHash(value: unknown): string | null {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    const parts = value
-      .map((item) => {
-        if (typeof item === "string") return item;
-        const record = asRecord(item);
-        if (typeof record.text === "string") return record.text;
-        if (typeof record.content === "string") return record.content;
-        return null;
-      })
-      .filter(Boolean) as string[];
-    return parts.length > 0 ? parts.join("\n") : JSON.stringify(value);
-  }
-  if (value && typeof value === "object") return JSON.stringify(value);
-  return null;
-}
-
-function getFirstInputText(body: unknown): string | null {
-  const record = asRecord(body);
-  if (record.input !== undefined) {
-    if (typeof record.input === "string") return record.input;
-    if (Array.isArray(record.input)) {
-      for (const item of record.input) {
-        const itemRecord = asRecord(item);
-        const text = extractTextForSessionHash(itemRecord.content ?? item);
-        if (text && text.trim().length > 0) return text;
-      }
-    }
-    const text = extractTextForSessionHash(record.input);
-    if (text && text.trim().length > 0) return text;
-  }
-
-  if (Array.isArray(record.messages)) {
-    const userMessage = record.messages.find((message) => asRecord(message).role === "user");
-    const firstMessage = userMessage ?? record.messages[0];
-    const text = extractTextForSessionHash(asRecord(firstMessage).content ?? firstMessage);
-    if (text && text.trim().length > 0) return text;
-  }
-
-  return null;
-}
-
 export function extractSessionAffinityKey(
   body: unknown,
-  headers?: Headers | { get?: (name: string) => string | null } | null
+  headers?: Headers | { get?: (name: string) => string | null } | null,
+  authenticatedApiKeyId: string | null = null
 ): string | null {
-  const headerKey = normalizeSessionKey(
-    readHeaderValue(headers, "x-codex-session-id") ??
-      readHeaderValue(headers, "x-session-id") ??
-      readHeaderValue(headers, "x-omniroute-session"),
-    "header"
-  );
-  if (headerKey) return headerKey;
-
-  const record = asRecord(body);
-  const metadata = asRecord(record.metadata);
-  const explicitKey =
-    normalizeSessionKey(metadata.session_id, "metadata") ??
-    normalizeSessionKey(metadata.sessionId, "metadata") ??
-    normalizeSessionKey(record.conversation_id, "conversation") ??
-    normalizeSessionKey(record.session_id, "session") ??
-    normalizeSessionKey(record.prompt_cache_key, "prompt-cache");
-  if (explicitKey) return explicitKey;
-
-  const inputText = getFirstInputText(body);
-  if (!inputText || inputText.trim().length === 0) return null;
-  return `input:sha256:${createHash("sha256").update(inputText.slice(0, 4096)).digest("hex")}`;
+  return resolveSessionIdentity(body, headers, authenticatedApiKeyId).key;
 }
 
 function getCodexLimitPolicy(providerSpecificData: JsonRecord): {
@@ -915,7 +849,10 @@ const selectionMutexes = new Map<string, Promise<void>>();
 function getSelectionMutexKey(provider: string, options: CredentialSelectionOptions): string {
   return [
     resolveProviderId(provider) || provider,
-    options.forcedConnectionId ? `forced:${options.forcedConnectionId}` : "pool",
+    // Codex forced candidates can belong to the same session: serialize with its pool.
+    resolveProviderId(provider) !== "codex" && options.forcedConnectionId
+      ? `forced:${options.forcedConnectionId}`
+      : "pool",
   ].join(":");
 }
 
@@ -1053,6 +990,10 @@ export async function getProviderCredentials(
     // the TTL before forcedConnectionId narrows the connection pool.
     const settings = await getSettings();
     const sessionAffinityTtlMs = resolveSessionAffinityTtlMs(provider, options, settings);
+    const previousPin =
+      options.sessionKey && sessionAffinityTtlMs > 0
+        ? inspectSessionAccountAffinity(options.sessionKey, provider)
+        : null;
 
     // Fix #922: Check for aliases (nvidia/nvidia_nim) to ensure credentials are found
     const providersToSearch = await getProviderSearchPool(provider);
@@ -1544,6 +1485,7 @@ export async function getProviderCredentials(
       strategy === "quota-deadline" && provider === "codex"
         ? (candidates: any[]) => selectCodexDeadlineConnection(candidates)?.connection ?? null
         : undefined;
+    const selectionStartedAt = Date.now();
     const affinityConnection = await selectSessionAffinityConnection(
       provider,
       options.sessionKey,
@@ -1763,6 +1705,19 @@ export async function getProviderCredentials(
       provider: connection.provider,
       email: connection.email,
       connectionId: connection.id,
+      sessionRouting:
+        resolvedId === "codex"
+          ? buildSessionRouting({
+              sessionKey: options.sessionKey,
+              sessionSource: options.sessionSource,
+              previousPin,
+              previousConnectionId: options.previousConnectionId ?? excludeConnectionId,
+              selectedConnectionId: connection.id,
+              affinitySelected: Boolean(affinityConnection),
+              forcedConnectionId,
+              now: selectionStartedAt,
+            })
+          : undefined,
       // Include current status for optimization check
       testStatus: connection.testStatus,
       lastError: connection.lastError,
@@ -1811,6 +1766,7 @@ export async function getProviderCredentialsWithQuotaPreflight(
   const FACTORY_NO_OP_REMAINING_PERCENT = 2;
   const globalDefaultIsRestrictive = defaultThresholdPercent > FACTORY_NO_OP_REMAINING_PERCENT;
 
+  let previousConnectionId = options.previousConnectionId ?? excludeConnectionId;
   while (true) {
     const credentials = await getProviderCredentials(
       provider,
@@ -1819,6 +1775,7 @@ export async function getProviderCredentialsWithQuotaPreflight(
       requestedModel,
       {
         ...options,
+        previousConnectionId,
         excludeConnectionIds: Array.from(excludedConnectionIds),
       }
     );
@@ -1855,6 +1812,7 @@ export async function getProviderCredentialsWithQuotaPreflight(
       const diagnosis = await diagnoseAccountModel(provider, credentials, requestedModel);
       if (diagnosis?.status === "unsupported") {
         excludedConnectionIds.add(connectionId);
+        previousConnectionId = connectionId;
         log.info(
           "MODEL_DIAGNOSTICS",
           `${connectionId.slice(0, 8)} does not support ${requestedModel}; selecting another account`
@@ -1947,6 +1905,7 @@ export async function getProviderCredentialsWithQuotaPreflight(
       resetAt: unavailableUntil,
     });
     excludedConnectionIds.add(connectionId);
+    previousConnectionId = connectionId;
 
     log.info(
       "AUTH",

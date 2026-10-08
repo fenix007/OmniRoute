@@ -11,6 +11,7 @@
  */
 
 import { saveRequestUsage } from "@/lib/usageDb";
+import type { SessionRouting } from "@/lib/usage/sessionRouting";
 import { recordTokenUsage } from "../../services/tokenLimitCounter.ts";
 import { computeBillableTokens } from "./upstreamTimeouts.ts";
 import { type EffectiveServiceTier } from "./serviceTier.ts";
@@ -28,6 +29,7 @@ export type RecordStreamingUsageStatsContext = {
   isCombo: boolean;
   comboStrategy: string | null | undefined;
   endpoint?: string | null | undefined;
+  sessionRouting?: SessionRouting | null;
 };
 
 function persistStreamingUsageRow(usage: object, ctx: RecordStreamingUsageStatsContext): void {
@@ -48,6 +50,7 @@ function persistStreamingUsageRow(usage: object, ctx: RecordStreamingUsageStatsC
     serviceTier: ctx.effectiveServiceTier,
     comboStrategy: ctx.isCombo ? ctx.comboStrategy || undefined : undefined,
     endpoint: ctx.endpoint || undefined,
+    sessionRouting: ctx.sessionRouting,
   }).catch((err) => {
     console.error("Failed to save usage stats:", err.message);
   });

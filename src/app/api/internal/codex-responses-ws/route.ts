@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { CodexExecutor } from "@omniroute/open-sse/executors/codex.ts";
+import { createCodexClientIdentity } from "@omniroute/open-sse/config/codexIdentity.ts";
 import { normalizeCodexWsHeaders } from "@omniroute/open-sse/executors/codex/websocketHeaders.ts";
+import { resolveSessionIdentity } from "@omniroute/open-sse/services/sessionIdentity.ts";
 import { getApiKeyMetadata } from "@/lib/db/apiKeys";
+import { parseSessionRouting } from "@/lib/usage/sessionRouting";
 import { authorizeWebSocketHandshake, extractWsTokenFromRequest } from "@/lib/ws/handshake";
 import { getModelInfo } from "@/sse/services/model";
 import { getProviderCredentialsWithQuotaPreflight } from "@/sse/services/auth";
@@ -372,6 +375,11 @@ async function prepare(body: JsonRecord) {
     metadata && Array.isArray(metadata.allowedConnections) && metadata.allowedConnections.length > 0
       ? metadata.allowedConnections
       : null;
+  const sessionIdentity = resolveSessionIdentity(
+    responseBody,
+    authRequest.headers,
+    metadata?.id || null
+  );
 
   // codex-only bridge: re-resolve bare ChatGPT model ids (the Codex CLI rejects
   // provider-prefixed ids client-side over WebSocket) as codex models.
@@ -391,7 +399,11 @@ async function prepare(body: JsonRecord) {
     provider,
     null,
     allowedConnections,
-    model
+    model,
+    {
+      sessionKey: sessionIdentity.key,
+      sessionSource: sessionIdentity.source,
+    }
   );
 
   if (!credentials || "allRateLimited" in credentials) {
@@ -407,12 +419,26 @@ async function prepare(body: JsonRecord) {
     return jsonError(401, "codex_oauth_token_missing", "Codex OAuth access token is missing");
   }
 
+  const clientIdentity = createCodexClientIdentity(
+    sessionIdentity.upstreamSessionId,
+    refreshedCredentials.providerSpecificData
+  );
+  const requestCredentials = clientIdentity
+    ? {
+        ...refreshedCredentials,
+        providerSpecificData: {
+          ...(refreshedCredentials.providerSpecificData || {}),
+          codexClientIdentity: clientIdentity,
+        },
+      }
+    : refreshedCredentials;
+
   const responseBodyWithMemory = await maybeInjectResponsesWsMemory(responseBody, metadata);
   const transformed = (await executor.transformRequest(
     model,
     responseBodyWithMemory,
     true,
-    refreshedCredentials
+    requestCredentials
   )) as JsonRecord;
   transformed.model = model;
   delete transformed.stream;
@@ -424,7 +450,7 @@ async function prepare(body: JsonRecord) {
     )
   );
   const headers = normalizeCodexWsHeaders(
-    executor.buildHeaders(refreshedCredentials, true, clientHeaders)
+    executor.buildHeaders(requestCredentials, true, clientHeaders)
   );
 
   // #5611: apply the configured Global/provider proxy to the upstream Codex
@@ -453,6 +479,7 @@ async function prepare(body: JsonRecord) {
     model,
     headers,
     proxy,
+    sessionRouting: "sessionRouting" in credentials ? credentials.sessionRouting : null,
     response: transformed,
   });
 }
@@ -504,6 +531,7 @@ async function persistResponsesWsCallHistory(body: JsonRecord) {
   const targetFormat = toStringOrNull(body.targetFormat) || "openai-responses";
   const targetUrl = toStringOrNull(body.upstreamUrl) || CODEX_RESPONSES_WS_URL;
   const account = toStringOrNull(body.account);
+  const sessionRouting = parseSessionRouting(body.sessionRouting);
 
   await saveCallLog({
     id: toStringOrNull(body.sessionId) || undefined,
@@ -546,9 +574,10 @@ async function persistResponsesWsCallHistory(body: JsonRecord) {
     status: String(status),
     success,
     latencyMs: durationMs,
-    timeToFirstTokenMs: durationMs,
+    timeToFirstTokenMs: null,
     errorCode,
     endpoint: "/v1/responses",
+    sessionRouting,
   });
 
   logProxyEvent({

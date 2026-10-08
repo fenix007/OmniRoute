@@ -1,3 +1,5 @@
+import { resolveSessionIdentity } from "../../services/sessionIdentity.ts";
+
 /**
  * chatCore executor client-header normalizer (Quality Gate v2 / Fase 9 — chatCore god-file
  * decomposition, #3501).
@@ -10,7 +12,8 @@
 
 export function buildExecutorClientHeaders(
   headers: Headers | Record<string, unknown> | null | undefined,
-  userAgent?: string | null
+  userAgent?: string | null,
+  originalCodexBody?: unknown
 ) {
   const normalized: Record<string, string> = {};
 
@@ -32,5 +35,15 @@ export function buildExecutorClientHeaders(
     normalized["User-Agent"] = normalizedUserAgent;
   }
 
+  // Resolve before translation can drop metadata or alternate body identifiers.
+  if (originalCodexBody !== undefined) {
+    const sessionId = resolveSessionIdentity(originalCodexBody, headers, null).upstreamSessionId;
+    if (sessionId) {
+      for (const key of Object.keys(normalized)) {
+        if (key.toLowerCase() === "x-codex-session-id") delete normalized[key];
+      }
+      normalized["x-codex-session-id"] = sessionId;
+    }
+  }
   return Object.keys(normalized).length > 0 ? normalized : null;
 }

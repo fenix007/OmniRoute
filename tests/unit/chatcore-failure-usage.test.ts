@@ -22,6 +22,12 @@ test("maps a fully-populated failure into the usage record", () => {
     statusCode: 429,
     errorCode: "rate_limited",
     latencyMs: 1234,
+    sessionRouting: {
+      sessionHash: "c".repeat(64),
+      sessionSource: "session",
+      routingReason: "affinity_expired",
+      previousConnectionId: "conn-old",
+    },
   });
   assert.equal(r.provider, "openai");
   assert.equal(r.model, "gpt-4o");
@@ -37,6 +43,12 @@ test("maps a fully-populated failure into the usage record", () => {
   assert.equal(r.apiKeyName, "My Key");
   assert.equal(r.serviceTier, "priority");
   assert.equal(r.comboStrategy, "weighted");
+  assert.deepEqual(r.sessionRouting, {
+    sessionHash: "c".repeat(64),
+    sessionSource: "session",
+    routingReason: "affinity_expired",
+    previousConnectionId: "conn-old",
+  });
 });
 
 test("applies the unknown/undefined fallbacks", () => {
@@ -64,16 +76,30 @@ test("applies the unknown/undefined fallbacks", () => {
 
 test("combo strategy is included only for combo requests", () => {
   const combo = buildFailureUsageRecord({
-    provider: "x", model: "y", connectionId: null, apiKeyInfo: null,
-    effectiveServiceTier: "standard", isCombo: true, comboStrategy: "round-robin",
-    statusCode: 500, errorCode: "boom", latencyMs: 1,
+    provider: "x",
+    model: "y",
+    connectionId: null,
+    apiKeyInfo: null,
+    effectiveServiceTier: "standard",
+    isCombo: true,
+    comboStrategy: "round-robin",
+    statusCode: 500,
+    errorCode: "boom",
+    latencyMs: 1,
   });
   assert.equal(combo.comboStrategy, "round-robin");
 
   const comboNoStrategy = buildFailureUsageRecord({
-    provider: "x", model: "y", connectionId: null, apiKeyInfo: null,
-    effectiveServiceTier: "standard", isCombo: true, comboStrategy: null,
-    statusCode: 500, errorCode: "boom", latencyMs: 1,
+    provider: "x",
+    model: "y",
+    connectionId: null,
+    apiKeyInfo: null,
+    effectiveServiceTier: "standard",
+    isCombo: true,
+    comboStrategy: null,
+    statusCode: 500,
+    errorCode: "boom",
+    latencyMs: 1,
   });
   assert.equal(comboNoStrategy.comboStrategy, undefined);
 });

@@ -8,6 +8,8 @@
  * `latencyMs` (Date.now() - startTime) and fires the fire-and-forget saveRequestUsage(...).catch().
  */
 
+import type { SessionRouting } from "@/lib/usage/sessionRouting";
+
 export function buildFailureUsageRecord(opts: {
   provider: string | null | undefined;
   model: string | null | undefined;
@@ -20,6 +22,7 @@ export function buildFailureUsageRecord(opts: {
   errorCode: string | null | undefined;
   latencyMs: number;
   endpoint?: string | null | undefined;
+  sessionRouting?: SessionRouting | null;
 }) {
   return {
     provider: opts.provider || "unknown",
@@ -37,5 +40,6 @@ export function buildFailureUsageRecord(opts: {
     serviceTier: opts.effectiveServiceTier,
     comboStrategy: opts.isCombo ? opts.comboStrategy || undefined : undefined,
     endpoint: opts.endpoint || undefined,
+    sessionRouting: opts.sessionRouting,
   };
 }

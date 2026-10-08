@@ -36,7 +36,7 @@ async function resetStorage() {
 }
 
 async function seedConnection(provider: string, overrides: any = {}) {
-  return providersDb.createProviderConnection({
+  const connection = await providersDb.createProviderConnection({
     provider,
     authType: overrides.authType || "oauth",
     name: overrides.name || `${provider}-${Math.random().toString(16).slice(2, 8)}`,
@@ -47,6 +47,9 @@ async function seedConnection(provider: string, overrides: any = {}) {
     priority: overrides.priority,
     providerSpecificData: overrides.providerSpecificData || {},
   });
+  assert.ok(connection);
+  assert.equal(typeof connection.id, "string");
+  return { ...connection, id: connection.id as string };
 }
 
 test.beforeEach(async () => {
@@ -73,7 +76,11 @@ test("codex session affinity wins over a per-request reset-aware forcedConnectio
     sessionKey: "session-S",
     forcedConnectionId: connectionA.id,
   });
-  assert.equal(request1?.connectionId, connectionA.id, "request 1 should pin to the scored winner A");
+  assert.equal(
+    request1?.connectionId,
+    connectionA.id,
+    "request 1 should pin to the scored winner A"
+  );
   assert.equal(
     affinityDb.getSessionAccountAffinity("session-S", "codex", 60_000)?.connectionId,
     connectionA.id,
@@ -105,7 +112,11 @@ test("codex session affinity wins over a per-request reset-aware forcedConnectio
     sessionKey: "session-S2",
     forcedConnectionId: connectionB.id,
   });
-  assert.equal(request3?.connectionId, connectionB.id, "a new session must honor the fresh re-scored pick");
+  assert.equal(
+    request3?.connectionId,
+    connectionB.id,
+    "a new session must honor the fresh re-scored pick"
+  );
   assert.equal(
     affinityDb.getSessionAccountAffinity("session-S2", "codex", 60_000)?.connectionId,
     connectionB.id,
@@ -177,5 +188,63 @@ test("no session affinity configured: reset-aware forcedConnectionId applies exa
     request2?.connectionId,
     connectionB.id,
     "with affinity disabled (ttl=0) each request must honor the fresh forcedConnectionId"
+  );
+});
+
+test("parallel forced candidates keep one scoped session on one account", async () => {
+  await settingsDb.updateSettings({ codexSessionAffinityTtlMs: 30 * 60_000 });
+  const a = await seedConnection("codex", { name: "parallel-a" });
+  const b = await seedConnection("codex", { name: "parallel-b" });
+  const sessionKey = auth.extractSessionAffinityKey({ session_id: "parallel" }, null, "key-one");
+  const results = await Promise.all(
+    [a, b].map((connection) =>
+      auth.getProviderCredentials("codex", null, null, "gpt-5.5", {
+        sessionKey,
+        sessionSource: "session",
+        forcedConnectionId: connection.id,
+      })
+    )
+  );
+  assert.ok(results[0] && "sessionRouting" in results[0]);
+  assert.ok(results[1] && "sessionRouting" in results[1]);
+  assert.equal(results[0]?.connectionId, a.id);
+  assert.equal(results[1]?.connectionId, a.id);
+  assert.equal(results[0]?.sessionRouting?.routingReason, "affinity_created");
+  assert.equal(results[1]?.sessionRouting?.routingReason, "affinity_reused");
+  assert.equal(
+    results[0]?.sessionRouting?.sessionHash,
+    sessionKey?.slice("session:sha256:".length)
+  );
+});
+
+test("selection diagnostics retain expiry and failed-account reassignment", async () => {
+  const ttl = 30 * 60_000;
+  await settingsDb.updateSettings({ codexSessionAffinityTtlMs: ttl });
+  const a = await seedConnection("codex", { name: "diagnostic-a" });
+  const b = await seedConnection("codex", { name: "diagnostic-b" });
+  const sessionKey = auth.extractSessionAffinityKey({ session_id: "diagnostic" }, null, "key-one")!;
+  affinityDb.upsertSessionAccountAffinity(sessionKey, "codex", a.id, Date.now() - ttl - 100, ttl);
+  const expired = await auth.getProviderCredentials("codex", null, null, "gpt-5.5", {
+    sessionKey,
+    sessionSource: "session",
+    forcedConnectionId: b.id,
+  });
+  assert.ok(expired && "sessionRouting" in expired);
+  assert.equal(expired?.connectionId, b.id);
+  assert.equal(expired?.sessionRouting?.routingReason, "affinity_expired");
+  assert.equal(expired?.sessionRouting?.previousConnectionId, a.id);
+  affinityDb.evictSessionAccountAffinityForConnection(sessionKey, "codex", b.id);
+  const fallback = await auth.getProviderCredentials("codex", b.id, null, "gpt-5.5", {
+    sessionKey,
+    sessionSource: "session",
+  });
+  assert.ok(fallback && "sessionRouting" in fallback);
+  assert.equal(fallback?.connectionId, a.id);
+  assert.equal(fallback?.sessionRouting?.routingReason, "affinity_reassigned");
+  assert.equal(fallback?.sessionRouting?.previousConnectionId, b.id);
+  assert.equal(
+    expired?.sessionRouting?.routingReason,
+    "affinity_expired",
+    "later attempts cannot mutate prior telemetry"
   );
 });
