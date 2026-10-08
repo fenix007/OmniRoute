@@ -164,9 +164,20 @@ export function normalizeCodexTools(
   });
 
   // Optional choices are redundant without tools and rejected by the Codex backend.
+  // Responses Lite can declare tools in input[].additional_tools instead of top-level tools.
   // Keep forced choices for upstream validation rather than silently changing their intent.
+  const hasAdditionalTools =
+    Array.isArray(body.input) &&
+    body.input.some((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      const record = item as Record<string, unknown>;
+      return (
+        record.type === "additional_tools" && Array.isArray(record.tools) && record.tools.length > 0
+      );
+    });
   if (
     (body.tools as unknown[]).length === 0 &&
+    !hasAdditionalTools &&
     (body.tool_choice === "auto" || body.tool_choice === "none")
   ) {
     delete body.tool_choice;

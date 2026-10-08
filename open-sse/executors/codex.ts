@@ -10,6 +10,7 @@ export { getCodexUpstreamModel } from "../config/codexModels.ts";
 import { resolveCodexAccountId } from "../utils/codexAccount.ts";
 import { normalizeCodexWsHeaders } from "./codex/websocketHeaders.ts";
 import { sanitizeCodexInputItemIds } from "./codex/inputIds.ts";
+import { ensureCodexCompactionWebSearchTool } from "./codex/webSearchReplay.ts";
 import { stripStoredItemReferences } from "./codex/storedItemReferences.ts";
 import { getCodexRequestDefaults } from "@/lib/providers/requestDefaults";
 import {
@@ -755,11 +756,20 @@ export class CodexExecutor extends BaseExecutor {
   }
 
   async execute(input: ExecuteInput) {
-    const requestBody = enforceCodexResponsesLiteParallelToolCalls(
+    const isResponsesLite = isCodexResponsesLiteRequest(input.body, input.clientHeaders);
+    const liteBody = enforceCodexResponsesLiteParallelToolCalls(
       input.body,
       input.clientHeaders,
       input.model
     );
+    const requestBody = ensureCodexCompactionWebSearchTool(liteBody, {
+      isResponsesLite,
+      isNativeCompact: isCompactResponsesEndpoint(input.credentials?.requestEndpointPath),
+      turnMetadataHeader: getHeaderValueCaseInsensitive(
+        input.clientHeaders,
+        "x-codex-turn-metadata"
+      ),
+    });
     const requestInput = requestBody === input.body ? input : { ...input, body: requestBody };
     const sessionId = this.getPromptCacheSessionId(
       requestInput.credentials,
