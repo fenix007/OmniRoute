@@ -1,6 +1,5 @@
 import { randomUUID } from "crypto";
 import { getAccountModelSupport, saveAccountModelSupport } from "@/lib/db/accountModelSupport";
-import { diagnoseAccountModel } from "./accountModelDiagnostics";
 import {
   getProviderConnections,
   getProviderNodes,
@@ -1806,10 +1805,12 @@ export async function getProviderCredentialsWithQuotaPreflight(
       return credentials;
     }
 
-    // Diagnose only the selected account, outside the selection mutex. A known
-    // entitlement gap never receives the caller's payload, even on quota bypass.
+    // Routing consumes existing account/model evidence. A live synthetic probe
+    // can take 10 seconds and must not precede every uncached user's generation.
+    // Explicit management diagnostics still probe; actual unsupported-model
+    // responses are persisted by markAccountUnavailable and rotate accounts.
     if (provider === "codex" && requestedModel) {
-      const diagnosis = await diagnoseAccountModel(provider, credentials, requestedModel);
+      const diagnosis = getAccountModelSupport(provider, credentials, requestedModel);
       if (diagnosis?.status === "unsupported") {
         excludedConnectionIds.add(connectionId);
         previousConnectionId = connectionId;

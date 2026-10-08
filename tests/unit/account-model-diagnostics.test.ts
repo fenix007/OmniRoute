@@ -104,7 +104,7 @@ test("single flight sends a synthetic wire-model prompt and reuses cached eviden
   assert.equal(calls, 1);
 });
 
-test("preflight diagnoses denied account then chooses an allowed account, including quota bypass", async () => {
+test("preflight reuses explicit diagnosis and skips denied accounts without probing, including quota bypass", async () => {
   const denied = await seedConnection("codex", { accessToken: "denied-token", priority: 1 });
   const allowed = await seedConnection("codex", { accessToken: "allowed-token", priority: 2 });
   const calls: string[] = [];
@@ -115,6 +115,10 @@ test("preflight diagnoses denied account then chooses an allowed account, includ
       ? Response.json({ error: { message: missingModel } }, { status: 404 })
       : completed();
   };
+  await diagnoseAccountModel("codex", denied, "gpt-5.5-medium");
+  await diagnoseAccountModel("codex", allowed, "gpt-5.5-medium");
+  assert.deepEqual(calls, ["Bearer denied-token", "Bearer allowed-token"]);
+  calls.length = 0;
   const credentials = await auth.getProviderCredentialsWithQuotaPreflight(
     "codex",
     null,
@@ -123,7 +127,7 @@ test("preflight diagnoses denied account then chooses an allowed account, includ
     { bypassQuotaPolicy: true }
   );
   assert.equal(credentials?.connectionId, allowed.id);
-  assert.deepEqual(calls, ["Bearer denied-token", "Bearer allowed-token"]);
+  assert.deepEqual(calls, []);
   assert.equal(await auth.getProviderCredentials("codex", null, [denied.id], "gpt-5.5-high"), null);
   assert.equal(
     await auth.getProviderCredentials("codex", null, null, "gpt-5.5", {
@@ -175,9 +179,11 @@ test("failed SSE, split chunks, empty streams and oversized responses are classi
   }
 });
 
-test("probe transport failures never prevent credential selection", async () => {
+test("uncached routing dispatches without a synthetic LLM call or invented support evidence", async () => {
   const account = await seedConnection("codex", { accessToken: "test-token" });
+  let calls = 0;
   globalThis.fetch = async () => {
+    calls++;
     throw new Error("network unavailable");
   };
   const selected = await auth.getProviderCredentialsWithQuotaPreflight(
@@ -188,7 +194,8 @@ test("probe transport failures never prevent credential selection", async () => 
     { bypassQuotaPolicy: true }
   );
   assert.equal(selected?.connectionId, account.id);
-  assert.equal(getAccountModelSupport("codex", account, "gpt-5.5")?.status, "unknown");
+  assert.equal(calls, 0);
+  assert.equal(getAccountModelSupport("codex", account, "gpt-5.5"), null);
 });
 
 test("concurrent probes are capped, and cache write failure does not lose the result", async () => {
