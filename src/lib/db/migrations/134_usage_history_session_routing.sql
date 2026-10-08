@@ -1,4 +1,4 @@
--- Migration 124: Add privacy-safe session-routing diagnostics to usage history.
+-- Migration 134: Add privacy-safe session-routing diagnostics to usage history.
 -- session_hash is a one-way SHA-256 correlation value; raw session identifiers
 -- and prompt/cache keys must never be stored in this table.
 ALTER TABLE usage_history ADD COLUMN session_hash TEXT;

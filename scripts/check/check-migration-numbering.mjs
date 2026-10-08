@@ -48,9 +48,25 @@ export const KNOWN_DUPLICATE_VERSIONS = new Set([
 // para que o gate bloqueie apenas NOVOS buracos inexplicados na sequência.
 // ---------------------------------------------------------------------------
 // 121: número queimado no ciclo v3.8.47 — 122 (#6909) mergeou antes e 121 nunca aterrissou.
-// 123: already used by quota_auto_ping in existing local migration history;
-// reserve it to avoid a name/checksum collision. Session diagnostics use 124.
-export const KNOWN_GAPS = new Set(["026", "055", "121", "123"]);
+// 123–133: already present in production migration history under other names
+// (quota_auto_ping through call_logs_session_tag). Never reuse those versions;
+// session-routing diagnostics use 134. The fork does not replay those migrations.
+export const KNOWN_GAPS = new Set([
+  "026",
+  "055",
+  "121",
+  "123",
+  "124",
+  "125",
+  "126",
+  "127",
+  "128",
+  "129",
+  "130",
+  "131",
+  "132",
+  "133",
+]);
 
 function pad3(n) {
   return String(n).padStart(3, "0");
