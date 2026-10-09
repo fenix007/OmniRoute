@@ -70,6 +70,7 @@ import { saveImageErrorResult, saveImageSuccessResult } from "./imageGeneration/
 
 // Re-export so route-level fallbacks can log per-connection results.
 export { saveImageErrorResult, saveImageSuccessResult };
+export { finalizeImageErrorResult } from "./imageGeneration/callLogResult.ts";
 
 interface KieImageOptions {
   model: string;
@@ -290,6 +291,7 @@ export async function handleImageGeneration({
   resolvedProvider = null,
   signal = null,
   clientHeaders = null,
+  deferFailureLog = false,
 }) {
   let provider, model;
 
@@ -502,6 +504,8 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
+      deferFailureLog,
     });
   }
 
@@ -2186,6 +2190,7 @@ export function extractImageGenerationCalls(
   sseText: string
 ): Array<{ b64: string; revisedPrompt: string | null }> {
   const results: Array<{ b64: string; revisedPrompt: string | null }> = [];
+  const terminalResults: Array<{ b64: string; revisedPrompt: string | null }> = [];
   const lines = String(sseText || "").split("\n");
   for (const line of lines) {
     const trimmed = line.trim();
@@ -2198,15 +2203,144 @@ export function extractImageGenerationCalls(
     } catch {
       continue;
     }
-    if (evt?.type !== "response.output_item.done") continue;
-    const item = evt.item as Record<string, unknown> | undefined;
-    if (!item || item.type !== "image_generation_call") continue;
-    const result = typeof item.result === "string" ? item.result : "";
-    if (!result) continue;
-    const revisedPrompt = typeof item.revised_prompt === "string" ? item.revised_prompt : null;
-    results.push({ b64: result, revisedPrompt });
+    if (!evt || typeof evt !== "object" || Array.isArray(evt)) continue;
+    const response = evt.response as Record<string, unknown> | undefined;
+    const items =
+      evt.type === "response.output_item.done"
+        ? [evt.item]
+        : evt.type === "response.completed" && Array.isArray(response?.output)
+          ? response.output
+          : [];
+    for (const value of items) {
+      if (!value || typeof value !== "object") continue;
+      const item = value as Record<string, unknown>;
+      if (item.type !== "image_generation_call") continue;
+      const result = typeof item.result === "string" ? item.result : "";
+      if (!result) continue;
+      const revisedPrompt = typeof item.revised_prompt === "string" ? item.revised_prompt : null;
+      const target = evt.type === "response.completed" ? terminalResults : results;
+      target.push({ b64: result, revisedPrompt });
+    }
   }
-  return results;
+  return results.length > 0 ? results : terminalResults;
+}
+
+// The successful image path already parses SSE. Inspect only failed responses,
+// and keep this summary free of prompts, output text and image bytes.
+export function classifyCodexImageFailure(sseText: string): {
+  kind: string;
+  upstreamCode: string | null;
+  sawDone: boolean;
+  sawImageItem: boolean;
+} {
+  let terminal: string | null = null;
+  let upstreamCode: string | null = null;
+  let sawDone = false;
+  let sawEmptyImageItem = false;
+  let sawImageItem = false;
+  let imageInTerminalOnly = false;
+  let sawRefusal = false;
+  const safeCode = (value: unknown) =>
+    typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/i.test(value)
+      ? value.toLowerCase()
+      : null;
+
+  for (const line of String(sseText || "")
+    .slice(-64 * 1024)
+    .split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (payload === "[DONE]") {
+      sawDone = true;
+      continue;
+    }
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(payload) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (!event || typeof event !== "object" || Array.isArray(event)) continue;
+    const type = typeof event.type === "string" ? event.type : "";
+    const response = event.response as Record<string, unknown> | undefined;
+    const item = event.item as Record<string, unknown> | undefined;
+    const isTerminal = [
+      "response.completed",
+      "response.failed",
+      "response.incomplete",
+      "error",
+    ].includes(type);
+    const error = (event.error || response?.error || (type === "error" ? event : null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (isTerminal) {
+      upstreamCode = safeCode(error?.code);
+      if (type === "response.incomplete" && !upstreamCode) {
+        const details = response?.incomplete_details as Record<string, unknown> | undefined;
+        upstreamCode = safeCode(details?.reason);
+      }
+      if (
+        !upstreamCode &&
+        typeof error?.message === "string" &&
+        /\boverloaded\b/i.test(error.message)
+      ) {
+        upstreamCode = "overloaded";
+      }
+    }
+    if (type === "response.output_item.done" && item?.type === "image_generation_call") {
+      sawImageItem = true;
+      sawEmptyImageItem = true;
+    }
+    if (Array.isArray(response?.output)) {
+      for (const outputItem of response.output) {
+        if (!outputItem || typeof outputItem !== "object") continue;
+        const finalItem = outputItem as Record<string, unknown>;
+        if (finalItem.type === "image_generation_call") {
+          sawImageItem = true;
+          imageInTerminalOnly ||=
+            typeof finalItem.result === "string" && finalItem.result.length > 0;
+        }
+        if (finalItem.type === "message" && Array.isArray(finalItem.content)) {
+          sawRefusal ||= finalItem.content.some(
+            (part: unknown) =>
+              part &&
+              typeof part === "object" &&
+              ["refusal", "output_refusal"].includes(
+                (part as Record<string, unknown>).type as string
+              )
+          );
+        }
+      }
+    }
+    if (item?.type === "message" && Array.isArray(item.content)) {
+      sawRefusal ||= item.content.some(
+        (part: unknown) =>
+          part &&
+          typeof part === "object" &&
+          ["refusal", "output_refusal"].includes((part as Record<string, unknown>).type as string)
+      );
+    }
+    if (isTerminal) {
+      terminal = type;
+    }
+  }
+
+  const kind = sawRefusal
+    ? "refusal"
+    : imageInTerminalOnly
+      ? "image_in_terminal_only"
+      : terminal === "response.failed" || terminal === "error"
+        ? "response_failed"
+        : terminal === "response.incomplete"
+          ? "response_incomplete"
+          : sawEmptyImageItem
+            ? "empty_image_item"
+            : terminal === "response.completed"
+              ? "completed_no_image"
+              : "no_terminal_event";
+  return { kind, upstreamCode, sawDone, sawImageItem };
 }
 
 // The image_generation hosted tool accepts { "auto" | "low" | "medium" | "high" }
@@ -2226,6 +2360,8 @@ async function handleCodexImageGeneration({
   body,
   credentials,
   log,
+  signal,
+  deferFailureLog,
 }) {
   const startTime = Date.now();
   const prompt = typeof body.prompt === "string" ? body.prompt : "";
@@ -2242,6 +2378,13 @@ async function handleCodexImageGeneration({
 
   const requestedCount =
     Number.isInteger(body.n) && (body.n as number) > 0 ? (body.n as number) : 1;
+  const rawWorkspacePlan = credentials?.providerSpecificData?.workspacePlanType;
+  const workspacePlan =
+    typeof rawWorkspacePlan === "string" && /^[a-z0-9_-]{1,32}$/i.test(rawWorkspacePlan)
+      ? rawWorkspacePlan.toLowerCase()
+      : "unknown";
+  const deferRetryableFailureLog =
+    deferFailureLog && requestedCount === 1 && workspacePlan === "k12";
   if (log && requestedCount > 1) {
     log.warn(
       "IMAGE",
@@ -2308,22 +2451,32 @@ async function handleCodexImageGeneration({
     headers["session_id"] = workspaceId;
   }
 
-  if (log) {
-    log.info(
-      "IMAGE",
-      `${provider}/${model} (codex-responses) | prompt: "${prompt.slice(0, 60)}..."`
-    );
-  }
+  if (log) log.info("IMAGE", `${provider}/${model} (codex-responses)`);
 
   const fetchOneImage = async () => {
+    const cancelled = () => ({
+      ok: false as const,
+      error: {
+        provider,
+        model,
+        connectionId: credentials?.connectionId,
+        status: 499,
+        startTime,
+        error: "client disconnected: request_signal_aborted",
+        requestBody: upstreamBody,
+      },
+    });
+    if (signal?.aborted) return cancelled();
     let response: Response;
     try {
       response = await fetch(providerConfig.baseUrl, {
         method: "POST",
         headers,
         body: JSON.stringify(upstreamBody),
+        signal,
       });
     } catch (err) {
+      if (signal?.aborted) return cancelled();
       if (log) log.error("IMAGE", `${provider} fetch error: ${(err as Error).message}`);
       return {
         ok: false as const,
@@ -2334,13 +2487,35 @@ async function handleCodexImageGeneration({
           status: 502,
           startTime,
           error: `Image provider error: ${(err as Error).message}`,
+          deferLog: deferRetryableFailureLog,
           requestBody: upstreamBody,
         },
       };
     }
 
+    let responseText: string;
+    try {
+      responseText = await response.text();
+    } catch {
+      if (signal?.aborted) return cancelled();
+      return {
+        ok: false as const,
+        error: {
+          provider,
+          model,
+          connectionId: credentials?.connectionId,
+          status: 502,
+          startTime,
+          error: "Image provider response read failed",
+          deferLog: deferRetryableFailureLog,
+          requestBody: upstreamBody,
+        },
+      };
+    }
+    if (signal?.aborted) return cancelled();
+
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = responseText;
       if (log)
         log.error("IMAGE", `${provider} error ${response.status}: ${errorText.slice(0, 200)}`);
       return {
@@ -2352,14 +2527,19 @@ async function handleCodexImageGeneration({
           status: response.status,
           startTime,
           error: errorText,
+          deferLog: deferRetryableFailureLog && [500, 502, 503, 504].includes(response.status),
           requestBody: upstreamBody,
         },
       };
     }
 
-    const rawSSE = await response.text();
+    const rawSSE = responseText;
     const items = extractImageGenerationCalls(rawSSE);
     if (items.length === 0) {
+      const failure = classifyCodexImageFailure(rawSSE);
+      const requestId = response.headers.get("x-request-id");
+      const safeRequestId =
+        requestId && /^[a-zA-Z0-9._-]{1,128}$/.test(requestId) ? requestId : null;
       return {
         ok: false as const,
         error: {
@@ -2368,8 +2548,12 @@ async function handleCodexImageGeneration({
           connectionId: credentials?.connectionId,
           status: 502,
           startTime,
-          error:
-            "Codex completed without producing an image_generation_call — the model may have declined the tool",
+          error: "Codex response ended without producing an image_generation_call",
+          failureCode: "codex_image_no_result",
+          failureKind: failure.kind,
+          upstreamCode: failure.upstreamCode,
+          deferLog: deferRetryableFailureLog,
+          diagnostics: `plan=${workspacePlan};kind=${failure.kind};code=${failure.upstreamCode || "none"};done=${failure.sawDone ? 1 : 0};image_item=${failure.sawImageItem ? 1 : 0}${safeRequestId ? `;request_id=${safeRequestId}` : ""}`,
           requestBody: upstreamBody,
         },
       };
