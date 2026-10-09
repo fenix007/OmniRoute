@@ -1746,7 +1746,8 @@ test("handleImageGeneration normalizes Imagen3 single-image payloads and non-ok 
   }
 });
 
-const { extractImageGenerationCalls } = await import("../../open-sse/handlers/imageGeneration.ts");
+const { extractImageGenerationCalls, classifyCodexImageFailure } =
+  await import("../../open-sse/handlers/imageGeneration.ts");
 
 function buildCodexSSE(items) {
   const frames = items.map((item) => JSON.stringify({ type: "response.output_item.done", item }));
@@ -1785,6 +1786,71 @@ test("extractImageGenerationCalls ignores unrelated events and malformed lines",
     "data: [DONE]",
   ].join("\n");
   assert.deepEqual(extractImageGenerationCalls(sse), []);
+});
+
+test("extractImageGenerationCalls accepts a result present only in the completed response", () => {
+  const sse = `data: ${JSON.stringify({
+    type: "response.completed",
+    response: { output: [{ type: "image_generation_call", result: "dGVybWluYWw=" }] },
+  })}\n\n`;
+  assert.deepEqual(extractImageGenerationCalls(sse), [
+    { b64: "dGVybWluYWw=", revisedPrompt: null },
+  ]);
+  assert.equal(extractImageGenerationCalls(`data: null\n\n${sse}`).length, 1);
+});
+
+test("Codex image failure classification uses only bounded SSE metadata", () => {
+  const failed = [
+    `data: ${JSON.stringify({ type: "response.failed", response: { error: { code: "overloaded", message: "private prompt text" } } })}`,
+    "data: [DONE]",
+  ].join("\r\n\r\n");
+  assert.deepEqual(classifyCodexImageFailure(failed), {
+    kind: "response_failed",
+    upstreamCode: "overloaded",
+    sawDone: true,
+    sawImageItem: false,
+  });
+  assert.deepEqual(
+    classifyCodexImageFailure(
+      `data: ${JSON.stringify({ type: "error", code: "server_error" })}\n\n`
+    ),
+    { kind: "response_failed", upstreamCode: "server_error", sawDone: false, sawImageItem: false }
+  );
+  assert.deepEqual(
+    classifyCodexImageFailure(
+      `data: ${JSON.stringify({
+        type: "response.incomplete",
+        response: { incomplete_details: { reason: "content_filter" } },
+      })}\n\n`
+    ),
+    {
+      kind: "response_incomplete",
+      upstreamCode: "content_filter",
+      sawDone: false,
+      sawImageItem: false,
+    }
+  );
+  assert.deepEqual(
+    classifyCodexImageFailure(
+      `data: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\n`
+    ),
+    { kind: "completed_no_image", upstreamCode: null, sawDone: false, sawImageItem: false }
+  );
+  assert.deepEqual(classifyCodexImageFailure("data: not-json\n\ndata: null\n\n"), {
+    kind: "no_terminal_event",
+    upstreamCode: null,
+    sawDone: false,
+    sawImageItem: false,
+  });
+  assert.deepEqual(
+    classifyCodexImageFailure(
+      `data: ${JSON.stringify({
+        type: "response.completed",
+        response: { output: [{ type: "image_generation_call", result: "base64-canary" }] },
+      })}\n\n`
+    ),
+    { kind: "image_in_terminal_only", upstreamCode: null, sawDone: false, sawImageItem: true }
+  );
 });
 
 test("handleImageGeneration routes codex image requests through /responses with image_generation tool", async () => {

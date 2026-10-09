@@ -41,18 +41,22 @@ async function resetStorage() {
 }
 
 async function seedCodexConnection(overrides: {
-  apiKey: string;
+  apiKey?: string;
+  accessToken?: string;
   name?: string;
   priority?: number;
+  rateLimitedUntil?: string;
   providerSpecificData?: Record<string, unknown>;
 }) {
   return providersDb.createProviderConnection({
     provider: "codex",
-    authType: "apikey",
+    authType: overrides.accessToken ? "oauth" : "apikey",
     name: overrides.name ?? `codex-${Math.random().toString(16).slice(2, 8)}`,
-    apiKey: overrides.apiKey,
+    ...(overrides.apiKey ? { apiKey: overrides.apiKey } : {}),
+    ...(overrides.accessToken ? { accessToken: overrides.accessToken } : {}),
     isActive: true,
     priority: overrides.priority,
+    ...(overrides.rateLimitedUntil ? { rateLimitedUntil: overrides.rateLimitedUntil } : {}),
     testStatus: "active",
     providerSpecificData: overrides.providerSpecificData ?? {},
   });
@@ -74,15 +78,19 @@ function codexImageSuccessResponse(result = "Y29kZXgtaW1hZ2U="): Response {
   });
 }
 
-function postCodexImageGeneration(): Promise<Response> {
+function postCodexImageGeneration(
+  options: { n?: number; signal?: AbortSignal } = {}
+): Promise<Response> {
   return imageRoute.POST(
     new Request("http://localhost/api/v1/images/generations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: options.signal,
       body: JSON.stringify({
         model: "codex/gpt-5.6-sol",
         prompt: "draw a route regression guard",
         response_format: "b64_json",
+        ...(options.n ? { n: options.n } : {}),
       }),
     })
   );
@@ -275,4 +283,316 @@ test("attributes Codex image call logs to the selected connection", async () => 
   assert.equal(row.account, "codex-attributed-account");
   assert.equal(row.model, "codex/gpt-5.6-sol");
   assert.equal(row.status, 200);
+});
+
+test("image credential selection does not run a synthetic model probe", async () => {
+  await seedCodexConnection({
+    accessToken: "oauth-image-token",
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  const inputs: string[] = [];
+  globalThis.fetch = async (_url, options: RequestInit = {}) => {
+    const body = JSON.parse(String(options.body));
+    inputs.push(body.input?.[0]?.content?.[0]?.text);
+    return codexImageSuccessResponse();
+  };
+
+  const response = await postCodexImageGeneration();
+  assert.equal(response.status, 200);
+  assert.deepEqual(inputs, ["draw a route regression guard"]);
+});
+
+test("prefers a plus account for Codex images without an extra upstream request", async () => {
+  await seedCodexConnection({
+    apiKey: "k12-preference-token",
+    priority: 1,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  await seedCodexConnection({
+    apiKey: "plus-preference-token",
+    priority: 2,
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  const authorizations: string[] = [];
+  globalThis.fetch = async (_url, options: RequestInit = {}) => {
+    authorizations.push(new Headers(options.headers).get("authorization")!);
+    return codexImageSuccessResponse();
+  };
+
+  assert.equal((await postCodexImageGeneration()).status, 200);
+  assert.deepEqual(authorizations, ["Bearer plus-preference-token"]);
+});
+
+test("retries a transient k12 image failure exactly once on plus", async () => {
+  const k12 = await seedCodexConnection({
+    apiKey: "k12-image-token",
+    priority: 1,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  await seedCodexConnection({
+    apiKey: "other-k12-image-token",
+    priority: 2,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  const plus = await seedCodexConnection({
+    apiKey: "plus-image-token",
+    priority: 3,
+    rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  const authorizations: string[] = [];
+  globalThis.fetch = async (_url, options: RequestInit = {}) => {
+    const authorization = new Headers(options.headers).get("authorization")!;
+    authorizations.push(authorization);
+    if (authorization === "Bearer k12-image-token") {
+      await providersDb.updateProviderConnection(plus.id, { rateLimitedUntil: null });
+      return new Response(
+        `data: ${JSON.stringify({ type: "response.failed", response: { error: { code: "overloaded" } } })}\n\ndata: [DONE]\n\n`,
+        { status: 200 }
+      );
+    }
+    return codexImageSuccessResponse("cGx1cy1pbWFnZQ==");
+  };
+
+  const response = await postCodexImageGeneration();
+  const body = (await response.json()) as ImageResponseBody;
+  assert.equal(response.status, 200);
+  assert.equal(body.data[0].b64_json, "cGx1cy1pbWFnZQ==");
+  assert.deepEqual(authorizations, ["Bearer k12-image-token", "Bearer plus-image-token"]);
+  const callLogs = await waitForImageCallLogs(1, [k12.id, plus.id]);
+  assert.deepEqual(
+    callLogs.map((row) => [row.connection_id, row.status]),
+    [[plus.id, 200]]
+  );
+});
+
+test("keeps one terminal 5xx when the plus retry also fails", async () => {
+  await seedCodexConnection({
+    apiKey: "k12-double-failure-token",
+    priority: 1,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  const plus = await seedCodexConnection({
+    apiKey: "plus-double-failure-token",
+    priority: 2,
+    rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  const authorizations: string[] = [];
+  globalThis.fetch = async (_url, options: RequestInit = {}) => {
+    const authorization = new Headers(options.headers).get("authorization")!;
+    authorizations.push(authorization);
+    if (authorization === "Bearer k12-double-failure-token") {
+      await providersDb.updateProviderConnection(plus.id, { rateLimitedUntil: null });
+      return new Response(
+        `data: ${JSON.stringify({ type: "response.failed", response: { error: { code: "overloaded" } } })}\n\n`,
+        { status: 200 }
+      );
+    }
+    return new Response("upstream unavailable", { status: 503 });
+  };
+
+  assert.equal((await postCodexImageGeneration()).status, 503);
+  assert.deepEqual(authorizations, [
+    "Bearer k12-double-failure-token",
+    "Bearer plus-double-failure-token",
+  ]);
+  const rows = await waitForImageCallLogs(1);
+  assert.deepEqual(
+    rows.map((row) => [row.connection_id, row.status]),
+    [[plus.id, 503]]
+  );
+});
+
+test("does not retry a completed no-image response or a plus-account failure", async () => {
+  await seedCodexConnection({
+    apiKey: "k12-no-image-token",
+    priority: 1,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  await seedCodexConnection({
+    apiKey: "plus-unused-token",
+    priority: 2,
+    rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  const authorizations: string[] = [];
+  globalThis.fetch = async (_url, options: RequestInit = {}) => {
+    authorizations.push(new Headers(options.headers).get("authorization")!);
+    return new Response(
+      `data: ${JSON.stringify({ type: "response.completed", response: { status: "completed" } })}\n\ndata: [DONE]\n\n`,
+      { status: 200 }
+    );
+  };
+
+  assert.equal((await postCodexImageGeneration()).status, 502);
+  assert.deepEqual(authorizations, ["Bearer k12-no-image-token"]);
+  const [failed] = await waitForImageCallLogs(1);
+  assert.equal(failed.status, 502);
+});
+
+test("does not retry a k12 moderation failure on plus", async () => {
+  await seedCodexConnection({
+    apiKey: "k12-moderation-token",
+    priority: 1,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  await seedCodexConnection({
+    apiKey: "plus-moderation-token",
+    priority: 2,
+    rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  let upstreamCalls = 0;
+  globalThis.fetch = async () => {
+    upstreamCalls++;
+    return new Response(
+      `data: ${JSON.stringify({ type: "response.failed", response: { error: { code: "moderation_blocked" } } })}\n\n`,
+      { status: 200 }
+    );
+  };
+
+  assert.equal((await postCodexImageGeneration()).status, 502);
+  assert.equal(upstreamCalls, 1);
+});
+
+test("preserves the terminal error when no plus account is available", async () => {
+  const k12 = await seedCodexConnection({
+    apiKey: "k12-only-token",
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  let upstreamCalls = 0;
+  globalThis.fetch = async () => {
+    upstreamCalls++;
+    return new Response(
+      `data: ${JSON.stringify({ type: "response.failed", response: { error: { code: "overloaded" } } })}\n\n`,
+      { status: 200 }
+    );
+  };
+
+  assert.equal((await postCodexImageGeneration()).status, 502);
+  assert.equal(upstreamCalls, 1);
+  const [failed] = await waitForImageCallLogs(1, [k12.id]);
+  assert.deepEqual([failed.connection_id, failed.status], [k12.id, 502]);
+});
+
+test("does not retry after the image request is aborted", async () => {
+  await seedCodexConnection({
+    apiKey: "k12-aborted-token",
+    priority: 1,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  await seedCodexConnection({
+    apiKey: "plus-aborted-token",
+    priority: 2,
+    rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  const controller = new AbortController();
+  let upstreamCalls = 0;
+  globalThis.fetch = async () => {
+    upstreamCalls++;
+    controller.abort();
+    return new Response(
+      `data: ${JSON.stringify({ type: "response.failed", response: { error: { code: "overloaded" } } })}\n\n`,
+      { status: 200 }
+    );
+  };
+
+  assert.equal((await postCodexImageGeneration({ signal: controller.signal })).status, 499);
+  assert.equal(upstreamCalls, 1);
+  const [row] = await waitForImageCallLogs(1);
+  assert.equal(row.status, 499);
+});
+
+test("records a client disconnect when the upstream body read aborts", async () => {
+  await seedCodexConnection({
+    apiKey: "k12-body-abort-token",
+    priority: 1,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  await seedCodexConnection({
+    apiKey: "plus-body-abort-token",
+    priority: 2,
+    rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  const controller = new AbortController();
+  let upstreamCalls = 0;
+  globalThis.fetch = async () => {
+    upstreamCalls++;
+    return new Response(
+      new ReadableStream({
+        start(stream) {
+          queueMicrotask(() => {
+            controller.abort();
+            stream.error(new DOMException("body cancelled", "AbortError"));
+          });
+        },
+      }),
+      { status: 200 }
+    );
+  };
+
+  assert.equal((await postCodexImageGeneration({ signal: controller.signal })).status, 499);
+  assert.equal(upstreamCalls, 1);
+  const [row] = await waitForImageCallLogs(1);
+  assert.equal(row.status, 499);
+});
+
+test("retries a top-level transient SSE error on plus", async () => {
+  await seedCodexConnection({
+    apiKey: "k12-top-level-error-token",
+    priority: 1,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  const plus = await seedCodexConnection({
+    apiKey: "plus-top-level-error-token",
+    priority: 2,
+    rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  const authorizations: string[] = [];
+  globalThis.fetch = async (_url, options: RequestInit = {}) => {
+    const authorization = new Headers(options.headers).get("authorization")!;
+    authorizations.push(authorization);
+    if (authorization === "Bearer k12-top-level-error-token") {
+      await providersDb.updateProviderConnection(plus.id, { rateLimitedUntil: null });
+      return new Response(`data: ${JSON.stringify({ type: "error", code: "server_error" })}\n\n`, {
+        status: 200,
+      });
+    }
+    return codexImageSuccessResponse();
+  };
+
+  assert.equal((await postCodexImageGeneration()).status, 200);
+  assert.deepEqual(authorizations, [
+    "Bearer k12-top-level-error-token",
+    "Bearer plus-top-level-error-token",
+  ]);
+});
+
+test("does not fan out a k12 retry when n is greater than one", async () => {
+  await seedCodexConnection({
+    apiKey: "k12-multi-token",
+    priority: 1,
+    providerSpecificData: { workspacePlanType: "k12" },
+  });
+  await seedCodexConnection({
+    apiKey: "plus-multi-token",
+    priority: 2,
+    rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+    providerSpecificData: { workspacePlanType: "plus" },
+  });
+  const authorizations: string[] = [];
+  globalThis.fetch = async (_url, options: RequestInit = {}) => {
+    authorizations.push(new Headers(options.headers).get("authorization")!);
+    return new Response(
+      `data: ${JSON.stringify({ type: "response.failed", response: { error: { code: "overloaded" } } })}\n\n`,
+      { status: 200 }
+    );
+  };
+
+  assert.equal((await postCodexImageGeneration({ n: 2 })).status, 502);
+  assert.deepEqual(authorizations, ["Bearer k12-multi-token", "Bearer k12-multi-token"]);
 });

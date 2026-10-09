@@ -1,4 +1,7 @@
-import { handleImageGeneration } from "@omniroute/open-sse/handlers/imageGeneration.ts";
+import {
+  handleImageGeneration,
+  finalizeImageErrorResult,
+} from "@omniroute/open-sse/handlers/imageGeneration.ts";
 import { errorResponse, unavailableResponse } from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import {
@@ -77,7 +80,8 @@ export async function POST(request, { params }) {
     rawProvider,
     null,
     null,
-    requestedModel
+    requestedModel,
+    { skipModelDiagnostics: true, preferredWorkspacePlan: rawProvider === "codex" ? "plus" : null }
   );
   if (!credentials) {
     return errorResponse(
@@ -98,17 +102,26 @@ export async function POST(request, { params }) {
     provider: rawProvider,
     requestedModel,
     credentials,
+    requestedCount: Number(body.n) || 1,
+    signal: request.signal,
     execute: (attemptCredentials) =>
       runWithCallLogApiKeyContext(
         {
           apiKeyId: policy.apiKeyInfo?.id ?? null,
           apiKeyName: policy.apiKeyInfo?.name ?? null,
         },
-        () => handleImageGeneration({ body, credentials: attemptCredentials, log })
+        () =>
+          handleImageGeneration({
+            body,
+            credentials: attemptCredentials,
+            log,
+            signal: request.signal,
+            deferFailureLog: true,
+          })
       ),
   });
   credentials = execution.credentials;
-  const result = execution.result;
+  const result = finalizeImageErrorResult(execution.result);
 
   if (result.success) {
     await clearRecoveredProviderState(credentials);

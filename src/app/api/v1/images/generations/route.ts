@@ -1,4 +1,7 @@
-import { handleImageGeneration } from "@omniroute/open-sse/handlers/imageGeneration.ts";
+import {
+  handleImageGeneration,
+  finalizeImageErrorResult,
+} from "@omniroute/open-sse/handlers/imageGeneration.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
 import {
   getProviderCredentialsWithQuotaPreflight,
@@ -224,7 +227,8 @@ async function postHandler(request, context) {
       provider,
       null,
       null,
-      requestedModel
+      requestedModel,
+      { skipModelDiagnostics: true, preferredWorkspacePlan: provider === "codex" ? "plus" : null }
     );
     if (!credentials) {
       return errorResponse(
@@ -245,7 +249,8 @@ async function postHandler(request, context) {
       provider,
       null,
       null,
-      requestedModel
+      requestedModel,
+      { skipModelDiagnostics: true, preferredWorkspacePlan: provider === "codex" ? "plus" : null }
     );
     if (!credentials) {
       return errorResponse(
@@ -288,6 +293,7 @@ async function postHandler(request, context) {
             log,
             ...(isCustomModel && { resolvedProvider: provider }),
             signal: request.signal,
+            deferFailureLog: true,
             clientHeaders: publicBaseUrlHeaders(request.headers),
           })
       );
@@ -308,6 +314,8 @@ async function postHandler(request, context) {
     requestedModel,
     credentials,
     execute: executeImageGeneration,
+    requestedCount: Number(body.n) || 1,
+    signal: request.signal,
   });
   credentials = execution.credentials;
   let result = execution.result;
@@ -332,13 +340,16 @@ async function postHandler(request, context) {
       provider,
       credentials.connectionId,
       null,
-      requestedModel
+      requestedModel,
+      { skipModelDiagnostics: true, preferredWorkspacePlan: "plus" }
     );
     if (fallbackCredentials?.connectionId && !isAllRateLimitedCredentials(fallbackCredentials)) {
       credentials = fallbackCredentials;
       result = await executeImageGeneration(credentials);
     }
   }
+
+  result = finalizeImageErrorResult(result);
 
   if (result.success) {
     await clearRecoveredProviderState(credentials);

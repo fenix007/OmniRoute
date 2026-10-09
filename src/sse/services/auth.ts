@@ -137,6 +137,9 @@ interface CredentialSelectionOptions {
   bypassQuotaPolicy?: boolean;
   forcedConnectionId?: string | null;
   excludeConnectionIds?: string[] | null;
+  requiredWorkspacePlan?: string | null;
+  preferredWorkspacePlan?: string | null;
+  skipModelDiagnostics?: boolean;
   sessionKey?: string | null;
   sessionSource?: SessionSource;
   previousConnectionId?: string | null;
@@ -1009,6 +1012,14 @@ export async function getProviderCredentials(
     if (allowedConnections && allowedConnections.length > 0) {
       connections = connections.filter((conn) => allowedConnections.includes(conn.id));
     }
+    if (options.requiredWorkspacePlan) {
+      const requiredPlan = options.requiredWorkspacePlan.toLowerCase();
+      connections = connections.filter(
+        (conn) =>
+          typeof conn.providerSpecificData.workspacePlanType === "string" &&
+          conn.providerSpecificData.workspacePlanType.toLowerCase() === requiredPlan
+      );
+    }
 
     // #5903: an active session-affinity pin outranks a per-request reset-aware
     // forcedConnectionId (see sessionAffinityPin leaf for the full rationale).
@@ -1469,7 +1480,15 @@ export async function getProviderCredentials(
       };
     }
 
-    const orderedConnections = withQuota;
+    const preferredPlan = options.preferredWorkspacePlan?.toLowerCase();
+    const preferredConnections = preferredPlan
+      ? withQuota.filter(
+          (connection) =>
+            typeof connection.providerSpecificData.workspacePlanType === "string" &&
+            connection.providerSpecificData.workspacePlanType.toLowerCase() === preferredPlan
+        )
+      : [];
+    const orderedConnections = preferredConnections.length > 0 ? preferredConnections : withQuota;
 
     const providerStrategyOverrides = (settings.providerStrategies || {}) as Record<
       string,
@@ -1808,7 +1827,7 @@ export async function getProviderCredentialsWithQuotaPreflight(
 
     // Diagnose only the selected account, outside the selection mutex. A known
     // entitlement gap never receives the caller's payload, even on quota bypass.
-    if (provider === "codex" && requestedModel) {
+    if (provider === "codex" && requestedModel && !options.skipModelDiagnostics) {
       const diagnosis = await diagnoseAccountModel(provider, credentials, requestedModel);
       if (diagnosis?.status === "unsupported") {
         excludedConnectionIds.add(connectionId);
