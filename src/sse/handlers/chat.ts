@@ -1403,7 +1403,9 @@ async function handleSingleModelChat(
           clientRawRequest,
           credentials,
           sessionRouting: credentials.sessionRouting,
-          allowedConnectionIds: effectiveAllowedConnections,
+          allowedConnectionIds: hasForcedConnection
+            ? [credentials.connectionId]
+            : effectiveAllowedConnections,
           apiKeyInfo,
           userAgent,
           comboName,

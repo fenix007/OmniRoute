@@ -35,7 +35,7 @@ async function resetStorage() {
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 }
 
-async function seedConnection(provider: string, overrides: any = {}) {
+async function seedConnection(provider: string, overrides: Record<string, unknown> = {}) {
   const connection = await providersDb.createProviderConnection({
     provider,
     authType: overrides.authType || "oauth",

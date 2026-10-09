@@ -60,3 +60,11 @@ test("Codex original header wins and derived user content never becomes an upstr
   );
   assert.equal(buildExecutorClientHeaders(null, null, { input: "user prompt" }), null);
 });
+
+test("does not inject a body Unicode session identifier into executor headers", () => {
+  const result = buildExecutorClientHeaders(null, "unit-test", {
+    metadata: { session_id: "会话-1" },
+  });
+  assert.equal(result?.["x-codex-session-id"], undefined);
+  assert.doesNotThrow(() => new Headers(result ?? {}));
+});

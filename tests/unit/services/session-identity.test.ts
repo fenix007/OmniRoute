@@ -170,3 +170,16 @@ test("explicit identifiers containing control characters are rejected", () => {
   assert.equal(fromHeader.source, "none");
   assert.equal(fromHeader.upstreamSessionId, null);
 });
+
+test("unsafe upstream identifiers retain scoped affinity without entering headers", () => {
+  for (const identifier of ["会话-1", "session with spaces", "a".repeat(201)]) {
+    const identity = resolveSessionIdentity(
+      { metadata: { session_id: identifier } },
+      null,
+      "key-1"
+    );
+    assert.equal(identity.key, expectedKey("key-1", "explicit", identifier));
+    assert.equal(identity.upstreamSessionId, null);
+    assert.equal(identity.source, "metadata");
+  }
+});

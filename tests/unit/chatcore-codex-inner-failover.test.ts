@@ -258,3 +258,35 @@ test("dedup waiter keeps its session identity but records the owner's execution 
     waiter.id
   );
 });
+
+test("inner Codex 429 cannot leave a scope restricted to the selected connection", async () => {
+  for (const stream of [false, true]) {
+    const selected = await seedCodex(`fixed-${stream}`, 1);
+    await seedCodex(`fixed-spare-${stream}`, 2);
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "1" },
+      });
+    };
+    const body = { model: "codex/gpt-5.6-sol", stream, input: `fixed account ${stream}` };
+    const result = await handleChatCore({
+      body,
+      modelInfo: { provider: "codex", model: "gpt-5.6-sol", extendedContext: false },
+      credentials: { ...selected, connectionId: selected.id },
+      connectionId: selected.id,
+      allowedConnectionIds: [selected.id],
+      skipUpstreamRetry: true,
+      apiKeyInfo: { id: "fixed-key" },
+      clientRawRequest: { endpoint: "/v1/responses", body, headers: new Headers() },
+      log: { debug() {}, info() {}, warn() {}, error() {} },
+    } as Parameters<typeof handleChatCore>[0]);
+    assert.ok(!(result instanceof Response));
+    assert.equal(result.success, false);
+    assert.equal(result.status, 429);
+    await result.response?.text();
+    assert.equal(calls, 1, "the spare account must not be used");
+  }
+});

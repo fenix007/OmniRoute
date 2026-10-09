@@ -1380,7 +1380,8 @@ export class CodexExecutor extends BaseExecutor {
     // Ref: openai/codex core/src/client.rs line 853:
     //   let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
     // IMPORTANT: Capture session/conversation IDs BEFORE deletion below (#1643).
-    if (!Object.prototype.hasOwnProperty.call(body, "prompt_cache_key")) {
+    if (typeof body.prompt_cache_key !== "string" || !body.prompt_cache_key.trim()) {
+      delete body.prompt_cache_key;
       const clientIdentity = credentials?.providerSpecificData?.codexClientIdentity as
         CodexClientIdentity | null | undefined;
       const cacheSessionId =

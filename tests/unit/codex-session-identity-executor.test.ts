@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import {
-  __setCodexWebSocketTransportForTesting,
-  CodexExecutor,
-} from "../../open-sse/executors/codex.ts";
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-identity-executor-"));
+process.env.DATA_DIR = testDataDir;
+const { __setCodexWebSocketTransportForTesting, CodexExecutor } =
+  await import("../../open-sse/executors/codex.ts");
+
+test.after(async () => {
+  const { resetDbInstance } = await import("../../src/lib/db/core.ts");
+  resetDbInstance();
+  fs.rmSync(testDataDir, { recursive: true, force: true });
+});
 
 type MockCodexWebSocket = {
   send: (data: string) => void;
@@ -135,4 +144,56 @@ test("Codex WebSocket uses the same header-only identity for headers and cache",
   assert.equal(captured.body?.prompt_cache_key, "header-session-ws");
   assert.equal(captured.headers?.session_id, "header-session-ws");
   assert.equal(captured.headers?.["x-client-request-id"], "header-session-ws");
+});
+
+test("Codex HTTP fills null, empty and undefined cache keys from the explicit session", async () => {
+  const executor = new CodexExecutor();
+  const originalFetch = globalThis.fetch;
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body || "{}")));
+    return new Response(JSON.stringify({ id: "resp_cache", object: "response" }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    for (const key of [null, "", "   ", undefined]) {
+      await executor.execute({
+        model: "gpt-5.5",
+        body: { input: "hello", prompt_cache_key: key },
+        stream: false,
+        credentials: { accessToken: "test-token" },
+        clientHeaders: { "x-codex-session-id": "stable-session" },
+      });
+      assert.equal(bodies.at(-1)?.prompt_cache_key, "stable-session");
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("body Unicode identity cannot leak into Codex HTTP headers", async () => {
+  const executor = new CodexExecutor();
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    const headers = new Headers(init?.headers as HeadersInit);
+    assert.equal(headers.get("session_id"), null);
+    assert.equal(headers.get("x-client-request-id"), null);
+    calls++;
+    return new Response(JSON.stringify({ id: "resp_unicode", object: "response" }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    await executor.execute({
+      model: "gpt-5.5",
+      body: { input: "hello", metadata: { session_id: "会话-1" } },
+      stream: false,
+      credentials: { accessToken: "test-token" },
+    });
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

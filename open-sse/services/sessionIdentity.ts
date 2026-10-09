@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
+import { normalizeCodexSessionId } from "../config/codexClient.ts";
 
 export type SessionIdentitySource =
   "header" | "metadata" | "conversation" | "session" | "prompt-cache" | "input" | "none";
@@ -216,7 +217,7 @@ export function resolveSessionIdentity(
       key: scope ? hashIdentity(scope, "explicit", explicit.identifier) : null,
       source: explicit.source,
       confidence: "explicit",
-      upstreamSessionId: explicit.identifier,
+      upstreamSessionId: normalizeCodexSessionId(explicit.identifier),
     };
   }
 
