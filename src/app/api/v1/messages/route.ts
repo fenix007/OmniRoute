@@ -1,4 +1,5 @@
 import { handleChat } from "@/sse/handlers/chat";
+import { generateRequestId } from "@/shared/utils/requestId";
 import { initTranslators } from "@omniroute/open-sse/translator/index.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
 import { requireJsonContentType } from "@/shared/middleware/requireJsonContentType";
@@ -68,8 +69,10 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
     } catch {
       // body unavailable / non-JSON — fall back to the default keepalive threshold
     }
-    return await withEarlyStreamKeepalive(handleChat(request, null, preParsedBody), {
+    const reqId = generateRequestId();
+    return await withEarlyStreamKeepalive(handleChat(request, null, preParsedBody, reqId), {
       signal: request.signal,
+      extraHeaders: { "X-Correlation-Id": reqId },
       thresholdMs: resolveKeepaliveThreshold(model),
       keepaliveFrame: ANTHROPIC_PING_FRAME,
       // Claude clients branch on `error.type` inside the stream; an OpenAI-shaped

@@ -1,4 +1,5 @@
 import { handleChat } from "@/sse/handlers/chat";
+import { generateRequestId } from "@/shared/utils/requestId";
 import { withEarlyStreamKeepalive } from "@omniroute/open-sse/utils/earlyStreamKeepalive";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
 import { resolveResponsesApiModel } from "@/app/api/internal/codex-responses-ws/modelResolution";
@@ -95,8 +96,10 @@ async function postHandler(request: any, context: any, preParsedBody: any = null
     // Reuse resolvedBody.model — no extra clone/parse needed (#4041).
     const model = resolvedBody?.model;
     const thresholdMs = resolveKeepaliveThreshold(model);
-    return await withEarlyStreamKeepalive(handleChat(resolved, null, resolvedBody), {
+    const reqId = generateRequestId();
+    return await withEarlyStreamKeepalive(handleChat(resolved, null, resolvedBody, reqId), {
       signal: request.signal,
+      extraHeaders: { "X-Correlation-Id": reqId },
       thresholdMs,
       // Once the keepalive stream commits to 200 the status line is gone and the failure
       // can only travel in-band. Responses API clients (Codex CLI) terminate a stream on

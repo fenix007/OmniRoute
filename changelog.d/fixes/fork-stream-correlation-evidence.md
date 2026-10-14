@@ -1,0 +1,1 @@
+- **fix(streaming):** Preserve the call-log correlation ID on early Responses and Messages keepalive streams so gateway terminal outcomes can be matched to the originating request.
