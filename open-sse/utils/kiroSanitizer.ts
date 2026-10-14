@@ -49,6 +49,18 @@ function stripKeys(value: unknown): unknown {
 
   const cleaned: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    // Map keys are caller-chosen parameter names, not JSON-Schema keywords.
+    if (
+      (key === "properties" || key === "patternProperties") &&
+      val &&
+      typeof val === "object" &&
+      !Array.isArray(val)
+    ) {
+      cleaned[key] = Object.fromEntries(
+        Object.entries(val).map(([name, schema]) => [name, stripKeys(schema)])
+      );
+      continue;
+    }
     if (STRIP_KEYS.has(key)) continue;
     if (key === "required" && Array.isArray(val) && val.length === 0) continue;
     cleaned[key] = stripKeys(val);
