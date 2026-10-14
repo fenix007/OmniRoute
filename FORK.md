@@ -1261,3 +1261,71 @@ streaming and retry tests, full lint, core typecheck and static gates pass again
 on that base; the earlier full-suite/coverage/build results are recorded separately
 in the local maintenance ledger. Neither source patch changed at final head-SHA
 revalidation.
+
+## Production maintenance — 2026-10-14 (Kiro schema names)
+
+Based on `origin/stable` `8e870e3c14f307805b242588ef64649f9797deb5`.
+The September 11–October 14 paginated source discovery remains a partial technical
+review; neither source's completed-review boundary is advanced.
+
+Source: [diegosouzapw/OmniRoute #16469](https://github.com/diegosouzapw/OmniRoute/pull/16469),
+head `990fccf3aa3254f69eb7db8e6e79c75afa9f5fd4`, merged as
+`a49ef06f416ed48502bbaaeb4ab3c7d8b839d30d` (merged status checked October 14).
+Decision: **adapt**. Thanks @ryanngit. The pinned diff, implementation, tests,
+discussion, reviews and CI were inspected. Upstream unit/build/quality checks
+include failures; merged status is not used as proof of safety.
+
+The frozen Kiro sanitizer deleted tool parameters called `if`, `not`, `$ref`,
+`additionalProperties` and other schema keywords before dispatch. Preserve names
+inside `properties` and `patternProperties`, recursively sanitizing each schema
+value. No equivalent fix exists at the reviewed stable head.
+
+Only this independent part of #16469 is adapted. Root union flattening, forced
+object types and filtering/deduplicating `required` remain outside this change.
+Use `Object.fromEntries` instead of the source's indexed property-map assignments,
+so `__proto__` remains an own data property. Existing unsupported-keyword removal,
+required handling, tool-name hashing/reverse maps and prompt-based JSON response
+contracts are preserved. No dependency or runtime is added; MIT attribution is
+retained here and in the changelog fragment.
+
+Nine of ten independent regression cases fail on unchanged stable; all ten pass
+with the adaptation. They cover keyword names, nested arrays/maps, actual schema
+constraints, patterns, special names, booleans/malformed maps, immutable inputs,
+and OpenAI- and Claude-shaped tools through `buildKiroPayload` with both stream
+flags. A separate isolated real-chatCore probe captures preserved keyword arguments
+at mocked Kiro HTTP dispatch. Post-sanitizer executor serialization retains an own
+`__proto__` parameter without modifying `Object.prototype`; no live provider is used.
+
+### Gate repair and independent review
+
+The original stable fails the frozen test-size gate: the image handler suite has
+2,085 lines against its 2,019 ceiling. Move its complete Codex subsection into
+`tests/unit/image-generation-codex-handler.test.ts`. TypeScript AST comparison
+confirms all 45 original test statements, bodies and assertions remain identical:
+35 stay in the original file and ten move. Both files pass their unchanged size
+limits and generic discovery. No Stryker/TIA entry named the original suite.
+Remove one obsolete explicit-any suppression for the unchanged
+`codex-session-affinity-reset-aware-5903.test.ts`; no suppression is added or raised.
+
+Independent consultation used the advisor workflow with verified model
+`claude-opus-5-5`, tools and session persistence disabled. No confirmed blocker was
+found. Its isolation concern led to an unconditional temporary DATA_DIR for the
+new Codex suite, SQLite close before cleanup, and an offline run with DNS APIs
+throwing and a pre-exported shared-path sentinel. All ten tests pass without
+accessing that sentinel; fan-out also passes in isolation. Conditional-schema/data
+traversal limitations remain separate from this bounded backport.
+
+Validation: full unit passes 23,728 tests with 14 skips; coverage passes all
+unchanged 60% gates (81.23% statements/lines, 78.57% branches, 86.80% functions).
+After the final test-only isolation hardening, all 342 affected Kiro/image tests
+pass. Full lint, core typecheck, production build, file-size, discovery, any-budget,
+docs-sync, tracked-artifact, changelog, formatting and diff checks pass. The build
+uses an owned copy of installed dependencies with only its inherited cyclic nested
+link removed; the original installation and unrelated checkouts are preserved.
+Runtime checks use isolated data directories. Live-provider checks are not claimed.
+
+Publication follows the existing `[skip ci]` policy without workflow changes,
+image publication, release, workflow dispatch or deployment. The gate repair and
+sanitizer backport are separate atomic commits. Exact validation and publication
+results, review disposition and preserved source candidates are recorded in the
+existing local maintenance ledger.

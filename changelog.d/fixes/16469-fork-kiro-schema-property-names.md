@@ -1,0 +1,1 @@
+- **fix(sse):** preserve keyword-named Kiro tool parameters while still sanitizing their schemas ([#16469](https://github.com/diegosouzapw/OmniRoute/pull/16469)) — thanks @ryanngit
