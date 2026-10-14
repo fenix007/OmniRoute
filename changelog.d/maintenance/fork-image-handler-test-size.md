@@ -1,0 +1,1 @@
+- **chore(quality):** split the unchanged Codex image tests into their own isolated suite and remove one obsolete ESLint suppression; retain all test bodies and frozen quality limits.
