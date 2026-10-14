@@ -137,19 +137,17 @@ test("queued rejection preserves its error and leaves the next caller isolated",
   }
 });
 
-test("queued abort preserves rejection and context when the old queue later dispatches", async () => {
+test("queued abort never dispatches cancelled work and preserves the next caller context", async () => {
   const id = connection();
   const held = holdSlot("kiro", id);
   const controller = new AbortController();
   const reason = new Error("synthetic disconnect");
-  const dispatched = Promise.withResolvers<void>();
   let observed: string | undefined;
   let providerCalls = 0;
   const pending: Promise<unknown>[] = [held.promise];
   try {
     await held.entered;
-    // The frozen queue does not remove cancelled jobs. Preserve that contract:
-    // the executor checks its own signal before any provider request.
+    // The frozen queue keeps the job, but its callback must never begin after abort.
     const cancelled = store.run("B", () =>
       manager.withRateLimit(
         "kiro",
@@ -157,7 +155,6 @@ test("queued abort preserves rejection and context when the old queue later disp
         null,
         async () => {
           observed = store.getStore();
-          dispatched.resolve();
           controller.signal.throwIfAborted();
           providerCalls++;
         },
@@ -171,9 +168,11 @@ test("queued abort preserves rejection and context when the old queue later disp
     await assertion;
     assert.equal(getEventListeners(controller.signal, "abort").length, 0);
     held.release();
-    await dispatched.promise;
+    const next = store.run("C", () => manager.withRateLimit("kiro", id, null, readContext));
+    pending.push(next);
+    assert.deepEqual(await next, { start: "C", after: "C" });
     await waitUntil(() => manager.getRateLimitStatus("kiro", id).running === 0);
-    assert.equal(observed, "B");
+    assert.equal(observed, undefined);
     assert.equal(providerCalls, 0);
   } finally {
     held.release();

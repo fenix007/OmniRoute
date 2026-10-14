@@ -8,6 +8,7 @@
  * Can be toggled per provider connection via dashboard.
  */
 
+import { toAbortError } from "../utils/abortError.ts";
 import { AsyncResource } from "node:async_hooks";
 import Bottleneck from "bottleneck";
 import { applyBottleneckDoExpirePatch } from "./bottleneckPatch.ts";
@@ -534,13 +535,7 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
     return fn();
   }
 
-  if (signal?.aborted) {
-    const reason = signal.reason;
-    if (reason instanceof Error) throw reason;
-    const err = new Error(typeof reason === "string" ? reason : "The operation was aborted");
-    err.name = "AbortError";
-    throw err;
-  }
+  if (signal?.aborted) throw toAbortError(signal.reason);
 
   const requestBudgetMs = resolveModelRequestBudgetMs(
     provider,
@@ -551,24 +546,22 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
   // Proactive sliding-window fallback for header-less providers with a declared cap
   // (Fase 8.2). No-op unless PROVIDER_DEFAULT_RATE_LIMITS has an entry for `provider`.
   await awaitProviderDefaultSlot(provider, connectionId, signal, requestBudgetMs);
+  if (signal?.aborted) throw toAbortError(signal.reason);
 
   const limiter = getLimiter(provider, connectionId, model);
   const scheduleOpts =
     requestBudgetMs && requestBudgetMs > 0 ? { expiration: requestBudgetMs } : {};
   // Queued jobs must retain their caller's context, not the slot-freer's.
-  const boundFn = AsyncResource.bind(fn);
+  const boundFn = AsyncResource.bind(async () => {
+    if (signal?.aborted) throw toAbortError(signal.reason);
+    return fn();
+  });
   try {
     if (signal) {
       let abortListener: (() => void) | undefined;
       const abortPromise = new Promise<never>((_, reject) => {
         const onAbort = () => {
-          const reason = signal.reason;
-          const err =
-            reason instanceof Error
-              ? reason
-              : new Error(typeof reason === "string" ? reason : "The operation was aborted");
-          err.name = "AbortError";
-          reject(err);
+          reject(toAbortError(signal.reason));
         };
         if (signal.aborted) {
           onAbort();

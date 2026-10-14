@@ -283,7 +283,7 @@ export async function runSingleModelTest(
     clearTimeout(timeoutHandle);
     const latencyMs = Date.now() - startTime;
     const errorName = getErrorName(error);
-    if (errorName === "AbortError") {
+    if (controller.signal.aborted || errorName === "AbortError") {
       if (timedOut) {
         return {
           modelId: fullModelStr,

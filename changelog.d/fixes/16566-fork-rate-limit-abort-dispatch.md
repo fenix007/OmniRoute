@@ -1,0 +1,1 @@
+- **fix(rate-limit):** Prevent enabled queued work from starting after caller cancellation, preserve immutable abort reasons, and avoid default DOMException listener failures. Adapted from diegosouzapw/OmniRoute#16566; thanks @shipsfromrio.

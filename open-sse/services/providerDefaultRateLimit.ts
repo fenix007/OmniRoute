@@ -1,3 +1,4 @@
+import { toAbortError } from "../utils/abortError.ts";
 /**
  * Provider-default sliding-window rate-limit fallback (free-claude-code port, Fase 8.2).
  *
@@ -57,15 +58,10 @@ function sleepOrAbort(ms: number, signal: AbortSignal | null): Promise<void> {
     if (signal) {
       onAbort = () => {
         clearTimeout(timer);
-        const reason = signal.reason;
-        const err =
-          reason instanceof Error
-            ? reason
-            : new Error(typeof reason === "string" ? reason : "The operation was aborted");
-        err.name = "AbortError";
-        reject(err);
+        reject(toAbortError(signal.reason));
       };
-      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
     }
   });
 }

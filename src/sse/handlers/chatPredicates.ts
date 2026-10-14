@@ -36,7 +36,8 @@ export function classifyLocalAbortFailure(
   }
   const isSignalAbortReason =
     requestSignalAborted &&
-    (/request_signal_aborted|client disconnected|operation was aborted/i.test(message) ||
+    (error === abortReason ||
+      /request_signal_aborted|client disconnected|operation was aborted/i.test(message) ||
       message === COMBO_PER_MODEL_TIMEOUT_REASON ||
       message === COMBO_HEDGE_CANCELLED_REASON);
   return isLocalStreamLifecycleError(error) || isSignalAbortReason
