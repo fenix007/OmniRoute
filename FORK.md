@@ -1329,3 +1329,83 @@ image publication, release, workflow dispatch or deployment. The gate repair and
 sanitizer backport are separate atomic commits. Exact validation and publication
 results, review disposition and preserved source candidates are recorded in the
 existing local maintenance ledger.
+
+## Production maintenance — 2026-10-14 (cancelled queue work and Chat tool IDs)
+
+Based on `origin/stable` `64972cb3075637c90a7061bd2aea873dab80d6a5`.
+This targeted follow-up does not advance the partial upstream-review boundaries.
+
+- **Adapt:** [diegosouzapw/OmniRoute #16566](https://github.com/diegosouzapw/OmniRoute/pull/16566),
+  head `e6198bb483dc1d8218caa8aae98b04b1c16e1dd6`, open and unmerged on October 14,
+  thanks @shipsfromrio. The frozen scheduler dispatches cancelled callbacks after
+  its provider-default await or when an occupied slot becomes free. Its abort
+  listener also mutates caller-owned errors: default DOMException throws an
+  uncaught TypeError and can leave the caller waiting until callback success.
+  Preserve Error/DOMException identity, create AbortError with cause for primitive
+  reasons, recheck after the provider-slot await and guard the callback inside
+  its existing AsyncResource binding. The provider-default sleep uses the same
+  immutable error helper. No modern scheduler, queue-removal or budget migration
+  is copied. Disabled connections retain direct-call behavior. Running callbacks
+  still cancel cooperatively; cancelled jobs already queued are retained until
+  dispatch and can consume admission capacity. Update the old queued-abort
+  characterization to assert no callback start while retaining ALS checks for
+  subsequent callers. The pinned upstream CI has failures; independent tests
+  establish the adapted behavior instead of relying on PR status.
+- **Adapt behavior:** [router-for-me/CLIProxyAPI #4953](https://github.com/router-for-me/CLIProxyAPI/pull/4953),
+  head `cceb5bd873e1dd3135c55529ad69de0544677948`, closed without merge on October 14,
+  and [Chat-only replacement commit](https://github.com/router-for-me/CLIProxyAPI/commit/b0debb353796015982f4f84f790c13073bf4c958),
+  thanks @michaelort33. The replacement closes issue #6501; the PR closure itself
+  supplies no rationale. In this fork Chat already truncates long IDs, but two
+  original IDs sharing the first 64 UTF-16 units collapse and lose result
+  correlation. Map the complete generated Chat input before truncation can lose
+  originals: reserve all existing valid IDs, assign one deterministic value per
+  original string, and reuse it for outputs in full-history Chat requests. Hash UTF-16LE to distinguish lone
+  surrogates, append a SHA-256 suffix and retry occupied candidates. Shortened
+  prefixes follow code-point boundaries within a UTF-8 byte budget; generated
+  values fit 64 bytes, UTF-16 units and code points. Existing IDs with UTF-16
+  length at most 64 remain unchanged, including existing Unicode IDs. Preserve
+  trim asymmetry, legacy function naming and input immutability. This uses Node's
+  existing crypto and copies no Go code. Native Responses/WS and Claude replay
+  inference remain deferred pending their separate stateful correlation contract.
+
+Regression evidence includes three failing immediate-abort cases and four failing
+Chat-ID cases on unchanged stable. Tests cover queued frozen errors/primitives,
+default and timeout DOMExceptions, cooperative running abort, provider-window
+cancellation, slot/listener cleanup, subsequent caller context, both output orders,
+valid-ID reservation, deterministic mapping, shared prefixes, Unicode/lone
+surrogates, immutable Chat input and actual mocked Codex HTTP serialization.
+No live provider credentials or network calls are used by these scenarios.
+Native Responses unchanged behavior is explicitly checked.
+
+Independent implementation review used the advisor skill with exact model
+`claude-opus-5-5`, tools and persistence disabled. No direct blocker was found.
+Its conditional abort-classification finding was confirmed: recognize the exact
+aborted signal reason as local cancellation in chatCore's shared predicate and
+check the model-test controller state, without renaming caller errors. Tests cover
+Error and DOMException reasons. The translator audit confirms clampCallId only
+sliced strings; all call-bearing items are newly built and filtered by reference.
+Original IDs now also prevent false orphan matches caused by prefix collisions.
+The executing hook updates only the queue-watchdog dispatch timestamp.
+
+Shortening is deterministic for a complete Chat history. An artificial collision
+with a valid ID can change the selected hash attempt as history changes; this is
+not a persistent mapping for incremental server-side histories. Both Codex and other Responses providers can retain previous_response_id.
+Chat requests carrying that field retain the legacy clamp, so this bounded repair
+only changes full-history Chat requests. Stateful Chat, native Responses and WS
+adaptation remain deferred until a persistent correlation contract is verified.
+
+Validation: full unit run passes 23,840 tests with 14 skips; coverage passes the
+unchanged 60% gates at 81.24% statements/lines, 78.61% branches and 86.80%
+functions. All 69 final affected tests pass; the cancellation regression file also
+passes three sequential runs without force-exit. Full lint, core typecheck,
+production build, frozen file-size, discovery, changelog, docs-sync, any-budget,
+tracked-artifact, format and diff gates pass. The build retains dynamic tracing
+warnings in unchanged modules. Full unit preceded the final stateful-Chat guard;
+coverage and the final affected suites exercise that guard. The production build
+was rerun after the final runtime changes. Runtime data is isolated.
+
+A first unit attempt overlapped dependency-directory materialization and failed
+module resolution; it is not a source failure. The subsequent full run uses a
+complete owned dependency copy and passes. No original installation is modified.
+Publication uses the existing `[skip ci]` policy in separate cancellation and
+Chat-ID commits, without workflow changes, image publication, release or deployment.

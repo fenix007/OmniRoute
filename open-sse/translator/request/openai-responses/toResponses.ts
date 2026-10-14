@@ -1,3 +1,4 @@
+import { normalizeChatCallIds } from "./callIds.ts";
 /**
  * Translator: OpenAI Chat Completions -> OpenAI Responses API
  *
@@ -7,11 +8,11 @@ import { isOpenAIResponsesStoreEnabled } from "@/lib/providers/requestDefaults";
 import { generateToolCallId } from "../../helpers/toolCallHelper.ts";
 import {
   JsonRecord,
+  clampCallId,
   RESPONSES_STORE_MARKER,
   toRecord,
   toArray,
   toString,
-  clampCallId,
   imageUrlToText,
   normalizeVerbosity,
   normalizeResponsesReasoningEffort,
@@ -238,7 +239,7 @@ export function openaiToOpenAIResponsesRequest(
           }
           input.push({
             type: "function_call",
-            call_id: clampCallId(toString(toolCall.id).trim() || generateToolCallId()),
+            call_id: toString(toolCall.id).trim() || generateToolCallId(),
             name: fnName,
             arguments: toString(fn.arguments, "{}"),
           });
@@ -252,7 +253,7 @@ export function openaiToOpenAIResponsesRequest(
         if (fnName) {
           input.push({
             type: "function_call",
-            call_id: clampCallId(`call_${fnName}`),
+            call_id: `call_${fnName}`,
             name: fnName,
             arguments: toString(fc.arguments, "{}"),
           });
@@ -264,7 +265,7 @@ export function openaiToOpenAIResponsesRequest(
     if (role === "tool") {
       input.push({
         type: "function_call_output",
-        call_id: clampCallId(toString(msg.tool_call_id)),
+        call_id: toString(msg.tool_call_id),
         output:
           typeof msg.content === "string"
             ? msg.content
@@ -283,10 +284,19 @@ export function openaiToOpenAIResponsesRequest(
     if (role === "function") {
       input.push({
         type: "function_call_output",
-        call_id: clampCallId(`call_${toString(msg.name)}`),
+        call_id: `call_${toString(msg.name)}`,
         output: typeof msg.content === "string" ? msg.content : String(msg.content ?? ""),
       });
     }
+  }
+
+  // Stateful delta histories need a persistent mapping; retain their legacy IDs.
+  if (root.previous_response_id !== undefined) {
+    for (const item of input) {
+      if (typeof item.call_id === "string") item.call_id = clampCallId(item.call_id);
+    }
+  } else {
+    normalizeChatCallIds(input);
   }
 
   // Filter orphaned function_call_output items (no matching function_call)
