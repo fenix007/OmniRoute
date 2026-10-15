@@ -1261,3 +1261,11 @@ streaming and retry tests, full lint, core typecheck and static gates pass again
 on that base; the earlier full-suite/coverage/build results are recorded separately
 in the local maintenance ledger. Neither source patch changed at final head-SHA
 revalidation.
+
+## fix(openai): send max_completion_tokens for gpt-5.6 and gpt-6 models
+
+OpenAI answers HTTP 400 `Unsupported parameter: 'max_tokens'` for gpt-5.6 and
+the gpt-6 family, so every `openai/gpt-6-*` request failed and combos fell
+through to the next target after a retry delay. `MAX_TOKENS_UNSUPPORTED_PATTERNS`
+now includes `gpt-5.6` and `gpt-6`, and the default executor maps defaults for
+`gpt-6` too. Regression guard: `tests/unit/openai-gpt6-max-completion-tokens.test.ts`.
