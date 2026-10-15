@@ -35,6 +35,9 @@ const MAX_TOKENS_UNSUPPORTED_PATTERNS = [
   "o3",
   "gpt-5.4",
   "gpt-5.5",
+  "gpt-5.6",
+  // Every gpt-6 family member (gpt-6-luna, gpt-6-sol, gpt-6.1-sol, gpt-6-astra) rejects max_tokens.
+  "gpt-6",
 ];
 
 type CapabilityInput =
