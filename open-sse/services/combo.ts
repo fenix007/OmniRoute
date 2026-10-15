@@ -1746,6 +1746,7 @@ export async function handleComboChat({
               config.responseValidation
             );
             releaseQualityClone(qualityClone, result, quality);
+            if (quality.terminalResponse) return { ok: false, response: quality.terminalResponse };
             if (!quality.valid) {
               log.warn(
                 "COMBO",
@@ -1773,7 +1774,7 @@ export async function handleComboChat({
                 if (mlSettings.enabled && mlSettings.errorCodes.includes(502)) {
                   recordModelLockoutFailure(
                     provider,
-                    target.connectionId || "",
+                    effectiveConnectionId,
                     rawModel,
                     "quality_failure",
                     502,
@@ -2926,6 +2927,7 @@ async function handleRoundRobinCombo({
             config.responseValidation
           );
           releaseQualityClone(rrClone, result, quality);
+          if (quality.terminalResponse) return quality.terminalResponse;
           if (!quality.valid) {
             log.warn(
               "COMBO-RR",
