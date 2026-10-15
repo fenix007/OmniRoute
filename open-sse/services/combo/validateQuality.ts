@@ -10,6 +10,8 @@ import {
   createSSEDataLineNormalizer,
   isKnownNonClaudeStreamPayload,
 } from "../../utils/streamHelpers.ts";
+import { errorResponse } from "../../utils/error.ts";
+import { frameHasStructuredStreamError } from "../../utils/streamReadiness.ts";
 import { evaluateResponseValidation, type ResponseValidationConfig } from "./responseValidation.ts";
 import { getReasoningTokens } from "../../../src/lib/usage/tokenAccounting.ts";
 import type { ComboRetryAfter } from "./types.ts";
@@ -92,7 +94,12 @@ export async function validateResponseQuality(
   isStreaming: boolean,
   log: { warn?: (...args: unknown[]) => void },
   responseValidation?: ResponseValidationConfig | null
-): Promise<{ valid: boolean; reason?: string; clonedResponse?: Response }> {
+): Promise<{
+  valid: boolean;
+  reason?: string;
+  terminalResponse?: Response;
+  clonedResponse?: Response;
+}> {
   // Issue #3685: For Claude SSE streaming responses, use a BOUNDED PEEK to
   // detect the empty-content-block pattern (content_filter stop_reason with
   // no content_block_* events) WITHOUT de-streaming non-empty responses.
@@ -132,6 +139,10 @@ export async function validateResponseQuality(
     let sawAnyBytes = false;
     const sseLineNormalizer = createSSEDataLineNormalizer();
     let pendingEventType = "";
+    let upstreamFailed = false;
+    let terminalResponse: Response | undefined;
+    let peekBytes = 0;
+    const peekDeadline = Date.now() + 120_000;
 
     /**
      * Parse any complete SSE lines from `decodedSoFar`, updating lifecycle
@@ -173,6 +184,40 @@ export async function validateResponseQuality(
           (typeof parsed.type === "string" ? parsed.type : null) || pendingEventType || "";
         pendingEventType = "";
 
+        if (frameHasStructuredStreamError(`event: ${eventType}\ndata: ${JSON.stringify(parsed)}`)) {
+          upstreamFailed = true;
+          const nested = parsed.response as Record<string, unknown> | undefined;
+          const error = (nested?.error || parsed.error || parsed) as Record<string, unknown>;
+          const code = String(error?.code || error?.type || "");
+          if (
+            /invalid_request|invalid_prompt|context_length|content_policy|content_filter/.test(code)
+          ) {
+            terminalResponse = errorResponse(400, "Upstream rejected the request");
+          }
+          return false;
+        }
+        // Empty Responses lifecycle scaffolding is safe to discard before retry.
+        // Tool announcements are a replay boundary even before arguments arrive.
+        if (
+          eventType === "response.output_item.added" ||
+          eventType === "response.output_item.done"
+        ) {
+          const item = parsed.item as Record<string, unknown> | undefined;
+          if (item?.type === "message" && !responsesApiOutputHasContent([item])) continue;
+          if (
+            item?.type === "reasoning" &&
+            !item.encrypted_content &&
+            !(
+              Array.isArray(item.summary) &&
+              item.summary.some((part) => typeof part?.text === "string" && part.text.length > 0)
+            )
+          )
+            continue;
+        }
+        if (eventType === "response.content_part.added") {
+          const part = parsed.part as Record<string, unknown> | undefined;
+          if (!part?.text && !part?.refusal) continue;
+        }
         if (isKnownNonClaudeStreamPayload(parsed, eventType)) {
           return true;
         }
@@ -214,7 +259,8 @@ export async function validateResponseQuality(
      * Preserves the original response's status, statusText, and headers.
      */
     function buildReplayResponse(
-      readerToForward: ReadableStreamDefaultReader<Uint8Array>
+      readerToForward: ReadableStreamDefaultReader<Uint8Array>,
+      pendingRead?: Promise<ReadableStreamReadResult<Uint8Array>>
     ): Response {
       // Snapshot the prefix so mutations after this point don't affect it.
       const prefix = bufferedChunks.slice();
@@ -228,15 +274,20 @@ export async function validateResponseQuality(
           }
           // 2. Forward the remainder from the original reader.
           try {
-            const { done, value } = await readerToForward.read();
+            const next = pendingRead ?? readerToForward.read();
+            pendingRead = undefined;
+            const { done, value } = await next;
             if (done) {
               controller.close();
             } else {
               controller.enqueue(value);
             }
-          } catch {
-            controller.close();
+          } catch (error) {
+            controller.error(error);
           }
+        },
+        cancel(reason) {
+          return readerToForward.cancel(reason);
         },
       });
       return new Response(stream, {
@@ -249,7 +300,17 @@ export async function validateResponseQuality(
     // Main bounded-peek loop.
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const pendingRead = reader.read();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const next = await Promise.race([
+          pendingRead,
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), Math.max(0, peekDeadline - Date.now()));
+          }),
+        ]).finally(() => clearTimeout(timer));
+        // Hand off the outstanding read too: dropping it would lose a chunk.
+        if (!next) return { valid: true, clonedResponse: buildReplayResponse(reader, pendingRead) };
+        const { done, value } = next;
 
         if (done) {
           // Stream finished — flush the TextDecoder and parse any remaining text.
@@ -258,6 +319,8 @@ export async function validateResponseQuality(
           if (decodedSoFar.trim()) decodedSoFar += "\n\n";
           parseAccumulatedSse();
 
+          if (upstreamFailed)
+            return { valid: false, reason: "streaming upstream error", terminalResponse };
           if (hasMessageStart && hasLifecycleEnd && !hasContentBlock) {
             // Complete Claude lifecycle with zero content blocks → failover.
             log.warn?.(
@@ -290,12 +353,21 @@ export async function validateResponseQuality(
 
         // Accumulate raw bytes for potential replay.
         bufferedChunks.push(value);
+        peekBytes += value?.byteLength || 0;
         if (value && value.length > 0) sawAnyBytes = true;
 
         // Decode incrementally (stream:true keeps multi-byte char state).
         decodedSoFar += decoder.decode(value, { stream: true });
         const foundContent = parseAccumulatedSse();
 
+        if (upstreamFailed) {
+          void reader.cancel().catch(() => {});
+          return { valid: false, reason: "streaming upstream error", terminalResponse };
+        }
+        // Ambiguous oversized prefixes must be forwarded without replaying the
+        // request: a tool boundary may lie inside the unfinished frame.
+        if (peekBytes >= 1024 * 1024)
+          return { valid: true, clonedResponse: buildReplayResponse(reader) };
         if (foundContent) {
           anyContentFound = true;
           // A content_block_* event was found — stop peeking. Return a
@@ -322,8 +394,15 @@ export async function validateResponseQuality(
       ) {
         return { valid: false, reason: "stream locked or disturbed" };
       }
-      // Other read errors — pass through (stream readiness timeout will catch truly broken streams)
-      return { valid: true };
+      if (streamErr instanceof Error && streamErr.name === "AbortError") {
+        return {
+          valid: false,
+          reason: "stream aborted",
+          terminalResponse: errorResponse(499, "Request aborted"),
+        };
+      }
+      // No content/tool activity has been accepted yet, so retry is still safe.
+      return { valid: false, reason: "streaming read failed before output" };
     }
   }
 
@@ -379,7 +458,9 @@ export async function validateResponseQuality(
   if (errorIsMeaningful) {
     const envelopeText = extractEnvelopeErrorText(json);
     const errMsg =
-      rawError && typeof rawError === "object" && typeof (rawError as Record<string, unknown>).message === "string"
+      rawError &&
+      typeof rawError === "object" &&
+      typeof (rawError as Record<string, unknown>).message === "string"
         ? ((rawError as Record<string, unknown>).message as string)
         : envelopeText || JSON.stringify(rawError).substring(0, 200);
     return { valid: false, reason: `upstream error in 200 body: ${errMsg}` };
@@ -387,8 +468,7 @@ export async function validateResponseQuality(
   {
     const envelopeText = extractEnvelopeErrorText(json);
     if (envelopeText && EXHAUSTION_MARKER_PATTERN.test(envelopeText)) {
-      const snippet =
-        envelopeText.length > 80 ? `${envelopeText.slice(0, 80)}…` : envelopeText;
+      const snippet = envelopeText.length > 80 ? `${envelopeText.slice(0, 80)}…` : envelopeText;
       return { valid: false, reason: `upstream exhaustion marker in 200 body: ${snippet}` };
     }
   }
@@ -491,8 +571,9 @@ export async function validateResponseQuality(
 export function releaseQualityClone(
   clone: Response,
   original: Response,
-  quality: { clonedResponse?: Response }
+  quality: { valid?: boolean; clonedResponse?: Response }
 ): void {
+  if (quality.valid === false) void original.body?.cancel().catch(() => {});
   if (clone === original) return;
   void quality.clonedResponse?.body?.cancel().catch(() => {});
 }
