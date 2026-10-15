@@ -4416,11 +4416,6 @@ export async function handleChatCore({
   }
   providerResponse = streamReadiness.response;
 
-  // Notify success - caller can clear error status if needed
-  if (onRequestSuccess) {
-    await onRequestSuccess();
-  }
-
   const responseHeaders = assembleStreamingResponseHeaders({
     providerHeaders: providerResponse.headers,
     provider,
@@ -4463,6 +4458,11 @@ export async function handleChatCore({
     const streamConnectionId = getCurrentConnectionId();
 
     if (normalizedStreamStatus === 200) {
+      void Promise.resolve()
+        .then(() => onRequestSuccess?.())
+        .catch(() => {
+          log.warn?.("AUTH", "Could not clear recovered account state");
+        });
       void maybeSyncClaudeExtraUsageState({
         provider,
         connectionId: streamConnectionId,

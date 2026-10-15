@@ -110,6 +110,7 @@ interface ProviderConnectionView {
   consecutiveUseCount: number;
   priority: number;
   lastError: string | null;
+  lastErrorAt: string | null;
   lastErrorType: string | null;
   lastErrorSource: string | null;
   errorCode: string | number | null;
@@ -125,6 +126,7 @@ interface RecoverableConnectionState {
   connectionId: string;
   testStatus?: string | null;
   lastError?: string | null;
+  lastErrorAt?: string | null;
   rateLimitedUntil?: string | null;
   errorCode?: string | number | null;
   lastErrorType?: string | null;
@@ -213,6 +215,7 @@ function toProviderConnection(value: unknown): ProviderConnectionView {
     consecutiveUseCount: toNumber(row.consecutiveUseCount, 0),
     priority: toNumber(row.priority, 999),
     lastError: toStringOrNull(row.lastError),
+    lastErrorAt: toStringOrNull(row.lastErrorAt),
     lastErrorType: toStringOrNull(row.lastErrorType),
     lastErrorSource: toStringOrNull(row.lastErrorSource),
     errorCode:
@@ -1139,7 +1142,8 @@ export async function getProviderCredentials(
       return null;
     }
 
-    // Auto-decay backoffLevel for accounts whose rateLimitedUntil has passed.
+    // Recent 5xx probes retain history for five minutes after cooldown expiry.
+    // Other stale backoff metadata decays when rateLimitedUntil has passed.
     // Without this, high backoffLevel permanently deprioritizes accounts even
     // after the rate limit window expires, creating a deadlock where the account
     // needs a successful request to reset but never gets selected.
@@ -1147,17 +1151,22 @@ export async function getProviderCredentials(
       if (
         c.backoffLevel > 0 &&
         !isTerminalConnectionStatus(c) &&
-        !isAccountUnavailable(c.rateLimitedUntil)
+        !isAccountUnavailable(c.rateLimitedUntil) &&
+        !(
+          Number(c.errorCode) >= 500 &&
+          Number(c.errorCode) < 600 &&
+          Math.max(
+            cooldownUntilMs(c.rateLimitedUntil || "") || 0,
+            Date.parse(c.lastErrorAt || "") || 0
+          ) >
+            Date.now() - 300_000
+        )
       ) {
         c.backoffLevel = 0;
-        updateProviderConnection(c.id, {
-          backoffLevel: 0,
-          testStatus: "active",
-          lastError: null,
-          lastErrorAt: null,
-          lastErrorType: null,
-          lastErrorSource: null,
-          errorCode: null,
+        void clearConnectionErrorIfUnchanged(c.id, {
+          testStatus: c.testStatus,
+          lastErrorAt: c.lastErrorAt,
+          rateLimitedUntil: c.rateLimitedUntil,
         }).catch(() => {});
       }
     }
@@ -1740,6 +1749,7 @@ export async function getProviderCredentials(
       // Include current status for optimization check
       testStatus: connection.testStatus,
       lastError: connection.lastError,
+      lastErrorAt: connection.lastErrorAt,
       lastErrorType: connection.lastErrorType,
       lastErrorSource: connection.lastErrorSource,
       errorCode: connection.errorCode,
@@ -2410,25 +2420,20 @@ export async function clearAccountError(
 
   if (!hasError) return; // Skip if already clean
 
-  await updateProviderConnection(connectionId, {
-    testStatus: "active",
-    lastError: null,
-    lastErrorAt: null,
-    lastErrorType: null,
-    lastErrorSource: null,
-    errorCode: null,
-    rateLimitedUntil: null,
-    backoffLevel: 0,
+  const applied = await clearConnectionErrorIfUnchanged(connectionId, {
+    testStatus: currentConnection.testStatus,
+    lastErrorAt: currentConnection.lastErrorAt,
+    rateLimitedUntil: currentConnection.rateLimitedUntil,
   });
-  log.info("AUTH", `Account ${connectionId.slice(0, 8)} error cleared`);
+  if (applied) log.info("AUTH", `Account ${connectionId.slice(0, 8)} error cleared`);
 }
 
 /**
  * Optional CAS token. When provided, the clear is performed via an atomic
  * conditional UPDATE (clearConnectionErrorIfUnchanged) that aborts if the row
  * was written by a concurrent path between the caller's snapshot read and this
- * clear. Closes the TOCTOU window in the quota-recovery path. When omitted,
- * the clear is unconditional (preserves existing post-success-call behavior).
+ * clear. Closes the TOCTOU window in the quota-recovery path. Without this
+ * explicit token, clearAccountError compares the selected credential snapshot.
  */
 export interface RecoveredStateExpectation {
   testStatus: string | null;
