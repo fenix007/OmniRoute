@@ -309,23 +309,15 @@ type BadgeCriteria =
 // ─── Helper: Action Count ────────────────────────────────────────────────────
 
 /**
- * Get the total count of a specific action for an API key from the XP audit log.
+ * Get the durable lifetime count of a specific action for an API key (#12546).
+ * Reads xp_action_counts: xp_audit_log is pruned by retention and would undercount.
  */
 async function getActionCount(apiKeyId: string, action: string): Promise<number> {
   const { getDbInstance } = await import("../db/core");
   const db = getDbInstance();
 
   const row = db
-    .prepare(
-      `SELECT COALESCE(SUM(
-        CASE WHEN metadata IS NOT NULL
-          THEN CAST(json_extract(metadata, '$.amount') AS INTEGER)
-          ELSE 1
-        END
-      ), 0) AS total
-      FROM xp_audit_log
-      WHERE api_key_id = ? AND action = ?`
-    )
+    .prepare(`SELECT count AS total FROM xp_action_counts WHERE api_key_id = ? AND action = ?`)
     .get(apiKeyId, action) as { total: number } | undefined;
 
   return row?.total ?? 0;

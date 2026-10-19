@@ -245,6 +245,67 @@ export async function cleanupMemoryEntries(): Promise<CleanupResult> {
 }
 
 /**
+ * Clean up old domain_cost_history based on retention settings. (#6848)
+ * `timestamp` is a millisecond epoch (Date.now()).
+ */
+export async function cleanupDomainCostHistory(): Promise<CleanupResult> {
+  const db = getDbInstance();
+  const retention = getRetentionSettings();
+
+  const retentionDays = retention.domainCostHistory;
+  const cutoffEpoch = Date.now() - retentionDays * 86_400_000;
+
+  const result: CleanupResult = { deleted: 0, errors: 0 };
+
+  try {
+    const stmt = db.prepare("DELETE FROM domain_cost_history WHERE timestamp < ?");
+    const runResult = stmt.run(cutoffEpoch);
+    result.deleted = runResult.changes;
+
+    console.log(
+      `[Cleanup] Deleted ${result.deleted} domain_cost_history older than ${retentionDays} days`
+    );
+  } catch (err: unknown) {
+    console.error("[Cleanup] Error cleaning domain_cost_history:", err);
+    result.errors++;
+  }
+
+  return result;
+}
+
+/**
+ * Clean up old xp_audit_log based on retention settings. (#7260)
+ * Badge progress lives in the durable xp_action_counts table, not here.
+ */
+export async function cleanupXpAuditLog(): Promise<CleanupResult> {
+  const db = getDbInstance();
+  const retention = getRetentionSettings();
+
+  const retentionDays = retention.xpAuditLog;
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+  const cutoffISO = cutoffDate.toISOString();
+
+  const result: CleanupResult = { deleted: 0, errors: 0 };
+
+  try {
+    // created_at is SQLite datetime() text ("YYYY-MM-DD HH:MM:SS"), not ISO.
+    const stmt = db.prepare("DELETE FROM xp_audit_log WHERE created_at < datetime(?)");
+    const runResult = stmt.run(cutoffISO);
+    result.deleted = runResult.changes;
+
+    console.log(
+      `[Cleanup] Deleted ${result.deleted} xp_audit_log older than ${retentionDays} days`
+    );
+  } catch (err: unknown) {
+    console.error("[Cleanup] Error cleaning xp_audit_log:", err);
+    result.errors++;
+  }
+
+  return result;
+}
+
+/**
  * Run all cleanup functions if auto-cleanup is enabled.
  */
 export async function runAutoCleanup(): Promise<{
@@ -270,6 +331,8 @@ export async function runAutoCleanup(): Promise<{
     mcpAudit: await cleanupMcpAudit(),
     a2aEvents: await cleanupA2aEvents(),
     memoryEntries: await cleanupMemoryEntries(),
+    domainCostHistory: await cleanupDomainCostHistory(),
+    xpAuditLog: await cleanupXpAuditLog(),
     proxyLogs: await cleanupProxyLogs(),
   };
 
@@ -492,9 +555,7 @@ export async function cleanupProxyLogs(): Promise<CleanupResult> {
     const runResult = stmt.run(cutoffISO);
     result.deleted = runResult.changes;
 
-    console.log(
-      `[Cleanup] Deleted ${result.deleted} proxy_logs older than ${retentionDays} days`
-    );
+    console.log(`[Cleanup] Deleted ${result.deleted} proxy_logs older than ${retentionDays} days`);
   } catch (err: unknown) {
     console.error("[Cleanup] Error cleaning proxy_logs:", err);
     result.errors++;
@@ -525,17 +586,10 @@ export function startCleanupScheduler(): void {
       const result = await runAutoCleanup();
       const proxyResult = await cleanupProxyLogs();
       const totalDeleted = result.totalDeleted + proxyResult.deleted;
+      // No full VACUUM here: it blocks the event loop for the whole file rewrite.
+      // Freed pages are reused, and the configured vacuum scheduler (#4437) compacts.
       if (totalDeleted > 0) {
-        console.log(
-          `[Cleanup] Startup cleanup freed ${totalDeleted} rows. Running VACUUM...`
-        );
-        try {
-          const db = getDbInstance();
-          db.exec("VACUUM");
-          console.log("[Cleanup] VACUUM completed after startup cleanup.");
-        } catch (vacErr) {
-          console.error("[Cleanup] VACUUM after cleanup failed:", vacErr);
-        }
+        console.log(`[Cleanup] Startup cleanup freed ${totalDeleted} rows.`);
       }
     } catch (err) {
       console.error("[Cleanup] Startup cleanup failed:", err);
@@ -548,17 +602,10 @@ export function startCleanupScheduler(): void {
       const result = await runAutoCleanup();
       const proxyResult = await cleanupProxyLogs();
       const totalDeleted = result.totalDeleted + proxyResult.deleted;
+      // No full VACUUM here: it blocks the event loop for the whole file rewrite.
+      // Freed pages are reused, and the configured vacuum scheduler (#4437) compacts.
       if (totalDeleted > 0) {
-        console.log(
-          `[Cleanup] Periodic cleanup freed ${totalDeleted} rows. Running VACUUM...`
-        );
-        try {
-          const db = getDbInstance();
-          db.exec("VACUUM");
-          console.log("[Cleanup] VACUUM completed after periodic cleanup.");
-        } catch (vacErr) {
-          console.error("[Cleanup] VACUUM after cleanup failed:", vacErr);
-        }
+        console.log(`[Cleanup] Periodic cleanup freed ${totalDeleted} rows.`);
       }
     } catch (err) {
       console.error("[Cleanup] Periodic cleanup failed:", err);

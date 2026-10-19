@@ -1417,3 +1417,24 @@ the gpt-6 family, so every `openai/gpt-6-*` request failed and combos fell
 through to the next target after a retry delay. `MAX_TOKENS_UNSUPPORTED_PATTERNS`
 now includes `gpt-5.6` and `gpt-6`, and the default executor maps defaults for
 `gpt-6` too. Regression guard: `tests/unit/openai-gpt6-max-completion-tokens.test.ts`.
+
+## Event-loop stalls and retention backports — 2026-10-19
+
+Production CPU profiles showed 0.6-3.9s event-loop stalls: a per-request
+`COUNT(*)` over `xp_audit_log` (517k rows) for badge checks, and call-log
+rotation stat-ing every artifact twice a minute (`6e98108`).
+
+Backports on top of that fix:
+
+| Upstream PR                | What                                                           | Adaptation                                                                                          |
+| -------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| #7260                      | `cleanupXpAuditLog`, `retention.xpAuditLog` (30 days)          | compares with `datetime(?)` because rows store SQLite datetime text; no settings UI field           |
+| #6988                      | `cleanupDomainCostHistory` (30 days)                           | millisecond cutoff from current upstream; compression tables skipped (absent or empty in the fork)  |
+| #12651                     | durable `xp_action_counts` counters for action-count badges    | migration 136; events.ts still skips badges already earned                                          |
+| (upstream instrumentation) | start `startCleanupScheduler()` from `instrumentation-node.ts` | it was only called from the unused `server-init.ts`, so no retention cleanup ever ran in production |
+
+The scheduler no longer runs a full `VACUUM` after each cleanup (upstream
+#12821 removed it too): it blocks the event loop for the whole file rewrite.
+The configured vacuum scheduler (#4437) still compacts. First production run
+deletes ~197k `xp_audit_log` and ~170k `domain_cost_history` rows; other
+tables follow the operator retention already stored in `databaseSettings`.

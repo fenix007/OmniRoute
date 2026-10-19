@@ -379,6 +379,8 @@ export const databaseSettingsSchema = z
       callLogs: z.number().int().min(1).max(3650),
       usageHistory: z.number().int().min(1).max(3650),
       memoryEntries: z.number().int().min(1).max(3650),
+      domainCostHistory: z.number().int().min(1).max(365).optional(),
+      xpAuditLog: z.number().int().min(1).max(365).optional(),
       autoCleanupEnabled: z.boolean(),
     }),
 

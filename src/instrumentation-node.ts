@@ -344,6 +344,16 @@ export async function registerNodejs(): Promise<void> {
     console.warn("[STARTUP] Could not initialize vacuum scheduler (non-fatal):", msg);
   }
 
+  // Retention auto-cleanup (startup + every 6h). It was only wired into the unused
+  // src/server-init.ts, so telemetry tables grew without bound in production.
+  try {
+    const { startCleanupScheduler } = await import("@/lib/db/cleanup");
+    startCleanupScheduler();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[STARTUP] Could not start cleanup scheduler (non-fatal):", msg);
+  }
+
   if (!isBackgroundServicesDisabled()) {
     try {
       const { bootstrapEmbeddedServices } = await import("@/lib/services/bootstrap");

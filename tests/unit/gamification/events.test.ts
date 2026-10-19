@@ -44,13 +44,12 @@ describe("Gamification Events", () => {
     db.prepare("DELETE FROM xp_audit_log WHERE api_key_id = ?").run(testKey);
   });
 
-  it("unlocks count badges once the bounded count reaches their threshold", async () => {
+  it("unlocks count badges from the durable action counter", async () => {
     const db = getDbInstance();
     const testKey = `test-badge-threshold-${Date.now()}`;
-    const insert = db.prepare(
-      "INSERT INTO xp_audit_log (api_key_id, action, xp_earned) VALUES (?, ?, ?)"
-    );
-    for (let i = 0; i < 999; i++) insert.run(testKey, "request", 1);
+    db.prepare(
+      "INSERT INTO xp_action_counts (api_key_id, action, count) VALUES (?, 'request', 999)"
+    ).run(testKey);
 
     await emitGamificationEvent({ apiKeyId: testKey, action: "request" });
 
@@ -59,6 +58,7 @@ describe("Gamification Events", () => {
     assert.equal(hasBadge(testKey, "token-machine"), false);
 
     db.prepare("DELETE FROM xp_audit_log WHERE api_key_id = ?").run(testKey);
+    db.prepare("DELETE FROM xp_action_counts WHERE api_key_id = ?").run(testKey);
     db.prepare("DELETE FROM user_badges WHERE api_key_id = ?").run(testKey);
   });
 });

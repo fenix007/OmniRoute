@@ -166,26 +166,21 @@ async function checkActionCountBadges(apiKeyId: string, action: string): Promise
   const badges = thresholds[action];
   if (!badges) return;
 
-  // This runs after every request. An unbounded COUNT(*) over a key with
-  // hundreds of thousands of audit rows blocked the event loop for ~1s, so
-  // skip earned badges and stop counting at the highest pending threshold.
+  // Durable per-key/per-action counter (#12546), the same source getActionCount()
+  // (badges.ts) reads. Counting xp_audit_log here was an O(rows) scan per request
+  // and undercounts once the retention prune ages rows out.
   const { hasBadge } = await import("../db/gamification");
   const pending = badges.filter((badge) => !hasBadge(apiKeyId, badge.id));
   if (pending.length === 0) return;
 
   const { getDbInstance } = await import("../db/core");
   const row = getDbInstance()
-    .prepare(
-      `SELECT COUNT(*) AS count FROM (
-         SELECT 1 FROM xp_audit_log WHERE api_key_id = ? AND action = ? LIMIT ?
-       )`
-    )
-    .get(apiKeyId, action, Math.max(...pending.map((badge) => badge.threshold))) as {
-    count: number;
-  };
+    .prepare("SELECT count FROM xp_action_counts WHERE api_key_id = ? AND action = ?")
+    .get(apiKeyId, action) as { count: number } | undefined;
+  const count = row?.count ?? 0;
 
   for (const badge of pending) {
-    if (row.count >= badge.threshold) {
+    if (count >= badge.threshold) {
       await checkAndUnlockBadge(apiKeyId, badge.id);
     }
   }
