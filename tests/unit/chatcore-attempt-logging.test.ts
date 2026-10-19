@@ -124,6 +124,60 @@ test("cacheSource 'semantic' is preserved", async () => {
   assert.equal(row.cacheSource, "semantic");
 });
 
+test("keeps requested and provider effort in the summary before large-body truncation", async () => {
+  const id = "attempt-effort-large";
+  persistAttemptLogs(
+    { status: 200, providerRequest: { reasoning: { effort: "high" }, input: "private-wire" } },
+    baseCtx({
+      pendingRequestId: id,
+      clientRawRequest: {
+        endpoint: "/v1/responses",
+        body: { reasoning: { effort: "medium" }, input: "private-client" },
+      },
+      body: { model: "model-high", input: "x".repeat(400_000), reasoning: { effort: "medium" } },
+    })
+  );
+  const row = await pollForCallLog(id);
+  assert.ok(row);
+  assert.equal(row.requestedEffort, "medium");
+  assert.equal(row.sentEffort, "high");
+  assert.equal(row.reasoningEffort, "high");
+  const stored = coreDb
+    .getDbInstance()
+    .prepare("SELECT request_summary FROM call_logs WHERE id = ?")
+    .get(id) as { request_summary: string };
+  assert.deepEqual(JSON.parse(stored.request_summary), {
+    requestedEffort: "medium",
+    sentEffort: "high",
+  });
+  assert.doesNotMatch(stored.request_summary, /private|input|reasoning/);
+  assert.equal((row.requestBody as Record<string, unknown>)._truncated, true);
+});
+
+test("does not infer sent effort for failed attempts or effort from a model suffix", async () => {
+  const id = "attempt-effort-unsent";
+  persistAttemptLogs(
+    { status: 502, providerRequest: { reasoning: { effort: "high" } } },
+    baseCtx({ pendingRequestId: id, body: { model: "model-high" } })
+  );
+  const row = await pollForCallLog(id);
+  assert.ok(row);
+  assert.equal(row.requestedEffort, undefined);
+  assert.equal(row.sentEffort, undefined);
+});
+
+test("no-log suppresses effort summary metadata", async () => {
+  const id = "attempt-effort-nolog";
+  persistAttemptLogs(
+    { status: 200, providerRequest: { reasoning: { effort: "high" } } },
+    baseCtx({ pendingRequestId: id, noLogEnabled: true, body: { reasoning: { effort: "medium" } } })
+  );
+  const row = await pollForCallLog(id);
+  assert.ok(row);
+  assert.equal(row.requestedEffort, undefined);
+  assert.equal(row.sentEffort, undefined);
+});
+
 test("connectionId falls back to credentials.connectionId when null, and error is persisted", async () => {
   const id = "attempt-fallback-1";
   persistAttemptLogs(

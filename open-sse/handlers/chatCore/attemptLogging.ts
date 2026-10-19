@@ -15,6 +15,7 @@ import { logAuditEvent } from "@/lib/compliance";
 import { saveCallLog } from "@/lib/usageDb";
 import { cloneBoundedChatLogPayload, truncateForLog } from "./logTruncation.ts";
 import { attachLogMeta } from "./cacheUsageMeta.ts";
+import { bodyEffort } from "../../utils/callLogEffort.ts";
 
 export type PersistAttemptLogsArgs = {
   status: number;
@@ -37,7 +38,7 @@ export type PersistAttemptLogsContext = {
   detailedLoggingEnabled: boolean;
   reqLogger: { getPipelinePayloads?: () => Record<string, unknown> | undefined } | null | undefined;
   pendingRequestId: unknown;
-  clientRawRequest: { endpoint?: string } | null | undefined;
+  clientRawRequest: { endpoint?: string; body?: unknown } | null | undefined;
   requestedModel: unknown;
   credentials: { connectionId?: string } | null | undefined;
   startTime: number;
@@ -173,6 +174,14 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     connectionId: finalConnectionId || undefined,
     duration: Date.now() - startTime,
     tokens: tokens || {},
+    // Capture enum values before truncation, independently of pipeline logging.
+    ...(!noLogEnabled
+      ? {
+          requestedEffort: bodyEffort(clientRawRequest?.body ?? body),
+          // A pre-send failure must not claim that an effort was sent upstream.
+          sentEffort: status >= 200 && status < 300 ? bodyEffort(providerRequest) : undefined,
+        }
+      : {}),
     requestBody: cloneBoundedChatLogPayload(
       attachLogMeta(truncateForLog(body as Record<string, unknown>), {
         ...accountRotationMeta,

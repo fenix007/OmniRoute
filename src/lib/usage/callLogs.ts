@@ -6,6 +6,7 @@
  */
 
 import fs from "node:fs";
+import { effortSummary } from "@omniroute/open-sse/utils/callLogEffort.ts";
 import path from "node:path";
 import { getEmptyResponseErrorCode } from "@omniroute/open-sse/services/combo/emptyResponseRetryBudget.ts";
 import type { RequestPipelinePayloads } from "@omniroute/open-sse/utils/requestLogger.ts";
@@ -488,6 +489,9 @@ function mapSummaryRow(row: CallLogSummaryRow) {
   const detailState = normalizeDetailState(row.detail_state);
   const provider = row.provider;
   const nodePrefix = row.provider_node_prefix ?? null;
+  const efforts = effortSummary(
+    row.request_summary ? parseStoredPayload(row.request_summary) : null
+  );
   return {
     id: row.id,
     timestamp: row.timestamp,
@@ -524,6 +528,9 @@ function mapSummaryRow(row: CallLogSummaryRow) {
     artifactSizeBytes: row.artifact_size_bytes,
     artifactSha256: row.artifact_sha256,
     requestSummary: row.request_summary ? parseStoredPayload(row.request_summary) : null,
+    ...efforts,
+    // Compatibility with existing diagnostics collectors; provenance remains call-log.
+    ...(efforts.sentEffort ? { reasoningEffort: efforts.sentEffort } : {}),
     hasRequestBody: toNumber(row.has_request_body) === 1,
     hasResponseBody: toNumber(row.has_response_body) === 1,
     hasPipelineDetails: toNumber(row.has_pipeline_details) === 1,
@@ -625,9 +632,13 @@ export async function saveCallLog(entry: any) {
       modelPinned: entry.modelPinned ? 1 : 0,
     };
 
-    const requestSummary = noLogEnabled
+    const baseSummary = noLogEnabled
       ? null
       : buildRequestSummary(logEntry.requestType, protectedRequestBody);
+    const diagnostics = noLogEnabled ? {} : effortSummary(entry);
+    const requestSummary = Object.keys(diagnostics).length
+      ? JSON.stringify({ ...(baseSummary ? JSON.parse(baseSummary) : {}), ...diagnostics })
+      : baseSummary;
     const detailExpected =
       !noLogEnabled &&
       (protectedRequestBody !== null ||
