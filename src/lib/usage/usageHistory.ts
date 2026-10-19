@@ -25,6 +25,7 @@ import {
   storeCompletedDetail,
 } from "./completedRequestDetails";
 import { shouldPersistToDisk } from "./migrations";
+import { recordCodexTtft } from "@omniroute/open-sse/services/codexConnectionHealth.ts";
 import * as routing from "./sessionRouting";
 import { emitUsageRecorded } from "./usageEvents";
 import {
@@ -608,6 +609,9 @@ export interface UsageEntry {
  * Save request usage entry to SQLite.
  */
 export async function saveRequestUsage(entry: UsageEntry) {
+  if (entry.provider === "codex" && entry.success && entry.connectionId) {
+    recordCodexTtft(entry.connectionId, Number(entry.timeToFirstTokenMs));
+  }
   if (!shouldPersistToDisk) return;
 
   try {

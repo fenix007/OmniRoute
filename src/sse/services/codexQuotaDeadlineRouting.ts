@@ -19,6 +19,7 @@
 import { getQuotaCache } from "@/domain/quotaCache";
 import { getCachedCodexResetCredits } from "@/lib/usage/codexResetCreditCache";
 import { getCachedCodexQuota } from "@omniroute/open-sse/services/codexQuotaFetcher.ts";
+import { codexConnectionHealthFactor } from "@omniroute/open-sse/services/codexConnectionHealth.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -45,6 +46,8 @@ export interface CodexDeadlineScore {
   /** A subscription end date exists but is already in the past. */
   subscriptionExpired: boolean;
   weightSource: CodexDeadlineWeightSource;
+  /** Short-term health multiplier (1 = healthy); see codexConnectionHealth.ts. */
+  healthFactor: number;
 }
 
 /** Headroom kept in reserve, in percentage points, so an account never runs dry. */
@@ -207,6 +210,7 @@ export function scoreCodexDeadlineConnection(
     sessionDepleted: sessionEmpty && sessionResetMs === null,
     subscriptionExpired: subscriptionEndsAt !== null && subscriptionDeadlineMs === null,
     weightSource: "measured",
+    healthFactor: 1,
   };
 }
 
@@ -239,7 +243,12 @@ function neutralizeUnknownWeights(scored: ReadonlyArray<{ score: CodexDeadlineSc
 
 export function selectCodexDeadlineConnection<T extends CodexDeadlineConnection>(
   connections: readonly T[],
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  healthFactor: (
+    connectionId: string,
+    poolIds: readonly string[],
+    nowMs: number
+  ) => number = codexConnectionHealthFactor
 ): { connection: T; score: CodexDeadlineScore } | null {
   const scored = connections
     .map((connection) => ({ connection, score: scoreCodexDeadlineConnection(connection, nowMs) }))
@@ -248,17 +257,25 @@ export function selectCodexDeadlineConnection<T extends CodexDeadlineConnection>
 
   neutralizeUnknownWeights(scored);
 
+  // Throttled accounts (recent overload 502s, TTFT well above their peers)
+  // receive proportionally less new work; quota urgency still ranks the rest.
+  const poolIds = scored.map(({ connection }) => connection.id);
+  for (const { connection, score } of scored) {
+    score.healthFactor = healthFactor(connection.id, poolIds, nowMs);
+  }
+  const effectiveWeight = (score: CodexDeadlineScore) => score.weight * score.healthFactor;
+
   return scored.sort((left, right) => {
     if (left.score.sessionDepleted !== right.score.sessionDepleted) {
       return left.score.sessionDepleted ? 1 : -1;
     }
     const leftLastUsed = timestamp(left.connection.lastUsedAt) ?? nowMs - UNUSED_IDLE_MS;
     const rightLastUsed = timestamp(right.connection.lastUsedAt) ?? nowMs - UNUSED_IDLE_MS;
-    const leftDeficit = Math.max(0, nowMs - leftLastUsed) * left.score.weight;
-    const rightDeficit = Math.max(0, nowMs - rightLastUsed) * right.score.weight;
+    const leftDeficit = Math.max(0, nowMs - leftLastUsed) * effectiveWeight(left.score);
+    const rightDeficit = Math.max(0, nowMs - rightLastUsed) * effectiveWeight(right.score);
     return (
       rightDeficit - leftDeficit ||
-      right.score.weight - left.score.weight ||
+      effectiveWeight(right.score) - effectiveWeight(left.score) ||
       left.connection.priority - right.connection.priority ||
       left.connection.id.localeCompare(right.connection.id)
     );

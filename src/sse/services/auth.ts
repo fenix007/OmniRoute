@@ -81,6 +81,10 @@ import { resolveAccountProxiesFromRegistry } from "./noAuthProxyResolution";
 import * as log from "../utils/logger";
 import { fisherYatesShuffle, getNextFromDeckSync } from "@/shared/utils/shuffleDeck";
 import { selectCodexDeadlineConnection } from "./codexQuotaDeadlineRouting";
+import {
+  isCodexOverloadFailure,
+  recordCodexOverload,
+} from "@omniroute/open-sse/services/codexConnectionHealth.ts";
 import { resolveSessionIdentity } from "@omniroute/open-sse/services/sessionIdentity.ts";
 import { inspectSessionAccountAffinity } from "@/lib/db/sessionAccountAffinity";
 import { buildSessionRouting } from "./sessionRoutingDiagnostics";
@@ -1646,7 +1650,7 @@ export async function getProviderCredentials(
       // affinity ones, which made the strategy look inert in production.
       log.info(
         "AUTH",
-        `codex quota-deadline picked=${connection.id.slice(0, 8)} source=strategy weight=${selected.score.weight.toFixed(2)}(${selected.score.weightSource}) burn=${selected.score.requiredWeeklyBurn.toFixed(1)} deadline=${selected.score.deadlineAt || "none"} weekly=${selected.score.weeklyKnown ? "known" : "unknown"}${selected.score.subscriptionExpired ? " subscription=expired" : ""}`
+        `codex quota-deadline picked=${connection.id.slice(0, 8)} source=strategy weight=${selected.score.weight.toFixed(2)}(${selected.score.weightSource}) health=${selected.score.healthFactor.toFixed(2)} burn=${selected.score.requiredWeeklyBurn.toFixed(1)} deadline=${selected.score.deadlineAt || "none"} weekly=${selected.score.weeklyKnown ? "known" : "unknown"}${selected.score.subscriptionExpired ? " subscription=expired" : ""}`
       );
     } else if (strategy === "p2c") {
       const candidatePool = withQuota.length > 0 ? withQuota : orderedConnections;
@@ -1969,6 +1973,10 @@ export async function markAccountUnavailable(
     isCombo?: boolean;
   } = {}
 ) {
+  if (provider === "codex" && isCodexOverloadFailure(status, errorText)) {
+    recordCodexOverload(connectionId);
+  }
+
   const currentMutex = markMutexes.get(connectionId) || Promise.resolve();
   let resolveMutex: (() => void) | undefined;
   markMutexes.set(
