@@ -92,6 +92,27 @@ const CODEX_FORWARDED_CLIENT_HEADERS = [
   "X-ResponsesAPI-Include-Timing-Metrics",
 ] as const;
 
+const CODEX_ROUTING_HINT_HEADER = "X-Codex-Routing-Hint";
+
+/**
+ * Native Codex sends `X-Codex-Routing-Hint: model=<slug>[;tier=<service_tier>]`
+ * on every ChatGPT-backend Responses request (codex-rs core/src/client.rs
+ * build_routing_hint_header); API-key providers get none. The tier comes from
+ * the account default because the request body is not built yet here.
+ */
+export function buildCodexRoutingHint(
+  model: string | undefined,
+  credentials: ProviderCredentials | null | undefined
+): string | null {
+  if (!credentials?.accessToken || credentials.apiKey) return null;
+  const { baseModel } = splitCodexReasoningSuffix(model);
+  if (!baseModel) return null;
+  const tier = normalizeServiceTierValue(
+    getCodexRequestDefaults(credentials.providerSpecificData).serviceTier
+  );
+  return tier ? `model=${baseModel};tier=${tier}` : `model=${baseModel}`;
+}
+
 function getHeaderValueCaseInsensitive(
   headers: Record<string, string> | null | undefined,
   name: string
@@ -565,6 +586,21 @@ const CODEX_SSE_TRANSIENT_ERROR_PATTERNS = [
 // small peek window is enough — this bounds how much of a legitimate response we
 // buffer before giving up and passing the stream through unchanged.
 const CODEX_SSE_PEEK_MAX_BYTES = 8192;
+const CODEX_SSE_HANDSHAKE_EVENT_TYPES = new Set([
+  "response.created",
+  "response.in_progress",
+  "codex.rate_limits",
+]);
+
+// Matches the JSON `type` of data payloads (not `event:` lines), so a chunk split
+// between an `event: error` line and its data cannot end the peek before the
+// error text is visible.
+function hasCodexSsePostHandshakeEvent(lowerText: string): boolean {
+  for (const match of lowerText.matchAll(/"type"\s*:\s*"(response\.[^"]+)"/g)) {
+    if (!CODEX_SSE_HANDSHAKE_EVENT_TYPES.has(match[1])) return true;
+  }
+  return false;
+}
 
 /**
  * Best-effort extraction of the human-readable error message from a peeked SSE
@@ -648,12 +684,12 @@ export async function peekCodexSseTransientError(
         matched = hit;
         break;
       }
-      // A real content/completion event this early means the response is
-      // healthy — stop peeking so we do not needlessly buffer a long stream.
-      if (
-        lower.includes('"type":"response.output_text.delta"') ||
-        lower.includes('"type":"response.completed"')
-      ) {
+      // Capacity rejections arrive before any output, right after the
+      // created/in_progress handshake. The first event past that handshake
+      // (reasoning, tool-call arguments, output items, text) proves the
+      // response is healthy; holding it longer only delays the client's
+      // headers and first token.
+      if (hasCodexSsePostHandshakeEvent(lower)) {
         break;
       }
     }
@@ -1050,10 +1086,13 @@ export class CodexExecutor extends BaseExecutor {
   buildHeaders(
     credentials: ProviderCredentials,
     stream = true,
-    clientHeaders?: Record<string, string> | null
+    clientHeaders?: Record<string, string> | null,
+    model?: string
   ) {
     const isCompactRequest = isCompactResponsesEndpoint(credentials?.requestEndpointPath);
     const headers = super.buildHeaders(credentials, isCompactRequest ? false : true, clientHeaders);
+    const routingHint = buildCodexRoutingHint(model, credentials);
+    if (routingHint) headers[CODEX_ROUTING_HINT_HEADER] = routingHint;
     // OmniRoute owns the upstream client identity. Forwarding an older caller's
     // version can deny newer models and poison account-model eligibility locks.
     headers.Version = getCodexClientVersion();
