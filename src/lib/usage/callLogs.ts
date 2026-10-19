@@ -31,6 +31,7 @@ import {
   cleanupEmptyCallLogDirs,
   deleteCallArtifact,
   listCallLogArtifactFiles,
+  listCallLogArtifactPaths,
   readCallArtifact,
   writeCallArtifact,
   type CallLogArtifact,
@@ -388,7 +389,7 @@ export function cleanupOrphanCallLogFiles(baseDir = CALL_LOGS_DIR) {
   try {
     const referenced = listReferencedArtifacts();
     let deleted = 0;
-    for (const file of listCallLogArtifactFiles(baseDir)) {
+    for (const file of listCallLogArtifactPaths(baseDir)) {
       if (referenced.has(file.relativePath)) continue;
       if (deleteCallArtifact(file.relativePath)) {
         deleted++;
@@ -410,7 +411,9 @@ export function cleanupOverflowCallLogFiles(baseDir = CALL_LOGS_DIR, maxEntries?
 
   try {
     let deleted = 0;
-    const files = listCallLogArtifactFiles(baseDir);
+    // Only pay for mtime ordering when there is something to prune.
+    const files =
+      listCallLogArtifactPaths(baseDir).length > limit ? listCallLogArtifactFiles(baseDir) : [];
     for (const file of files.slice(limit)) {
       if (deleteCallArtifact(file.relativePath)) {
         clearArtifactReference(file.relativePath, "missing");

@@ -128,8 +128,7 @@ async function checkAndUnlockBadge(apiKeyId: string, badgeId: string): Promise<v
     const badgeRow = getDbInstance()
       .prepare("SELECT name, description, icon, rarity FROM badge_definitions WHERE id = ?")
       .get(badgeId) as
-      | { name: string; description: string | null; icon: string | null; rarity: string }
-      | undefined;
+      { name: string; description: string | null; icon: string | null; rarity: string } | undefined;
 
     // Record notification for SSE toast
     const { recordBadgeUnlock } = await import("./notifications");
@@ -148,18 +147,6 @@ async function checkAndUnlockBadge(apiKeyId: string, badgeId: string): Promise<v
  * Check action count badges after an action.
  */
 async function checkActionCountBadges(apiKeyId: string, action: string): Promise<void> {
-  const { getDbInstance } = await import("../db/core");
-  const db = getDbInstance();
-
-  // Count total actions of this type
-  const row = db
-    .prepare(
-      "SELECT COALESCE(COUNT(*), 0) AS count FROM xp_audit_log WHERE api_key_id = ? AND action = ?"
-    )
-    .get(apiKeyId, action) as { count: number };
-
-  const count = row.count;
-
   // Badge thresholds
   const thresholds: Record<string, Array<{ id: string; threshold: number }>> = {
     request: [
@@ -179,8 +166,26 @@ async function checkActionCountBadges(apiKeyId: string, action: string): Promise
   const badges = thresholds[action];
   if (!badges) return;
 
-  for (const badge of badges) {
-    if (count >= badge.threshold) {
+  // This runs after every request. An unbounded COUNT(*) over a key with
+  // hundreds of thousands of audit rows blocked the event loop for ~1s, so
+  // skip earned badges and stop counting at the highest pending threshold.
+  const { hasBadge } = await import("../db/gamification");
+  const pending = badges.filter((badge) => !hasBadge(apiKeyId, badge.id));
+  if (pending.length === 0) return;
+
+  const { getDbInstance } = await import("../db/core");
+  const row = getDbInstance()
+    .prepare(
+      `SELECT COUNT(*) AS count FROM (
+         SELECT 1 FROM xp_audit_log WHERE api_key_id = ? AND action = ? LIMIT ?
+       )`
+    )
+    .get(apiKeyId, action, Math.max(...pending.map((badge) => badge.threshold))) as {
+    count: number;
+  };
+
+  for (const badge of pending) {
+    if (row.count >= badge.threshold) {
       await checkAndUnlockBadge(apiKeyId, badge.id);
     }
   }

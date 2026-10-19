@@ -322,3 +322,32 @@ test("cleanupOverflowCallLogFiles ignores rmSync failures for old artifacts", ()
   assert.equal(fs.existsSync(newerFile), true);
   assert.equal(fs.existsSync(olderFile), true);
 });
+
+test("cleanupOverflowCallLogFiles does not stat artifacts while under the limit", () => {
+  assert.ok(CALL_LOGS_DIR, "CALL_LOGS_DIR should resolve for test data dir");
+  fs.rmSync(CALL_LOGS_DIR, { recursive: true, force: true });
+  const dayDir = path.join(CALL_LOGS_DIR, "2026-04-03");
+  fs.mkdirSync(dayDir, { recursive: true });
+  fs.writeFileSync(path.join(dayDir, "100000_a.json"), "{}");
+  fs.writeFileSync(path.join(dayDir, "110000_b.json"), "{}");
+
+  const originalStatSync = fs.statSync;
+  const statted = [];
+  fs.statSync = (targetPath, ...args) => {
+    statted.push(String(targetPath));
+    return originalStatSync.call(fs, targetPath, ...args);
+  };
+
+  try {
+    assert.equal(cleanupOverflowCallLogFiles(CALL_LOGS_DIR, 2), 0);
+  } finally {
+    fs.statSync = originalStatSync;
+  }
+
+  assert.deepEqual(
+    statted.filter((p) => p.endsWith(".json")),
+    []
+  );
+  assert.equal(fs.existsSync(path.join(dayDir, "100000_a.json")), true);
+  assert.equal(fs.existsSync(path.join(dayDir, "110000_b.json")), true);
+});

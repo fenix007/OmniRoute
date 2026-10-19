@@ -283,29 +283,36 @@ export function cleanupEmptyCallLogDirs(baseDir = CALL_LOGS_DIR) {
   }
 }
 
-export function listCallLogArtifactFiles(baseDir = CALL_LOGS_DIR) {
+/**
+ * Artifact paths without per-file stat calls. Rotation runs on the event loop
+ * every minute; stat-ing every artifact there stalled production for seconds.
+ */
+export function listCallLogArtifactPaths(baseDir = CALL_LOGS_DIR) {
   if (!baseDir || !fs.existsSync(baseDir)) return [];
 
-  return fs
-    .readdirSync(baseDir)
-    .flatMap((entry) => {
-      const entryPath = path.join(baseDir, entry);
-      try {
-        const stat = fs.statSync(entryPath);
-        if (!stat.isDirectory()) return [];
+  return fs.readdirSync(baseDir).flatMap((entry) => {
+    const entryPath = path.join(baseDir, entry);
+    try {
+      if (!fs.statSync(entryPath).isDirectory()) return [];
 
-        return fs
-          .readdirSync(entryPath)
-          .filter((file) => file.endsWith(".json"))
-          .map((file) => {
-            const absPath = path.join(entryPath, file);
-            const fileStat = fs.statSync(absPath);
-            return {
-              relativePath: path.posix.join(entry, file),
-              absPath,
-              mtimeMs: fileStat.mtimeMs,
-            };
-          });
+      return fs
+        .readdirSync(entryPath)
+        .filter((file) => file.endsWith(".json"))
+        .map((file) => ({
+          relativePath: path.posix.join(entry, file),
+          absPath: path.join(entryPath, file),
+        }));
+    } catch {
+      return [];
+    }
+  });
+}
+
+export function listCallLogArtifactFiles(baseDir = CALL_LOGS_DIR) {
+  return listCallLogArtifactPaths(baseDir)
+    .flatMap((file) => {
+      try {
+        return [{ ...file, mtimeMs: fs.statSync(file.absPath).mtimeMs }];
       } catch {
         return [];
       }
@@ -320,7 +327,7 @@ export function purgeCallLogArtifactDirectory(
   if (!baseDir || !fs.existsSync(baseDir)) return result;
 
   try {
-    result.deletedArtifacts = listCallLogArtifactFiles(baseDir).length;
+    result.deletedArtifacts = listCallLogArtifactPaths(baseDir).length;
   } catch {
     result.deletedArtifacts = 0;
   }

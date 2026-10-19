@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { emitGamificationEvent } from "../../../src/lib/gamification/events";
 import { getDbInstance } from "../../../src/lib/db/core";
+import { hasBadge } from "../../../src/lib/db/gamification";
 
 describe("Gamification Events", () => {
   it("does not throw for valid event", async () => {
@@ -41,5 +42,23 @@ describe("Gamification Events", () => {
 
     // Cleanup
     db.prepare("DELETE FROM xp_audit_log WHERE api_key_id = ?").run(testKey);
+  });
+
+  it("unlocks count badges once the bounded count reaches their threshold", async () => {
+    const db = getDbInstance();
+    const testKey = `test-badge-threshold-${Date.now()}`;
+    const insert = db.prepare(
+      "INSERT INTO xp_audit_log (api_key_id, action, xp_earned) VALUES (?, ?, ?)"
+    );
+    for (let i = 0; i < 999; i++) insert.run(testKey, "request", 1);
+
+    await emitGamificationEvent({ apiKeyId: testKey, action: "request" });
+
+    assert.equal(hasBadge(testKey, "first-token"), true);
+    assert.equal(hasBadge(testKey, "token-consumer"), true);
+    assert.equal(hasBadge(testKey, "token-machine"), false);
+
+    db.prepare("DELETE FROM xp_audit_log WHERE api_key_id = ?").run(testKey);
+    db.prepare("DELETE FROM user_badges WHERE api_key_id = ?").run(testKey);
   });
 });
