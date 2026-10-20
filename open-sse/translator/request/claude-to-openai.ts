@@ -347,6 +347,32 @@ function fixMissingToolResponses(messages) {
   }
 }
 
+// Convert a Claude `document` block into an OpenAI content part. A base64 document
+// (Claude Code sends PDFs this way) becomes the Chat Completions `file` part, which
+// OpenAI accepts natively and geminiHelper turns into `inlineData`. Plain-text and URL
+// documents become text, because OpenAI `file` parts only carry base64 data.
+function convertClaudeDocumentBlock(block, preserveCacheControl = false): JsonRecord | null {
+  const source = block?.source;
+  const title = typeof block?.title === "string" && block.title ? block.title : null;
+  let part: JsonRecord | null = null;
+
+  if (source?.type === "base64" && typeof source.data === "string" && source.data) {
+    const mediaType = source.media_type || "application/pdf";
+    const file: JsonRecord = { file_data: `data:${mediaType};base64,${source.data}` };
+    if (title) file.filename = title;
+    part = { type: "file", file };
+  } else if (source?.type === "text" && typeof source.data === "string" && source.data) {
+    part = { type: "text", text: title ? `[${title}]\n${source.data}` : source.data };
+  } else if (source?.type === "url" && typeof source.url === "string" && source.url) {
+    part = { type: "text", text: `[Document${title ? `: ${title}` : ""}] ${source.url}` };
+  }
+
+  if (part && preserveCacheControl && block.cache_control !== undefined) {
+    part.cache_control = block.cache_control;
+  }
+  return part;
+}
+
 // Convert single Claude message - returns single message or array of messages
 function convertClaudeMessage(msg, preserveCacheControl = false) {
   const role = msg.role === "user" || msg.role === "tool" ? "user" : "assistant";
@@ -394,6 +420,12 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
           }
           break;
 
+        case "document": {
+          const documentPart = convertClaudeDocumentBlock(block, preserveCacheControl);
+          if (documentPart) parts.push(documentPart);
+          break;
+        }
+
         case "thinking":
           reasoningContent = block.thinking || block.text || "";
           break;
@@ -411,9 +443,7 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
             function: {
               name: block.name,
               arguments:
-                typeof block.input === "string"
-                  ? block.input
-                  : JSON.stringify(block.input || {}),
+                typeof block.input === "string" ? block.input : JSON.stringify(block.input || {}),
             },
           });
           break;
@@ -430,6 +460,7 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
             // upstreams (port of decolua/9router#2123 by alican532).
             const textParts: string[] = [];
             let hasImage = false;
+            let hasDocument = false;
             for (const c of block.content) {
               if (c.type === "text") {
                 textParts.push(c.text);
@@ -441,11 +472,24 @@ function convertClaudeMessage(msg, preserveCacheControl = false) {
                   },
                 });
                 hasImage = true;
+              } else if (c.type === "document") {
+                // Same lift for documents: a `tool` message cannot carry a file part.
+                const documentPart = convertClaudeDocumentBlock(c);
+                if (documentPart?.type === "text") {
+                  textParts.push(documentPart.text as string);
+                } else if (documentPart) {
+                  parts.push(documentPart);
+                  hasDocument = true;
+                }
               }
             }
             resultContent =
               textParts.join("\n") ||
-              (hasImage ? "[tool returned an image; see attached]" : JSON.stringify(block.content));
+              (hasImage
+                ? "[tool returned an image; see attached]"
+                : hasDocument
+                  ? "[tool returned a document; see attached]"
+                  : JSON.stringify(block.content));
           } else if (block.content) {
             resultContent = JSON.stringify(block.content);
           }
