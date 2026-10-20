@@ -213,3 +213,86 @@ test("Codex HTTP attempts report their latency to the request capture", async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+test("request class reads the effort and prompt size actually sent upstream", () => {
+  const small = latency.describeCodexRequestClass({
+    model: "gpt-6.1-sol",
+    reasoning: { effort: "high", summary: "auto" },
+    instructions: "Be terse.",
+    input: [{ role: "user", content: "hi" }],
+  });
+  assert.equal(small.model, "gpt-6.1-sol");
+  assert.equal(small.effort, "high");
+  assert.equal(small.inputBucket, "<8k");
+
+  const large = latency.describeCodexRequestClass({ input: "x".repeat(400_000) }, "gpt-6-luna");
+  assert.equal(large.model, "gpt-6-luna");
+  assert.equal(large.effort, null);
+  assert.equal(large.inputBucket, ">50k");
+});
+
+test("slow start is a separate censored mark and never replaces TTFT", async () => {
+  const observer = new latency.CodexAttemptObserver({
+    connectionId: "slow-acc",
+    transport: "http",
+  });
+  observer.armSlowStart(20);
+  observer.observeEventType("response.created");
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.ok(observer.snapshot().slowStartMs !== null, "threshold crossed without output");
+  assert.equal(observer.snapshot().firstUsefulMs, null);
+  assert.equal(health.codexSlowStartCount("slow-acc"), 1);
+
+  observer.observeEventType("response.output_text.delta");
+  assert.ok(observer.snapshot().firstUsefulMs !== null);
+  // The censored mark is not a TTFT sample: one slow start, no factor change.
+  assert.equal(health.codexConnectionHealthFactor("slow-acc", ["slow-acc", "other"]), 1);
+});
+
+test("useful output or a finished attempt cancels the slow-start mark", async () => {
+  const fast = new latency.CodexAttemptObserver({ connectionId: "fast-acc", transport: "http" });
+  fast.armSlowStart(20);
+  fast.observeEventType("response.output_item.added");
+  const failed = new latency.CodexAttemptObserver({ connectionId: "err-acc", transport: "http" });
+  failed.armSlowStart(20);
+  failed.finish("failed");
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(fast.snapshot().slowStartMs, null);
+  assert.equal(failed.snapshot().slowStartMs, null);
+  assert.equal(health.codexSlowStartCount("fast-acc"), 0);
+  assert.equal(health.codexSlowStartCount("err-acc"), 0);
+});
+
+test("slow-start threshold comes from CODEX_SLOW_START_MS", () => {
+  assert.equal(latency.codexSlowStartThresholdMs({}), latency.DEFAULT_CODEX_SLOW_START_MS);
+  assert.equal(latency.codexSlowStartThresholdMs({ CODEX_SLOW_START_MS: "0" }), 0);
+  assert.equal(latency.codexSlowStartThresholdMs({ CODEX_SLOW_START_MS: "12000" }), 12_000);
+  assert.equal(
+    latency.codexSlowStartThresholdMs({ CODEX_SLOW_START_MS: "soon" }),
+    latency.DEFAULT_CODEX_SLOW_START_MS
+  );
+});
+
+test("the latency log line names class, routing and every moment", () => {
+  const time = clock();
+  const observer = new latency.CodexAttemptObserver({
+    connectionId: "0123456789abcdef",
+    transport: "ws",
+    now: time.now,
+  });
+  observer.setRequestClass(
+    latency.describeCodexRequestClass({ model: "gpt-6.1-sol", reasoning: { effort: "low" } })
+  );
+  observer.observeEventType("response.created");
+  time.advance(1_200);
+  observer.observeEventType("response.output_text.delta");
+  time.advance(800);
+  observer.observeEventType("response.completed");
+
+  const line = latency.formatCodexAttemptLatency(observer.snapshot(), "affinity_reused");
+  assert.equal(
+    line,
+    "conn=01234567 transport=ws model=gpt-6.1-sol effort=low input=<8k routing=affinity_reused " +
+      "lifecycle=0ms useful=1200ms(response.output_text.delta) text=1200ms completed=2000ms outcome=completed"
+  );
+});

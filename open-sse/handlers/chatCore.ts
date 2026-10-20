@@ -93,6 +93,7 @@ import {
 import { ensureStreamReadiness } from "../utils/streamReadiness.ts";
 import { resolveSuppressThinkClose, THINKING_MARKER_HEADER } from "../utils/thinkCloseMarker.ts";
 import { resolveStreamReadinessTimeout } from "../utils/streamReadinessPolicy.ts";
+import { formatCodexAttemptLatency } from "../services/codexAttemptLatency.ts";
 import { resolveAgentGoalPolicy } from "../utils/agentGoalPolicy.ts";
 import { createStreamController } from "../utils/streamHandler.ts";
 import * as streamFailure from "../utils/streamFailureFinalization.ts";
@@ -1012,6 +1013,15 @@ export async function handleChatCore({
     const sample = providerRequestCapture.latestAttemptLatency?.();
     if (!sample || sample.firstUsefulMs === null) return null;
     return Math.max(0, sample.startedAt + sample.firstUsefulMs - startTime);
+  };
+  const logCodexAttemptLatency = () => {
+    if (provider !== "codex") return;
+    const sample = providerRequestCapture.latestAttemptLatency?.();
+    if (!sample) return;
+    log?.info?.(
+      "CODEX_LATENCY",
+      formatCodexAttemptLatency(sample, executionSessionRouting?.routingReason)
+    );
   };
   // 0. Log client raw request (before format conversion)
   if (clientRawRequest) {
@@ -4274,6 +4284,7 @@ export async function handleChatCore({
       sessionRouting: executionSessionRouting,
       ttftMs: measuredCodexTtftMs(),
     });
+    logCodexAttemptLatency();
 
     // ── Phase 9.1: Cache store (non-streaming, temp=0) ──
     storeSemanticCacheResponse({
@@ -4544,6 +4555,7 @@ export async function handleChatCore({
       endpoint: endpointPath,
       sessionRouting: executionSessionRouting,
     });
+    logCodexAttemptLatency();
 
     persistAttemptLogs({
       status: normalizedStreamStatus,

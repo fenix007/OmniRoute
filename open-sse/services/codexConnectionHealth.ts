@@ -29,6 +29,8 @@ const OVERLOAD_PATTERN =
 interface ConnectionEvents {
   overloads: number[];
   ttft: Array<{ at: number; ms: number }>;
+  /** Attempts with no useful output yet at the slow-start threshold (censored TTFT). */
+  slowStarts: number[];
 }
 
 const events = new Map<string, ConnectionEvents>();
@@ -36,7 +38,7 @@ const events = new Map<string, ConnectionEvents>();
 function entry(connectionId: string): ConnectionEvents {
   let current = events.get(connectionId);
   if (!current) {
-    current = { overloads: [], ttft: [] };
+    current = { overloads: [], ttft: [], slowStarts: [] };
     events.set(connectionId, current);
   }
   return current;
@@ -46,6 +48,7 @@ function prune(current: ConnectionEvents, nowMs: number): void {
   const cutoff = nowMs - WINDOW_MS;
   current.overloads = current.overloads.filter((at) => at > cutoff).slice(-MAX_SAMPLES);
   current.ttft = current.ttft.filter((sample) => sample.at > cutoff).slice(-MAX_SAMPLES);
+  current.slowStarts = current.slowStarts.filter((at) => at > cutoff).slice(-MAX_SAMPLES);
 }
 
 function median(values: number[]): number | null {
@@ -118,6 +121,26 @@ export function codexConnectionHealthFactor(
 }
 
 /** Test hook. */
+/**
+ * An attempt crossed the slow-start threshold without useful output. This is a
+ * censored observation ("TTFT > T"), so it is kept apart from TTFT samples and
+ * does not affect the health factor yet; it only feeds telemetry.
+ */
+export function recordCodexSlowStart(connectionId: string, nowMs = Date.now()): void {
+  if (!connectionId) return;
+  const current = entry(connectionId);
+  current.slowStarts.push(nowMs);
+  prune(current, nowMs);
+}
+
+/** Slow starts of a connection within the health window. */
+export function codexSlowStartCount(connectionId: string, nowMs = Date.now()): number {
+  const current = events.get(connectionId);
+  if (!current) return 0;
+  prune(current, nowMs);
+  return current.slowStarts.length;
+}
+
 export function resetCodexConnectionHealth(): void {
   events.clear();
 }

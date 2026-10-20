@@ -47,6 +47,8 @@ import { resolveSessionIdentity } from "../services/sessionIdentity.ts";
 import {
   CodexAttemptObserver,
   CodexSseEventScanner,
+  codexSlowStartThresholdMs,
+  describeCodexRequestClass,
   observeCodexSseResponse,
   readCodexEventType,
 } from "../services/codexAttemptLatency.ts";
@@ -838,7 +840,20 @@ export class CodexExecutor extends BaseExecutor {
         transport: "http",
         sink: prl.currentAttemptLatencySink(),
       });
-      const httpResult = await super.execute(nextInput);
+      attempt.armSlowStart(codexSlowStartThresholdMs());
+      let httpResult: Awaited<ReturnType<typeof super.execute>>;
+      try {
+        httpResult = await super.execute(nextInput);
+      } catch (error) {
+        attempt.finish("failed");
+        throw error;
+      }
+      attempt.setRequestClass(
+        describeCodexRequestClass(
+          (httpResult as { transformedBody?: unknown }).transformedBody,
+          nextInput.model
+        )
+      );
       if (codexDropNonstandardEvents()) {
         const resp = (httpResult as { response?: Response }).response;
         if (resp?.body) {
@@ -887,9 +902,13 @@ export class CodexExecutor extends BaseExecutor {
             finalResponse,
             attempt
           );
-        } else if (peek.matched || peek.timedOut) {
-          attempt.finish("failed");
+        } else {
+          attempt.finish(
+            finalResponse.ok && !peek.matched && !peek.timedOut ? "unknown" : "failed"
+          );
         }
+      } else {
+        attempt.finish("failed");
       }
       return httpResult;
     }
@@ -900,6 +919,7 @@ export class CodexExecutor extends BaseExecutor {
       transport: "ws",
       sink: prl.currentAttemptLatencySink(),
     });
+    wsAttempt.armSlowStart(codexSlowStartThresholdMs());
     const headers = normalizeCodexWsHeaders(
       this.buildHeaders(nextInput.credentials, true, nextInput.clientHeaders)
     );
@@ -914,6 +934,7 @@ export class CodexExecutor extends BaseExecutor {
     transformedBody.model = getCodexUpstreamModel(transformedBody.model || nextInput.model);
     delete transformedBody.stream;
     delete transformedBody.stream_options;
+    wsAttempt.setRequestClass(describeCodexRequestClass(transformedBody, nextInput.model));
 
     const bodyString = JSON.stringify({
       type: "response.create",

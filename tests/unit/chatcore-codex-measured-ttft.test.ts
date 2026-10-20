@@ -75,6 +75,7 @@ async function lastUsageRow(connectionId: string) {
 for (const clientStream of [true, false]) {
   test(`Codex ${clientStream ? "stream" : "JSON"} usage stores the measured first-output time`, async () => {
     const connectionId = `conn-ttft-${clientStream ? "stream" : "json"}`;
+    const latencyLines: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () =>
       new Response(slowCodexStream(), { headers: { "Content-Type": "text/event-stream" } });
@@ -96,13 +97,22 @@ for (const clientStream of [true, false]) {
           }),
         },
         apiKeyInfo: null,
-        log: { debug() {}, info() {}, warn() {}, error() {} },
+        log: {
+          debug() {},
+          info(tag: string, message: string) {
+            if (tag === "CODEX_LATENCY") latencyLines.push(message);
+          },
+          warn() {},
+          error() {},
+        },
       });
       await result.response.text();
 
       const row = await lastUsageRow(connectionId);
       assert.ok(row.ttft_ms !== null, "Codex TTFT must be measured");
       assert.ok(row.ttft_ms >= 250, `ttft=${row.ttft_ms}`);
+      assert.equal(latencyLines.length, 1, latencyLines.join("\n"));
+      assert.match(latencyLines[0], /model=gpt-5\.6-sol .*outcome=completed/);
       assert.ok(
         row.ttft_ms <= row.latency_ms - 250,
         `ttft=${row.ttft_ms} latency=${row.latency_ms}`
