@@ -667,7 +667,11 @@ export async function peekCodexSseTransientError(
   // WITHOUT reading `.body` — otherwise chatCore's readNonStreamingResponseBody
   // 502s. Only genuine SSE responses (which this peek intends to buffer) reach
   // the `.body` access below.
-  if (!response.ok || !contentType.includes("text/event-stream") || !response.body) {
+  // Through the TLS-fingerprint transport the Codex backend's stream arrives with
+  // no content-type at all, so an untyped body is peeked too. A JSON body is
+  // simply read and replayed unchanged.
+  const peekable = contentType.includes("text/event-stream") || contentType === "";
+  if (!response.ok || !peekable || !response.body) {
     return { matched: null, message: null, replacementBody: null };
   }
 
@@ -688,6 +692,9 @@ export async function peekCodexSseTransientError(
       chunks.push(value);
       onChunk?.(value);
       text += decoder.decode(value, { stream: true });
+      // An untyped body that does not start like SSE is a plain JSON reply:
+      // replay it untouched instead of scanning its text for error patterns.
+      if (!contentType && !/^\s*(?:event|data|id|retry)?:/.test(text)) break;
       const lower = text.toLowerCase();
       const hit = CODEX_SSE_TRANSIENT_ERROR_PATTERNS.find((pattern) => lower.includes(pattern));
       if (hit) {
