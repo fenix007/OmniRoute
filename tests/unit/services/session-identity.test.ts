@@ -183,3 +183,60 @@ test("unsafe upstream identifiers retain scoped affinity without entering header
     assert.equal(identity.source, "metadata");
   }
 });
+
+test("Claude Code session ids resolve to explicit identities", () => {
+  const sessionId = "6f1c2b9e-3d4a-4f5b-8c7d-0e1f2a3b4c5d";
+  const fromHeader = resolveSessionIdentity(
+    { messages: [{ role: "user", content: "same first prompt" }] },
+    { "X-Claude-Code-Session-Id": sessionId },
+    "key-1"
+  );
+  const fromJsonUserId = resolveSessionIdentity(
+    {
+      metadata: {
+        user_id: JSON.stringify({ device_id: "d1", account_uuid: "a1", session_id: sessionId }),
+      },
+    },
+    null,
+    "key-1"
+  );
+  const fromLegacyUserId = resolveSessionIdentity(
+    {
+      metadata: {
+        user_id: `user_abc123_account_0a1b2c3d-1111-4222-8333-444455556666_session_${sessionId}`,
+      },
+    },
+    null,
+    "key-1"
+  );
+
+  for (const result of [fromHeader, fromJsonUserId, fromLegacyUserId]) {
+    assert.equal(result.confidence, "explicit");
+    assert.equal(result.upstreamSessionId, sessionId);
+    assert.equal(result.key, expectedKey("key-1", "explicit", sessionId));
+  }
+  assert.equal(fromHeader.source, "header");
+  assert.equal(fromJsonUserId.source, "metadata");
+  assert.equal(fromLegacyUserId.source, "metadata");
+});
+
+test("two Claude Code sessions with the same opening prompt stay distinct", () => {
+  const body = {
+    messages: [{ role: "user", content: "<system-reminder>CLAUDE.md</system-reminder>" }],
+  };
+  const first = resolveSessionIdentity(body, { "x-claude-code-session-id": "s-1" }, "key-1");
+  const second = resolveSessionIdentity(body, { "x-claude-code-session-id": "s-2" }, "key-1");
+  assert.notEqual(first.key, second.key);
+});
+
+test("a metadata.user_id without a session id stays a derived identity", () => {
+  for (const userId of ["user_abc123", "{not json", JSON.stringify({ device_id: "d1" })]) {
+    const result = resolveSessionIdentity(
+      { metadata: { user_id: userId }, messages: [{ role: "user", content: "hello" }] },
+      null,
+      "key-1"
+    );
+    assert.equal(result.confidence, "derived", userId);
+    assert.equal(result.upstreamSessionId, null, userId);
+  }
+});

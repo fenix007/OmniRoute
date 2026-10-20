@@ -27,6 +27,43 @@ test.afterEach(() => {
   __setCodexWebSocketTransportForTesting(undefined);
 });
 
+test("Codex HTTP derives the cache key from the Claude Code session header", async () => {
+  const executor = new CodexExecutor();
+  const originalFetch = globalThis.fetch;
+  const sessionId = "6f1c2b9e-3d4a-4f5b-8c7d-0e1f2a3b4c5d";
+  const captured: { body: Record<string, unknown> | null; headers: Headers | null } = {
+    body: null,
+    headers: null,
+  };
+
+  globalThis.fetch = async (_url, init) => {
+    captured.headers = new Headers(init?.headers as HeadersInit);
+    captured.body = JSON.parse(String(init?.body || "{}"));
+    return new Response(JSON.stringify({ id: "resp_claude_code", object: "response" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    await executor.execute({
+      model: "gpt-5.5",
+      body: { model: "gpt-5.5", input: [{ role: "user", content: "hello" }] },
+      stream: true,
+      credentials: {
+        accessToken: "codex-token",
+        providerSpecificData: { workspaceId: "workspace-1" },
+      },
+      clientHeaders: { "X-Claude-Code-Session-Id": sessionId },
+    });
+
+    assert.equal(captured.body?.prompt_cache_key, sessionId);
+    assert.equal(captured.headers?.get("session_id"), sessionId);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Codex HTTP uses header-only identity and preserves an explicit cache key", async () => {
   const executor = new CodexExecutor();
   const originalFetch = globalThis.fetch;

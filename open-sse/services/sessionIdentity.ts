@@ -38,6 +38,8 @@ const authenticatedScopeSchema = z.string().trim().min(1).max(MAX_AUTH_SCOPE_LEN
 
 const HEADER_ID_NAMES = [
   "x-codex-session-id",
+  // Claude Code sends its session UUID on every API request.
+  "x-claude-code-session-id",
   "x-session-id",
   "x_session_id",
   "x-omniroute-session-id",
@@ -80,6 +82,10 @@ const CONVERSATION_ID_NAMES = [
 
 const SESSION_ID_NAMES = ["session_id", "session-id", "sessionId", "session"] as const;
 
+/** Legacy Claude Code `metadata.user_id`: `user_<hash>_account_<uuid>_session_<uuid>`. */
+const CLAUDE_CODE_LEGACY_USER_ID_SESSION =
+  /_session_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -118,6 +124,27 @@ function firstRecordValue(
   return null;
 }
 
+/**
+ * Claude Code puts its session id inside `metadata.user_id`: a JSON string with
+ * `session_id` in current releases, an `..._session_<uuid>` suffix in older ones.
+ * Without it every Claude Code session of one user collapses into a single
+ * derived key and Codex gets no prompt_cache_key, so its prompt cache never hits.
+ */
+function claudeCodeSessionFromUserId(metadata: Record<string, unknown> | null): string | null {
+  const userId = metadata?.user_id;
+  if (typeof userId !== "string" || userId.length > MAX_INPUT_PREFIX_LENGTH) return null;
+
+  const trimmed = userId.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      return parseBoundedString(asRecord(JSON.parse(trimmed))?.session_id);
+    } catch {
+      return null;
+    }
+  }
+  return CLAUDE_CODE_LEGACY_USER_ID_SESSION.exec(trimmed)?.[1] ?? null;
+}
+
 function findExplicitCandidate(body: unknown, headers: HeaderSource): IdentityCandidate | null {
   for (const name of HEADER_ID_NAMES) {
     const identifier = readHeader(headers, name);
@@ -125,7 +152,9 @@ function findExplicitCandidate(body: unknown, headers: HeaderSource): IdentityCa
   }
 
   const bodyRecord = asRecord(body);
-  const metadataIdentifier = firstRecordValue(asRecord(bodyRecord?.metadata), METADATA_ID_NAMES);
+  const metadata = asRecord(bodyRecord?.metadata);
+  const metadataIdentifier =
+    firstRecordValue(metadata, METADATA_ID_NAMES) ?? claudeCodeSessionFromUserId(metadata);
   if (metadataIdentifier) return { identifier: metadataIdentifier, source: "metadata" };
 
   const conversationIdentifier = firstRecordValue(bodyRecord, CONVERSATION_ID_NAMES);
