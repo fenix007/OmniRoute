@@ -894,9 +894,13 @@ export class CodexExecutor extends BaseExecutor {
           });
         }
         const finalResponse = (httpResult as { response: Response }).response;
+        // The Codex backend streams even for non-stream clients, and those
+        // responses carry no content-type; observe them too. The wrapper becomes
+        // the only reader of the upstream body (#7536 concerns a second reader).
+        const finalContentType = finalResponse.headers.get("content-type") || "";
         if (
           finalResponse.ok &&
-          (finalResponse.headers.get("content-type") || "").includes("text/event-stream")
+          (finalContentType.includes("text/event-stream") || finalContentType === "")
         ) {
           (httpResult as { response: Response }).response = observeCodexSseResponse(
             finalResponse,

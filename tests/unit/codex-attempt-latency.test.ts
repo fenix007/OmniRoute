@@ -296,3 +296,57 @@ test("the latency log line names class, routing and every moment", () => {
       "lifecycle=0ms useful=1200ms(response.output_text.delta) text=1200ms completed=2000ms outcome=completed"
   );
 });
+
+function untypedBody(text: string): ReadableStream<Uint8Array> {
+  // A stream body gets no implicit content-type, like the Codex backend's
+  // reply to a non-stream client.
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+      controller.close();
+    },
+  });
+}
+
+for (const [label, body, expectUseful] of [
+  [
+    "an SSE body without content-type is measured",
+    sse("response.created") +
+      sse("response.output_text.delta", ',"delta":"OK"') +
+      sse("response.completed"),
+    true,
+  ],
+  [
+    "a JSON body without content-type passes through untouched",
+    '{"id":"resp_1","object":"response"}',
+    false,
+  ],
+] as const) {
+  test(`Codex HTTP: ${label}`, async () => {
+    const executor = new CodexExecutor();
+    const originalFetch = globalThis.fetch;
+    const capture = prl.createPreparedRequestLogger(
+      { logTargetRequest: () => {} },
+      {} as Parameters<typeof prl.createPreparedRequestLogger>[1]
+    );
+    globalThis.fetch = async () => new Response(untypedBody(body), { status: 200 });
+    try {
+      const result = await prl.runWithCapture(capture, () =>
+        executor.execute({
+          model: "gpt-5.5",
+          body: { model: "gpt-5.5", input: [{ role: "user", content: "hello" }] },
+          stream: false,
+          credentials: { accessToken: "codex-token", connectionId: "conn-untyped" },
+        })
+      );
+      const response = (result as { response: Response }).response;
+      assert.equal(response.headers.get("content-type"), null);
+      assert.equal(await response.text(), body);
+      const sample = capture.latestAttemptLatency?.();
+      assert.ok(sample, "the attempt must finish and report");
+      assert.equal(sample.firstUsefulMs !== null, expectUseful);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
