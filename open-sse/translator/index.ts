@@ -21,6 +21,7 @@ import { hasThinkingConfig, normalizeThinkingConfig } from "../services/provider
 import { applyThinkingBudget } from "../services/thinkingBudget.ts";
 import { getResolvedModelCapabilities, supportsReasoning } from "../services/modelCapabilities.ts";
 import { normalizeRoles } from "../services/roleNormalizer.ts";
+import { acceptsInlineToolAdditions, hoistToolAdditions } from "./helpers/claudeDeferredTools.ts";
 import {
   lookupReasoning,
   recordReplay,
@@ -168,7 +169,12 @@ export function translateRequest(
     copilotClient?: boolean;
   }
 ) {
-  let result = body;
+  // Claude Code inline-tools `tool_addition` blocks only reach Anthropic-native targets;
+  // everywhere else their definitions move into tools[] (copy-on-write).
+  const hoistDeferredTools =
+    sourceFormat === FORMATS.CLAUDE &&
+    !(targetFormat === FORMATS.CLAUDE && acceptsInlineToolAdditions(provider));
+  let result = hoistDeferredTools ? hoistToolAdditions(body) : body;
   const use9CharId = options?.normalizeToolCallId === true;
   const preserveDeveloperRole = options?.preserveDeveloperRole;
 
