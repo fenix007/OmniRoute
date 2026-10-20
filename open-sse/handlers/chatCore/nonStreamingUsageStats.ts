@@ -32,6 +32,8 @@ export type RecordNonStreamingUsageStatsContext = {
   statusCode?: number;
   errorCode?: string | null;
   sessionRouting?: SessionRouting | null;
+  /** Measured time to first useful output; null = unknown. Omitted = legacy total latency. */
+  ttftMs?: number | null;
 };
 
 function logUsageTrace(
@@ -52,7 +54,7 @@ function persistUsageRow(usage: object, ctx: RecordNonStreamingUsageStatsContext
     status: String(ctx.statusCode ?? 200),
     success: (ctx.statusCode ?? 200) < 400,
     latencyMs: Date.now() - startTime,
-    timeToFirstTokenMs: Date.now() - startTime,
+    timeToFirstTokenMs: ctx.ttftMs !== undefined ? ctx.ttftMs : Date.now() - startTime,
     errorCode: ctx.errorCode ?? null,
     timestamp: new Date().toISOString(),
     connectionId: connectionId || undefined,

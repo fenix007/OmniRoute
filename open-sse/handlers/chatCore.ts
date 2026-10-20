@@ -1005,6 +1005,14 @@ export async function handleChatCore({
   });
   const pendingScope = { id: pendingRequestId, model, provider, connectionId: pendingConnId };
   const providerRequestCapture = createPreparedRequestLogger(reqLogger, pendingScope);
+  // Codex: time from this request's start to the first useful upstream event of
+  // the attempt that served it (codexAttemptLatency.ts). null = not measured.
+  const measuredCodexTtftMs = (): number | null | undefined => {
+    if (provider !== "codex") return undefined;
+    const sample = providerRequestCapture.latestAttemptLatency?.();
+    if (!sample || sample.firstUsefulMs === null) return null;
+    return Math.max(0, sample.startedAt + sample.firstUsefulMs - startTime);
+  };
   // 0. Log client raw request (before format conversion)
   if (clientRawRequest) {
     reqLogger.logClientRawRequest(
@@ -4264,6 +4272,7 @@ export async function handleChatCore({
       comboStrategy,
       endpoint: endpointPath,
       sessionRouting: executionSessionRouting,
+      ttftMs: measuredCodexTtftMs(),
     });
 
     // ── Phase 9.1: Cache store (non-streaming, temp=0) ──
@@ -4525,7 +4534,7 @@ export async function handleChatCore({
       model,
       streamStatus: normalizedStreamStatus,
       startTime,
-      ttft,
+      ttft: provider === "codex" ? measuredCodexTtftMs() : ttft,
       streamErrorCode,
       connectionId: streamConnectionId,
       apiKeyInfo,

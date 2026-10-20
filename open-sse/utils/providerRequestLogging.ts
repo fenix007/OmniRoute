@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { updatePendingScope, type PendingRequestScope } from "@/lib/usage/pendingRequestScope";
+import type { CodexAttemptLatency } from "../services/codexAttemptLatency.ts";
 
 export type ProviderRequestPrepared = {
   url: string;
@@ -13,6 +14,10 @@ export type Capture = {
   capture: (request: ProviderRequestPrepared) => Promise<void> | void;
   body: (fallback: unknown) => unknown;
   latest?: () => ProviderRequestPrepared | null;
+  /** Receives the latency of each finished upstream attempt (Codex only for now). */
+  attemptLatency?: (sample: CodexAttemptLatency) => void;
+  /** The most recently finished attempt of this request. */
+  latestAttemptLatency?: () => CodexAttemptLatency | null;
 };
 
 type RequestLoggerLike = {
@@ -127,6 +132,16 @@ export function captureCurrentProviderBody(
   return captureCurrentProviderRequest(url, headers, parseBody(bodyString), bodyString, log);
 }
 
+/**
+ * The attempt-latency sink of the request running in the current async context.
+ * Executors must read it when they dispatch: stream events arrive later, outside
+ * that context.
+ */
+export function currentAttemptLatencySink(): ((sample: CodexAttemptLatency) => void) | null {
+  const capture = captureState.context.getStore();
+  return capture?.attemptLatency ? capture.attemptLatency.bind(capture) : null;
+}
+
 export function runWithCapture<T>(requestCapture: Capture, fn: () => Promise<T>): Promise<T> {
   installFetchCapture();
   return captureState.context.run(requestCapture, fn);
@@ -223,7 +238,14 @@ export function createPreparedRequestLogger(
   scope: PendingRequestScope
 ): Capture {
   let latest: ProviderRequestPrepared | null = null;
+  let latestLatency: CodexAttemptLatency | null = null;
   return {
+    attemptLatency(sample) {
+      latestLatency = sample;
+    },
+    latestAttemptLatency() {
+      return latestLatency;
+    },
     capture(request) {
       latest = request;
       reqLogger.logTargetRequest(request.url, request.headers, request.body);

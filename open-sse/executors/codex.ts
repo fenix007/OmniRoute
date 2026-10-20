@@ -44,6 +44,12 @@ import { getAccessToken } from "../services/tokenRefresh.ts";
 import { sanitizeResponsesInputItems } from "../services/responsesInputSanitizer.ts";
 import { normalizeCodexVerbosity } from "../services/codexVerbosity.ts";
 import { resolveSessionIdentity } from "../services/sessionIdentity.ts";
+import {
+  CodexAttemptObserver,
+  CodexSseEventScanner,
+  observeCodexSseResponse,
+  readCodexEventType,
+} from "../services/codexAttemptLatency.ts";
 import { getThinkingBudgetConfig, ThinkingMode } from "../services/thinkingBudget.ts";
 import { CORS_HEADERS } from "../utils/cors.ts";
 import { errorResponse } from "../utils/error.ts";
@@ -647,7 +653,8 @@ type CodexSseTransientErrorPeek =
  */
 export async function peekCodexSseTransientError(
   response: Response,
-  timeoutMs: number = FETCH_BODY_TIMEOUT_MS
+  timeoutMs: number = FETCH_BODY_TIMEOUT_MS,
+  onChunk?: (chunk: Uint8Array) => void
 ): Promise<CodexSseTransientErrorPeek> {
   const contentType = response.headers.get("content-type") || "";
   // #7536: check content-type BEFORE touching `response.body`. On the wreq-js
@@ -677,6 +684,7 @@ export async function peekCodexSseTransientError(
       if (done) break;
       if (!value) continue;
       chunks.push(value);
+      onChunk?.(value);
       text += decoder.decode(value, { stream: true });
       const lower = text.toLowerCase();
       const hit = CODEX_SSE_TRANSIENT_ERROR_PATTERNS.find((pattern) => lower.includes(pattern));
@@ -825,6 +833,11 @@ export class CodexExecutor extends BaseExecutor {
     const nextInput = { ...requestInput, credentials };
 
     if (!isCodexResponsesWebSocketRequired(nextInput.model, nextInput.credentials)) {
+      const attempt = new CodexAttemptObserver({
+        connectionId: nextInput.credentials?.connectionId,
+        transport: "http",
+        sink: prl.currentAttemptLatencySink(),
+      });
       const httpResult = await super.execute(nextInput);
       if (codexDropNonstandardEvents()) {
         const resp = (httpResult as { response?: Response }).response;
@@ -834,7 +847,10 @@ export class CodexExecutor extends BaseExecutor {
       }
       const resp = (httpResult as { response?: Response }).response;
       if (resp) {
-        const peek = await peekCodexSseTransientError(resp);
+        const peekScanner = new CodexSseEventScanner(attempt);
+        const peek = await peekCodexSseTransientError(resp, FETCH_BODY_TIMEOUT_MS, (chunk) =>
+          peekScanner.push(chunk)
+        );
         if (peek.matched) {
           input.log?.warn?.(
             "RETRY",
@@ -862,11 +878,28 @@ export class CodexExecutor extends BaseExecutor {
             headers: resp.headers,
           });
         }
+        const finalResponse = (httpResult as { response: Response }).response;
+        if (
+          finalResponse.ok &&
+          (finalResponse.headers.get("content-type") || "").includes("text/event-stream")
+        ) {
+          (httpResult as { response: Response }).response = observeCodexSseResponse(
+            finalResponse,
+            attempt
+          );
+        } else if (peek.matched || peek.timedOut) {
+          attempt.finish("failed");
+        }
       }
       return httpResult;
     }
 
     const url = CODEX_RESPONSES_WS_URL;
+    const wsAttempt = new CodexAttemptObserver({
+      connectionId: nextInput.credentials?.connectionId,
+      transport: "ws",
+      sink: prl.currentAttemptLatencySink(),
+    });
     const headers = normalizeCodexWsHeaders(
       this.buildHeaders(nextInput.credentials, true, nextInput.clientHeaders)
     );
@@ -931,6 +964,13 @@ export class CodexExecutor extends BaseExecutor {
     }) => {
       if (closed) return;
       closed = true;
+      wsAttempt.finish(
+        reason === "client_aborted" || reason === "client_cancelled"
+          ? "aborted"
+          : reason === "upstream_failed"
+            ? "failed"
+            : "unknown"
+      );
       removeAbortListener();
       if (closeSocket) closeUpstream(reason);
 
@@ -996,6 +1036,7 @@ export class CodexExecutor extends BaseExecutor {
               typeof event.data === "string"
                 ? event.data
                 : Buffer.from(event.data as Buffer).toString("utf8");
+            wsAttempt.observeEventType(readCodexEventType(raw.slice(0, 512)));
             const sseEvent = encodeResponseSseEvent(raw);
             if (closed) return;
             // Filtered events (codex.* / empty payload) return an empty `sse` —

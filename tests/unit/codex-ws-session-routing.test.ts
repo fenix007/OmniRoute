@@ -173,7 +173,8 @@ test("WS log rejects client-shaped routing metadata and does not use duration as
     .get() as Record<string, unknown>;
 
   assert.equal(row.latency_ms, 456);
-  assert.equal(row.ttft_ms, 0);
+  // Unknown Codex TTFT is stored as NULL, never as the duration.
+  assert.equal(row.ttft_ms, null);
   assert.equal(row.session_hash, null);
   assert.equal(row.session_source, null);
   assert.equal(row.routing_reason, null);

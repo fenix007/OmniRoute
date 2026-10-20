@@ -25,7 +25,6 @@ import {
   storeCompletedDetail,
 } from "./completedRequestDetails";
 import { shouldPersistToDisk } from "./migrations";
-import { recordCodexTtft } from "@omniroute/open-sse/services/codexConnectionHealth.ts";
 import * as routing from "./sessionRouting";
 import { emitUsageRecorded } from "./usageEvents";
 import {
@@ -606,12 +605,21 @@ export interface UsageEntry {
 }
 
 /**
+ * Codex TTFT is measured per upstream attempt (codexAttemptLatency.ts), so a
+ * missing value means "unknown" and is stored as NULL. Other providers keep the
+ * legacy fallback to total latency.
+ */
+function resolveStoredTtftMs(entry: UsageEntry): number | null {
+  const ttft = entry.timeToFirstTokenMs == null ? Number.NaN : Number(entry.timeToFirstTokenMs);
+  if (Number.isFinite(ttft)) return ttft;
+  if (entry.provider === "codex") return null;
+  return Number.isFinite(Number(entry.latencyMs)) ? Number(entry.latencyMs) : 0;
+}
+
+/**
  * Save request usage entry to SQLite.
  */
 export async function saveRequestUsage(entry: UsageEntry) {
-  if (entry.provider === "codex" && entry.success && entry.connectionId) {
-    recordCodexTtft(entry.connectionId, Number(entry.timeToFirstTokenMs));
-  }
   if (!shouldPersistToDisk) return;
 
   try {
@@ -699,11 +707,7 @@ export async function saveRequestUsage(entry: UsageEntry) {
         entry.status || null,
         entry.success === false ? 0 : 1,
         Number.isFinite(Number(entry.latencyMs)) ? Number(entry.latencyMs) : 0,
-        Number.isFinite(Number(entry.timeToFirstTokenMs))
-          ? Number(entry.timeToFirstTokenMs)
-          : Number.isFinite(Number(entry.latencyMs))
-            ? Number(entry.latencyMs)
-            : 0,
+        resolveStoredTtftMs(entry),
         entry.errorCode || null,
         entry.comboStrategy || entry.combo_strategy || null,
         entry.endpoint || null,
