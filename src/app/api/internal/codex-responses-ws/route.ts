@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { CodexExecutor } from "@omniroute/open-sse/executors/codex.ts";
+import { CodexExecutor, getCodexUpstreamModel } from "@omniroute/open-sse/executors/codex.ts";
 import { createCodexClientIdentity } from "@omniroute/open-sse/config/codexIdentity.ts";
 import { normalizeCodexWsHeaders } from "@omniroute/open-sse/executors/codex/websocketHeaders.ts";
 import { resolveSessionIdentity } from "@omniroute/open-sse/services/sessionIdentity.ts";
@@ -436,11 +436,11 @@ async function prepare(body: JsonRecord) {
   const responseBodyWithMemory = await maybeInjectResponsesWsMemory(responseBody, metadata);
   const transformed = (await executor.transformRequest(
     model,
-    responseBodyWithMemory,
+    { ...responseBodyWithMemory, model },
     true,
     requestCredentials
   )) as JsonRecord;
-  transformed.model = model;
+  transformed.model = getCodexUpstreamModel(model);
   delete transformed.stream;
   delete transformed.stream_options;
 

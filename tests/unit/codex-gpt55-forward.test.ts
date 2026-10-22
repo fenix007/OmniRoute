@@ -6,6 +6,7 @@ import path from "node:path";
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-gpt55-forward-"));
 process.env.DATA_DIR = dataDir;
+process.env.OMNIROUTE_WS_BRIDGE_SECRET = "gpt55-forward-test-bridge-secret";
 
 const core = await import("../../src/lib/db/core.ts");
 const { createProviderConnection } = await import("../../src/lib/db/providers.ts");
@@ -15,6 +16,7 @@ const { resolveModelOrError } = await import("../../src/sse/handlers/chatHelpers
 const { getProviderCredentials } = await import("../../src/sse/services/auth.ts");
 const { lockUnsupportedAccountModel } = await import("../../open-sse/services/accountFallback.ts");
 const { CodexExecutor } = await import("../../open-sse/executors/codex.ts");
+const { POST: prepareWs } = await import("../../src/app/api/internal/codex-responses-ws/route.ts");
 const { resolveCodexWsModelInfo, resolveResponsesApiModel } =
   await import("../../src/app/api/internal/codex-responses-ws/modelResolution.ts");
 
@@ -98,5 +100,32 @@ test("explicit other providers and distinct model names keep their routing", asy
     const [provider, expected] = model.split("/");
     assert.equal(info.provider, provider);
     assert.equal(info.model, expected);
+  }
+});
+
+test("WebSocket prepare sends the successor base model and preserves suffix effort", async () => {
+  for (const model of ["gpt-5.5", "cx/gpt-5.5-high", "codex/gpt-5.5-xhigh"]) {
+    const result = await prepareWs(
+      new Request("http://localhost/api/internal/codex-responses-ws", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-omniroute-ws-bridge-secret": process.env.OMNIROUTE_WS_BRIDGE_SECRET!,
+        },
+        body: JSON.stringify({
+          action: "prepare",
+          requestUrl: "/v1/responses",
+          response: { model, reasoning: { effort: "low" }, input: "Hello" },
+        }),
+      })
+    );
+    const prepared = await result.json();
+    assert.equal(result.status, 200, JSON.stringify(prepared));
+    assert.equal(prepared.response.model, "gpt-6.1-sol");
+    assert.equal(
+      prepared.response.reasoning.effort,
+      model.endsWith("-xhigh") ? "xhigh" : model.endsWith("-high") ? "high" : "low"
+    );
+    assert.equal(prepared.connectionId, connectionId);
   }
 });
