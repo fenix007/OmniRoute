@@ -54,7 +54,7 @@ for (const variant of ["gpt-5.5-xhigh", "gpt-5.5-high", "gpt-5.5-low"]) {
 }
 
 // ── Defect A: Codex-only bare gpt-5.5 reroute must NOT bake a -medium suffix ───
-test("#2877(A) Codex-only bare gpt-5.5 Responses request keeps the bare model id", async () => {
+test("#2877(A) legacy Responses redirect does not inject an effort suffix", async () => {
   const result = (await resolveModelOrError(
     "gpt-5.5",
     { input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }] },
@@ -65,7 +65,7 @@ test("#2877(A) Codex-only bare gpt-5.5 Responses request keeps the bare model id
   assert.equal(result.provider, "codex", "Codex-only account must reroute gpt-5.5 to codex");
   assert.equal(
     result.model,
-    "gpt-5.5",
+    "gpt-6.1-sol",
     "must NOT inject a -medium suffix (that would override a client reasoning.effort=xhigh)"
   );
 });

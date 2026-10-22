@@ -108,6 +108,18 @@ export async function getModelInfo(modelStr) {
   const parsed = parseModel(modelStr);
   const { extendedContext } = parsed;
 
+  // Codex no longer accepts GPT-5.5 on ChatGPT accounts. Resolve the legacy
+  // names before credential selection, which may already have model-only locks
+  // for GPT-5.5. This resolver is shared by chat, HTTP Responses and WebSocket.
+  const legacyCodexModel = /^gpt-5\.5(-(?:none|low|medium|high|xhigh))?$/.exec(parsed.model || "");
+  if (legacyCodexModel && (parsed.provider === null || parsed.provider === "codex")) {
+    return {
+      provider: "codex",
+      model: `gpt-6.1-sol${legacyCodexModel[1] || ""}`,
+      extendedContext,
+    };
+  }
+
   const attachCustomApiFormat = async (info: any) => {
     if (!info?.provider || !info?.model) return info;
     const { apiFormat, targetFormat } = await lookupCustomModelMeta(

@@ -1,0 +1,1 @@
+- **fix(codex):** forward legacy `gpt-5.5`, `cx/gpt-5.5`, and `codex/gpt-5.5` requests to `codex/gpt-6.1-sol` before credential selection across Chat Completions, HTTP Responses, and WebSocket Responses. Preserve supported effort suffixes and explicit other-provider routing.
