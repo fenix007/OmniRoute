@@ -260,3 +260,14 @@ test("deepMergeFallback: ignores __proto__ / constructor / prototype keys (no pr
   assert.equal((target as Record<string, unknown>).polluted, undefined);
   assert.equal(target.safe, "ok", "legitimate keys still merge through");
 });
+
+test("deepMergeFallback: __MISSING__ placeholders are replaced by the fallback value", () => {
+  const target: Record<string, unknown> = {
+    providers: { translated: "Перевод", untranslated: "__MISSING__:Codex CLI Guide" },
+  };
+  const source: Record<string, unknown> = {
+    providers: { translated: "Translation", untranslated: "Codex CLI Guide" },
+  };
+  deepMergeFallback(target, source);
+  assert.deepEqual(target.providers, { translated: "Перевод", untranslated: "Codex CLI Guide" });
+});

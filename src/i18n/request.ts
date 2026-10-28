@@ -4,11 +4,18 @@ import { LOCALES, DEFAULT_LOCALE, LOCALE_COOKIE } from "./config";
 import type { Locale } from "./config";
 
 const FALLBACK_LOCALE = "en";
+// sync-ui-keys.mjs writes untranslated leaves as "__MISSING__:<en value>".
+const MISSING_TRANSLATION_PREFIX = "__MISSING__:";
+
+function isMissingTranslation(value: unknown): boolean {
+  return value === undefined || (typeof value === "string" && value.startsWith(MISSING_TRANSLATION_PREFIX));
+}
 
 /**
  * Deep merge that mutates `target` with values from `source`.
  * If both have an object at the same key, recurse.
- * Otherwise prefer the existing value in `target` (locale-specific wins).
+ * Otherwise prefer the existing value in `target` (locale-specific wins), unless it is an
+ * untranslated `__MISSING__:` placeholder.
  */
 export function deepMergeFallback(
   target: Record<string, unknown>,
@@ -27,7 +34,7 @@ export function deepMergeFallback(
       !Array.isArray(targetValue)
     ) {
       deepMergeFallback(targetValue as Record<string, unknown>, sourceValue as Record<string, unknown>);
-    } else if (targetValue === undefined) {
+    } else if (isMissingTranslation(targetValue)) {
       target[key] = sourceValue;
     }
   }
