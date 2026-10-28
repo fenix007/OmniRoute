@@ -61,7 +61,7 @@ export default function DistributeProxiesButton({
     <button
       onClick={handleClick}
       disabled={isDisabled}
-      className={`flex items-center gap-1.5 rounded-lg font-medium border transition-colors ${sizeClasses} ${stateClasses}`}
+      className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg font-medium border transition-colors ${sizeClasses} ${stateClasses}`}
       title={displayLabel}
       aria-label={displayLabel}
     >

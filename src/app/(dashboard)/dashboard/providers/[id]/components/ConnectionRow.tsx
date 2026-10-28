@@ -503,9 +503,9 @@ export default function ConnectionRow({
 
   return (
     <div
-      className={`group flex items-center justify-between p-3 rounded-lg hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors ${connection.isActive === false ? "opacity-60" : ""}`}
+      className={`group flex flex-wrap items-center justify-between gap-x-3 gap-y-2 p-3 rounded-lg hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors ${connection.isActive === false ? "opacity-60" : ""}`}
     >
-      <div className="flex items-center gap-3 flex-1 min-w-0">
+      <div className="flex items-center gap-3 flex-1 basis-[28rem] min-w-0">
         {onToggleSelect && (
           <input
             type="checkbox"
@@ -536,7 +536,7 @@ export default function ConnectionRow({
         </span>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium truncate">{displayName}</p>
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
+          <div className="flex items-center gap-2 mt-1 flex-wrap [&>*]:whitespace-nowrap">
             <Badge variant={statusPresentation.statusVariant as any} size="sm" dot>
               {statusPresentation.statusLabel}
             </Badge>
@@ -768,7 +768,7 @@ export default function ConnectionRow({
           </div>
         </div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
         <Button
           size="sm"
           variant="ghost"
@@ -852,43 +852,45 @@ export default function ConnectionRow({
             {exportClaudeAuthLabel}
           </Button>
         )}
-        <Toggle
-          size="sm"
-          checked={connection.isActive ?? true}
-          onChange={onToggleActive}
-          title={(connection.isActive ?? true) ? t("disableConnection") : t("enableConnection")}
-        />
-        <div className="flex gap-1 ml-1 transition-opacity">
-          {onReauth && (
+        <div className="flex items-center gap-2">
+          <Toggle
+            size="sm"
+            checked={connection.isActive ?? true}
+            onChange={onToggleActive}
+            title={(connection.isActive ?? true) ? t("disableConnection") : t("enableConnection")}
+          />
+          <div className="flex gap-1 ml-1 transition-opacity">
+            {onReauth && (
+              <button
+                onClick={onReauth}
+                className="p-2 hover:bg-amber-500/10 rounded text-amber-600 hover:text-amber-500"
+                title={t("reauthenticateConnection")}
+              >
+                <span className="material-symbols-outlined text-[18px]">passkey</span>
+              </button>
+            )}
             <button
-              onClick={onReauth}
-              className="p-2 hover:bg-amber-500/10 rounded text-amber-600 hover:text-amber-500"
-              title={t("reauthenticateConnection")}
+              onClick={onEdit}
+              className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary"
+              title={t("edit")}
             >
-              <span className="material-symbols-outlined text-[18px]">passkey</span>
+              <span className="material-symbols-outlined text-[18px]">edit</span>
             </button>
-          )}
-          <button
-            onClick={onEdit}
-            className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary"
-            title={t("edit")}
-          >
-            <span className="material-symbols-outlined text-[18px]">edit</span>
-          </button>
-          <button
-            onClick={onProxy}
-            className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary"
-            title={t("proxyConfig")}
-          >
-            <span className="material-symbols-outlined text-[18px]">vpn_lock</span>
-          </button>
-          <button
-            onClick={onDelete}
-            className="p-2 hover:bg-red-500/10 rounded text-red-500"
-            title={t("delete")}
-          >
-            <span className="material-symbols-outlined text-[18px]">delete</span>
-          </button>
+            <button
+              onClick={onProxy}
+              className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary"
+              title={t("proxyConfig")}
+            >
+              <span className="material-symbols-outlined text-[18px]">vpn_lock</span>
+            </button>
+            <button
+              onClick={onDelete}
+              className="p-2 hover:bg-red-500/10 rounded text-red-500"
+              title={t("delete")}
+            >
+              <span className="material-symbols-outlined text-[18px]">delete</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
