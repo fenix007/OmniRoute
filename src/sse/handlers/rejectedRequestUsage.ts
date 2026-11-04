@@ -51,13 +51,18 @@ export function describeRejectedComboFailure({
   comboName,
   reason,
   diagnostics,
+  localErrorCode,
 }: {
   status: number;
   comboName: string;
   reason?: string | null;
   diagnostics?: ComboDiagnostics | null;
+  localErrorCode?: "heap_pressure" | null;
 }): string {
   const prefix = `[${status}] Combo "${comboName}"`;
+  if (status === 503 && localErrorCode === "heap_pressure") {
+    return `${prefix} rejected — router memory protection (heap_pressure); retry shortly`;
+  }
   if (status !== 499) {
     const summary = `${prefix} failed — all targets exhausted`;
     if (!diagnostics) return summary;

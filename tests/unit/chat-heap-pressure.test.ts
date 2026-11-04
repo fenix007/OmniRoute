@@ -91,6 +91,15 @@ test("chat combo propagates heap pressure without invoking configured global fal
   assert.equal((await response.json()).error.code, "heap_pressure");
   assert.equal(fetchCalls, 0);
   assert.deepEqual(getAllModelLockouts(), []);
+  const { getCallLogs } = await import("../../src/lib/usage/callLogs.ts");
+  const logs = await getCallLogs({});
+  const rejected = logs.find((entry) => entry.model === "local-heap-combo");
+  assert.ok(rejected, "heap rejection must remain visible in call logs");
+  assert.equal(
+    rejected.error,
+    '[503] Combo "local-heap-combo" rejected — router memory protection (heap_pressure); retry shortly'
+  );
+  assert.doesNotMatch(rejected.error, /all targets exhausted/);
 });
 
 test("heap pressure appearing inside dispatch does not reset degraded health or consume half-open probe", async () => {

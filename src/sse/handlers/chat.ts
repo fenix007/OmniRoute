@@ -917,6 +917,7 @@ export async function handleChat(
             comboName: combo.name,
             reason: response.status === 499 ? await readResponseErrorReason(response) : null,
             diagnostics: await readRejectedComboDiagnostics(response),
+            localErrorCode: isHeapPressureResponse(response) ? "heap_pressure" : null,
           }),
           comboName: combo.name,
           apiKeyId: apiKeyInfo?.id ?? null,
