@@ -248,6 +248,21 @@ export function translateRequest(
                 }
               : credentials;
           result = toOpenAI(model, result, stream, step1Credentials);
+          // Responses messages only exist after this pivot. Normalize before Gemini
+          // consumes them, otherwise developer instructions are silently discarded.
+          if (
+            sourceFormat === FORMATS.OPENAI_RESPONSES &&
+            (targetFormat === FORMATS.GEMINI || targetFormat === FORMATS.ANTIGRAVITY) &&
+            Array.isArray(result.messages)
+          ) {
+            result.messages = normalizeRoles(
+              result.messages,
+              provider || "",
+              model || "",
+              targetFormat,
+              preserveDeveloperRole
+            );
+          }
           // Log OpenAI intermediate format
           reqLogger?.logOpenAIRequest?.(result);
         }

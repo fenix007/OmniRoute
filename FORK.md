@@ -1438,3 +1438,65 @@ The scheduler no longer runs a full `VACUUM` after each cleanup (upstream
 The configured vacuum scheduler (#4437) still compacts. First production run
 deletes ~197k `xp_audit_log` and ~170k `domain_cost_history` rows; other
 tables follow the operator retention already stored in `databaseSettings`.
+
+## Production maintenance — 2026-11-05 (Responses developer instructions)
+
+Base: `origin/stable` `8e971d24f212a4b95f73e27536f6c23a726ac2e6`.
+Source: [diegosouzapw/OmniRoute #18704](https://github.com/diegosouzapw/OmniRoute/pull/18704),
+reviewed head `69de44be99635144086c07e5b68964ad313bd059`, merged as
+`0dae5bd4cf1d20506b29d3ee505e5b850966bd1e`; merged status and unchanged head
+rechecked November 5 before publication. GitHub redirects the upstream name to
+`cheaper-inference/OmniRoute` with the same repository ID `1157102282`.
+Remote URLs are unchanged. Thanks @AiCaptain357.
+
+Decision: **adapt**. The Responses-to-OpenAI pivot creates messages after the first
+role-normalization pass. Gemini consumes that pivot before the final pass, silently
+dropping developer instructions. Normalize roles at the existing pivot only for
+Gemini and Antigravity targets, reusing the frozen normalizer. No newer translator
+architecture or dependency is imported. Source CI includes cancelled/skipped jobs;
+merged status is not used as evidence of local correctness.
+
+The independently authored regression suite follows this base's instruction
+carrier: Gemini systemInstruction and Antigravity's existing systemInstruction
+with its default prefix. It does not import upstream's newer instruction relocation
+or database-backed thought-signature fixtures. Eighteen tests cover instruction
+order and single occurrence, string input, interleaved history, tools and tool
+results, immutable input, both stream intents, Chat controls, native Responses and
+the frozen OpenAI role cleanup. Four regression cases fail on unchanged production
+code; all eighteen pass after adaptation, with 120/120 adjacent tests passing.
+
+### Inherited gate repairs
+
+The user authorized resolving the publication blockers separately. Move the
+usage-history metadata/detail type aliases to `usageHistory/types.ts` and the two
+pure Codex endpoint helpers to `codex/endpoints.ts`, preserving the existing public
+exports. Remove a redundant chat-handler section comment and restore the opening
+bullet in the existing overload-recovery changelog fragment. TypeScript AST
+comparison, normalized for checkout line endings, confirms all 38 usage-history,
+52 Codex and nine chat-handler declarations are preserved across the split.
+Frozen file-size caps, gate scripts and dependency files are unchanged.
+
+Full lint identified five obsolete explicit-any suppressions for the already typed
+`auth-clear-account-error.test.ts`; remove only those, without adding exceptions.
+The first full native test run exposed four stale GPT-5.5 routing assertions.
+The test and its model-resolution implementations match the original base: the
+owned successor rewrite already maps bare GPT-5.5 to Codex GPT-6.1 Sol before
+account selection. Update those expectations and retain explicit OpenAI controls
+through both Chat and Responses endpoints. Production routing is unchanged.
+
+Final validation: all three full coverage collectors pass — 23,856 native tests
+with 14 skips, 102 dashboard tests and 20 serial tests. Coverage passes all unchanged
+60% gates: 81.32% statements/lines, 78.70% branches and 86.89% functions. All 78
+focused gate-repair/translator tests pass. Full lint, core typecheck, size,
+discovery, changelog, docs-sync, any-budget, tracked-artifact and build-scope checks
+pass. Production build exits zero with 165 Turbopack warnings at unchanged source
+locations; it skips full type validation, so core typecheck was run separately.
+The build uses an owned copy of dependencies with its inherited nested self-link
+removed. Tests and build use isolated data directories; the original dependency
+installation and default database are preserved. No live-provider check is claimed.
+
+Publication follows the existing `[skip ci]` policy without workflow edits, release,
+image publication, workflow dispatch or deployment. Evidence and push confirmation
+are retained in the existing repository-local maintenance ledger. The two-source
+September 11–November 5 technical review remains partial; this continuation does not
+repeat discovery or advance either completed-review boundary.

@@ -1,0 +1,1 @@
+- **fix(translator):** Preserve Responses developer instructions before Gemini conversion, retaining the frozen Antigravity instruction carrier ([OmniRoute #18704](https://github.com/diegosouzapw/OmniRoute/pull/18704)) — thanks @AiCaptain357.
