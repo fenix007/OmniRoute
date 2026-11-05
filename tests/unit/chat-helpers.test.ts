@@ -148,7 +148,7 @@ test("resolveModelOrError rejects malformed model strings", async () => {
   assert.match(json.error.message, /Invalid model format/i);
 });
 
-test("resolveModelOrError routes Codex native compact gpt-5.5 requests to Codex", async () => {
+test("resolveModelOrError forwards native compact gpt-5.5 requests to the Codex successor", async () => {
   const result = await resolveModelOrError(
     "gpt-5.5",
     { model: "gpt-5.5", input: "compact this session", reasoning: { effort: "xhigh" } },
@@ -157,10 +157,10 @@ test("resolveModelOrError routes Codex native compact gpt-5.5 requests to Codex"
   );
 
   assert.equal(result.provider, "codex");
-  assert.equal(result.model, "gpt-5.5");
+  assert.equal(result.model, "gpt-6.1-sol");
 });
 
-test("resolveModelOrError keeps non-Codex gpt-5.5 Responses requests on OpenAI", async () => {
+test("resolveModelOrError forwards bare gpt-5.5 independently of the client user agent", async () => {
   const result = await resolveModelOrError(
     "gpt-5.5",
     { model: "gpt-5.5", input: "hello" },
@@ -168,11 +168,11 @@ test("resolveModelOrError keeps non-Codex gpt-5.5 Responses requests on OpenAI",
     { "user-agent": "OpenAI/Node" }
   );
 
-  assert.equal(result.provider, "openai");
-  assert.equal(result.model, "gpt-5.5");
+  assert.equal(result.provider, "codex");
+  assert.equal(result.model, "gpt-6.1-sol");
 });
 
-test("resolveModelOrError routes bare gpt-5.5 to Codex medium when Codex is the only active account", async () => {
+test("resolveModelOrError forwards bare gpt-5.5 without injecting effort for a Codex-only account", async () => {
   await seedConnection("codex");
 
   const result = await resolveModelOrError(
@@ -183,11 +183,11 @@ test("resolveModelOrError routes bare gpt-5.5 to Codex medium when Codex is the 
   );
 
   assert.equal(result.provider, "codex");
-  assert.equal(result.model, "gpt-5.5");
+  assert.equal(result.model, "gpt-6.1-sol");
   assert.equal(result.targetFormat, "openai-responses");
 });
 
-test("resolveModelOrError keeps bare gpt-5.5 on OpenAI when OpenAI is the only active account", async () => {
+test("resolveModelOrError forwards bare gpt-5.5 even with only an active OpenAI account", async () => {
   await seedConnection("openai");
 
   const result = await resolveModelOrError(
@@ -197,8 +197,22 @@ test("resolveModelOrError keeps bare gpt-5.5 on OpenAI when OpenAI is the only a
     { "user-agent": "OpenAI/Node" }
   );
 
-  assert.equal(result.provider, "openai");
-  assert.equal(result.model, "gpt-5.5");
+  assert.equal(result.provider, "codex");
+  assert.equal(result.model, "gpt-6.1-sol");
+});
+
+test("resolveModelOrError preserves explicit OpenAI gpt-5.5 routing", async () => {
+  await seedConnection("openai");
+  for (const endpoint of ["/v1/chat/completions", "/v1/responses"]) {
+    const result = await resolveModelOrError(
+      "openai/gpt-5.5",
+      { model: "openai/gpt-5.5", input: "hello" },
+      endpoint,
+      { "user-agent": "OpenAI/Node" }
+    );
+    assert.equal(result.provider, "openai");
+    assert.equal(result.model, "gpt-5.5");
+  }
 });
 
 test("checkPipelineGates blocks providers with an open circuit breaker", async () => {

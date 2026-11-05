@@ -1,0 +1,1 @@
+- **maintenance:** Restore frozen file-size and changelog gates through type-only usage-history extraction, unchanged Codex endpoint helpers, and stale GPT-5.5 routing-test expectations; remove obsolete ESLint suppressions without increasing limits.

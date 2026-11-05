@@ -1,0 +1,40 @@
+export type PendingRequestMetadata = {
+  clientEndpoint?: string | null;
+  clientRequest?: unknown;
+  providerRequest?: unknown;
+  providerUrl?: string | null;
+  providerResponse?: unknown;
+  clientResponse?: unknown;
+  status?: number | null;
+  error?: string | null;
+  errorCode?: string | null;
+  stage?: string | null;
+  stageUpdatedAt?: number | null;
+  correlationId?: string | null;
+};
+export type PendingRequestDetail = {
+  id: string;
+  model: string;
+  provider: string;
+  connectionId: string | null;
+  startedAt: number;
+  clientEndpoint?: string | null;
+  clientRequest?: unknown;
+  providerRequest?: unknown;
+  providerUrl?: string | null;
+  providerResponse?: unknown;
+  clientResponse?: unknown;
+  status?: number | null;
+  error?: string | null;
+  errorCode?: string | null;
+  completedAt?: number | null;
+  durationMs?: number | null;
+  stage?: string | null;
+  stageUpdatedAt?: number | null;
+  correlationId?: string | null;
+  streamChunks?: {
+    provider?: string[];
+    openai?: string[];
+    client?: string[];
+  } | null;
+};

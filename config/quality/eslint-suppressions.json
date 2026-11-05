@@ -562,11 +562,6 @@
       "count": 9
     }
   },
-  "tests/unit/auth-clear-account-error.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
-    }
-  },
   "tests/unit/auth-disable-cooling-2997.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 11
