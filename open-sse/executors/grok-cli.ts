@@ -18,6 +18,25 @@ import https from "node:https";
 
 const GROK_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 const REQUEST_TIMEOUT_MS = 60_000;
+// CLIProxyAPI's stable fallback; xAI rejects pre-1.0.13 clients with HTTP 426 (#6249).
+const GROK_CLIENT_VERSION = "1.0.46";
+
+function grokClientVersion(): string {
+  const configured = process.env.GROK_CLI_VERSION?.trim();
+  if (!configured) return GROK_CLIENT_VERSION;
+  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(configured)) {
+    throw new Error("GROK_CLI_VERSION must be a stable major.minor.patch version");
+  }
+  const parts = configured.split(".").map(Number);
+  if (parts.some((part) => !Number.isSafeInteger(part))) {
+    throw new Error("GROK_CLI_VERSION contains an invalid version component");
+  }
+  const [major, minor, patch] = parts;
+  if (major < 1 || (major === 1 && minor === 0 && patch < 13)) {
+    throw new Error("GROK_CLI_VERSION must be at least 1.0.13");
+  }
+  return configured;
+}
 
 export class GrokCliExecutor extends BaseExecutor {
   constructor() {
@@ -220,9 +239,12 @@ export class GrokCliExecutor extends BaseExecutor {
     }
 
     headers["Accept"] = stream ? "text/event-stream" : "application/json";
-    headers["x-grok-client-version"] = "0.2.72";
-    headers["x-grok-client-identifier"] = "grok_cli_rs";
-    headers["User-Agent"] = "grok-cli/0.2.72 (Windows 10.0.26200; x64)";
+    const clientVersion = grokClientVersion();
+    headers["x-grok-client-version"] = clientVersion;
+    headers["x-grok-client-identifier"] = "grok-shell";
+    headers["User-Agent"] = `xai-grok-workspace/${clientVersion}`;
+    headers["X-XAI-Token-Auth"] = "xai-grok-cli";
+    headers["x-authenticateresponse"] = "authenticate-response";
 
     return headers;
   }
