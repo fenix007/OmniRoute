@@ -55,6 +55,45 @@ test.beforeEach(async () => {
   await resetStorage();
 });
 
+test("xAI OAuth discovers the live catalog with its access token instead of the static fallback", async () => {
+  const connection = await seedConnection("xai-oauth", {
+    authType: "oauth",
+    accessToken: "test-xai-oauth-token",
+  });
+  const calls: Array<{ url: string; authorization: string | null }> = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({
+      url: String(url),
+      authorization: new Headers(init?.headers).get("Authorization"),
+    });
+    return Response.json({
+      data: [
+        { id: "grok-4.6", owned_by: "xai" },
+        { id: "grok-4.7", owned_by: "xai" },
+        { id: "grok-imagine-image", owned_by: "xai" },
+      ],
+    });
+  };
+
+  const response = await callRoute(connection.id, "?refresh=true");
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.source, "api");
+  assert.equal(body.warning, undefined);
+  assert.deepEqual(calls, [
+    {
+      url: "https://api.x.ai/v1/models",
+      authorization: "Bearer test-xai-oauth-token",
+    },
+  ]);
+  assert.deepEqual(
+    body.models.map((model) => model.id),
+    ["grok-4.6", "grok-4.7", "grok-imagine-image"]
+  );
+  const cached = await modelsDb.getSyncedAvailableModels("xai-oauth");
+  assert.ok(cached.some((model) => model.id === "grok-4.7"));
+});
+
 test.after(async () => {
   globalThis.fetch = originalFetch;
   core.resetDbInstance();

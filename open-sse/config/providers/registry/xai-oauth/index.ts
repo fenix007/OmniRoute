@@ -9,6 +9,7 @@ export const xai_oauthProvider: RegistryEntry = {
   executor: "xai-oauth",
   baseUrl: xaiProvider.baseUrl,
   responsesBaseUrl: xaiProvider.responsesBaseUrl,
+  modelsUrl: "https://api.x.ai/v1/models",
   authType: "oauth",
   authHeader: "bearer",
   passthroughModels: true,
