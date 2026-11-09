@@ -54,6 +54,7 @@ import {
 } from "./usage/antigravity.ts";
 import { getCursorUsage } from "./usage/cursor.ts";
 import { getKimiUsage } from "./usage/kimi.ts";
+import { getGrokUsage } from "./usage/grok.ts";
 import { getCodexUsage } from "./usage/codex.ts";
 import { getClaudeUsage, getClaudePlanLabel } from "./usage/claude.ts";
 import { getKiroUsage, buildKiroUsageResult, discoverKiroProfileArn } from "./usage/kiro.ts";
@@ -586,6 +587,8 @@ export const USAGE_FETCHER_PROVIDERS = [
   "opencode-zen",
   "xiaomi-mimo",
   "xai",
+  "xai-oauth",
+  "grok-cli",
   "vertex",
   "vertex-partner",
   "codebuddy-cn",
@@ -668,6 +671,9 @@ export async function getUsageForProvider(
       return await getOpencodeUsage(id || "", apiKey || "");
     case "xiaomi-mimo":
       return await getXiaomiMimoUsage(id || "");
+    case "xai-oauth":
+    case "grok-cli":
+      return await getGrokUsage(accessToken);
     case "xai":
       return await getXaiUsage(id || "");
     case "codebuddy-cn":

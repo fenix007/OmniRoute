@@ -390,6 +390,8 @@ export const ID_TO_ALIAS = new Proxy({} as Record<string, string>, {
 
 // Providers that support usage/quota API
 export const USAGE_SUPPORTED_PROVIDERS = [
+  "xai-oauth",
+  "grok-cli",
   "antigravity",
   "agy",
   "kiro",

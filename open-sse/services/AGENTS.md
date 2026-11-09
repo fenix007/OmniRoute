@@ -18,6 +18,7 @@ Live count: `ls open-sse/services/*.ts | wc -l` (currently 134). More including 
 
 - **`rateLimitManager.ts`** — Token bucket per API key + provider combo. Rejects before dispatch.
 - **`usage.ts`** — Per-request token/cost consumption tracking.
+- **`usage/grok.ts`** — Grok OAuth weekly credits quota and subscription metadata from the CLI billing API.
 - **`quotaCache.ts`** — In-memory quota snapshots, pre-loaded at startup.
 
 ### Account & Token Management

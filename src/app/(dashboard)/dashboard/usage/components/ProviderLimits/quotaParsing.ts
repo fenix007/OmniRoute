@@ -222,7 +222,7 @@ function parseProviderQuotas(providerId: string, data: any) {
   if (providerId === "github") return parseGithub(data);
   if (["glm", "glm-cn", "glmt", "opencode-go"].includes(providerId)) return parseGlmFamily(data);
   if (providerId === "antigravity" || providerId === "agy") return parseAntigravity(data);
-  if (providerId === "codex") return parseCodex(data);
+  if (["codex", "xai-oauth", "grok-cli"].includes(providerId)) return parseCodex(data);
   if (providerId === "claude") return parseClaude(data);
   if (providerId === "deepseek") return parseDeepseek(data);
   if (providerId === "perplexity-web") return parseCountQuotas(data);
