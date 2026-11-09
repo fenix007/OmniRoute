@@ -137,6 +137,7 @@ export type ProviderCredentials = {
   projectId?: string | null;
   expiresAt?: string;
   connectionId?: string; // T07: used for API key rotation index
+  refreshSource?: "quota" | "healthcheck" | "request" | "unknown";
   maxConcurrent?: number | null;
   providerSpecificData?: JsonRecord;
   requestEndpointPath?: string;

@@ -1,3 +1,4 @@
+import { markConnectionRefreshRejectedIfUnchanged } from "@/lib/db/providers";
 import {
   getAllProviderLimitsCache,
   getProviderConnectionById,
@@ -33,6 +34,8 @@ import {
   extractCodeAssistSubscriptionTier,
 } from "@omniroute/open-sse/services/codeAssistSubscription.ts";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
+import { isUnrecoverableRefreshError } from "@omniroute/open-sse/services/tokenRefresh.ts";
+import { recordKiroRefreshDiagnostic } from "@omniroute/open-sse/services/tokenRefreshUtils.ts";
 import { onUsageRecorded } from "./usageEvents";
 import {
   isRecord,
@@ -63,6 +66,7 @@ interface ProviderConnectionLike {
   errorCode?: string | number | null;
   rateLimitedUntil?: string | null;
   backoffLevel?: number;
+  updatedAt?: string;
 }
 
 const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
@@ -220,16 +224,55 @@ export function shouldAttemptRotatingRefresh(
   return allowRotatingRefresh === true;
 }
 
+const QUOTA_REFRESH_TERMINAL_STATUSES = new Set(["banned", "expired", "deactivated"]);
+
+function isQuotaRefreshBlocked(connection: ProviderConnectionLike): boolean {
+  return (
+    connection.isActive === false || QUOTA_REFRESH_TERMINAL_STATUSES.has(connection.testStatus)
+  );
+}
+
+function recordQuotaRefreshSkipped(connection: ProviderConnectionLike): void {
+  if (connection.provider === "kiro") {
+    recordKiroRefreshDiagnostic({ connectionId: connection.id, source: "quota" }, "skipped");
+  }
+}
+
+function skippedQuotaUsage(connection: ProviderConnectionLike): JsonRecord {
+  recordQuotaRefreshSkipped(connection);
+  const cached = getProviderLimitsCache(connection.id);
+  return {
+    quotas: cached?.quotas ?? null,
+    plan: cached?.plan ?? null,
+    message: "Connection is inactive or requires re-authentication; live quota refresh skipped.",
+    _refreshSkipped: true,
+    _stale: Boolean(cached),
+    _staleSince: cached?.fetchedAt ?? null,
+  };
+}
+
 export async function refreshAndUpdateCredentials(
   connection: ProviderConnectionLike,
   opts: { allowRotatingRefresh?: boolean; force?: boolean } = {}
 ) {
+  if (
+    isQuotaRefreshBlocked(connection) ||
+    connection.lastErrorType === "unrecoverable_refresh_error"
+  ) {
+    recordQuotaRefreshSkipped(connection);
+    return {
+      connection,
+      refreshed: false,
+      reauthRequired: connection.lastErrorType === "unrecoverable_refresh_error",
+    };
+  }
   if (!shouldAttemptRotatingRefresh(connection.provider, opts.allowRotatingRefresh)) {
     return { connection, refreshed: false };
   }
   const executor = await getExecutor(connection.provider);
   const credentials = {
     connectionId: connection.id,
+    refreshSource: "quota" as const,
     accessToken: connection.accessToken,
     refreshToken: connection.refreshToken,
     expiresAt: connection.tokenExpiresAt || connection.expiresAt || null,
@@ -249,9 +292,25 @@ export async function refreshAndUpdateCredentials(
 
   // Serialize the actual token mint per rotation group so two sibling accounts
   // never hit Auth0 concurrently (passthrough for non-rotating providers).
-  const refreshResult = (await serializeRefresh(connection.provider, () =>
-    executor.refreshCredentials(credentials, console)
-  )) as
+  let skippedConnection: ProviderConnectionLike | null = null;
+  const refreshResult = (await serializeRefresh(connection.provider, async () => {
+    // The lane may have waited behind another refresh. Recheck before sending secrets.
+    const latest = (await getProviderConnectionById(
+      connection.id
+    )) as unknown as ProviderConnectionLike | null;
+    if (!latest) throw withStatus(new Error("Connection not found"), 404);
+    if (
+      latest &&
+      (isQuotaRefreshBlocked(latest) ||
+        latest.refreshToken !== connection.refreshToken ||
+        (latest.accessToken || "") !== (connection.accessToken || ""))
+    ) {
+      skippedConnection = latest;
+      recordQuotaRefreshSkipped(latest);
+      return null;
+    }
+    return executor.refreshCredentials(credentials, console);
+  })) as
     | (JsonRecord & {
         accessToken?: string;
         refreshToken?: string;
@@ -261,6 +320,65 @@ export async function refreshAndUpdateCredentials(
         copilotTokenExpiresAt?: string;
       })
     | null;
+
+  if (skippedConnection) return { connection: skippedConnection, refreshed: false };
+
+  if (
+    isUnrecoverableRefreshError(refreshResult) &&
+    new Set(["invalid_client", "unauthorized_client", "invalid_scope"]).has(
+      String(refreshResult.code)
+    )
+  ) {
+    // Client configuration failures do not prove that this account's credential is dead.
+    if (connection.accessToken) return { connection, refreshed: false };
+    throw withStatus(new Error("OAuth client configuration prevented credential refresh."), 502);
+  }
+
+  if (isUnrecoverableRefreshError(refreshResult)) {
+    // A refresh can overlap re-authentication or another writer. Never mark its newer
+    // credentials invalid because the older snapshot was rejected upstream.
+    const latest = (await getProviderConnectionById(
+      connection.id
+    )) as unknown as ProviderConnectionLike | null;
+    if (!latest) throw withStatus(new Error("Connection not found"), 404);
+    if (
+      latest &&
+      (isQuotaRefreshBlocked(latest) ||
+        latest.refreshToken !== connection.refreshToken ||
+        (latest.accessToken || "") !== (connection.accessToken || ""))
+    ) {
+      return { connection: latest, refreshed: false };
+    }
+    const current = latest || connection;
+    const expiry = Date.parse(current.tokenExpiresAt || current.expiresAt || "");
+    const accessTokenStillValid =
+      Boolean(current.accessToken) && Number.isFinite(expiry) && expiry > Date.now();
+    if (latest?.updatedAt) {
+      const applied = markConnectionRefreshRejectedIfUnchanged(
+        connection.id,
+        latest.updatedAt,
+        accessTokenStillValid
+      );
+      if (!applied) {
+        return {
+          connection: ((await getProviderConnectionById(connection.id)) ||
+            current) as ProviderConnectionLike,
+          refreshed: false,
+        };
+      }
+    }
+    if (accessTokenStillValid) {
+      return {
+        connection: { ...current, lastErrorType: "unrecoverable_refresh_error" },
+        refreshed: false,
+        reauthRequired: true,
+      };
+    }
+    throw withStatus(
+      new Error("Refresh credential rejected. Please re-authenticate this account."),
+      401
+    );
+  }
 
   if (!refreshResult) {
     // Refresh failed but we still have an accessToken — fall back to the
@@ -444,6 +562,8 @@ export async function maybeClearRecoveredQuotaState(
 ): Promise<ProviderConnectionLike> {
   if (!hasUsableQuota(usage)) return connection;
   if (isTerminalStatusForQuotaRecovery(connection.testStatus)) return connection;
+  // An accepted access token or positive quota does not validate its rejected refresh credential.
+  if (connection.lastErrorType === "unrecoverable_refresh_error") return connection;
   if (connection.lastErrorType === "quota_exhausted") {
     if (
       connection.lastErrorSource === CLAUDE_EXTRA_USAGE_ERROR_SOURCE &&
@@ -761,6 +881,11 @@ async function fetchLiveProviderLimitsWithOptions(
     throw withStatus(new Error("Connection not found"), 404);
   }
 
+  // Quota inspection must not revive or mint credentials for parked/terminal accounts.
+  if (isQuotaRefreshBlocked(connection)) {
+    return { connection, usage: skippedQuotaUsage(connection) };
+  }
+
   if (!isSupportedUsageConnection(connection)) {
     throw withStatus(new Error("Usage not available for this connection"), 400);
   }
@@ -799,6 +924,7 @@ async function fetchLiveProviderLimitsWithOptions(
       });
       conn = result.connection;
       wasRefreshed = result.refreshed;
+      if (isQuotaRefreshBlocked(conn)) return { usage: skippedQuotaUsage(conn) };
 
       if (wasRefreshed) {
         await syncToCloudIfEnabled();
@@ -814,7 +940,12 @@ async function fetchLiveProviderLimitsWithOptions(
       // re-mint and retry once. This recovers imported accounts (expiresAt=null,
       // where the proactive needsRefresh heuristic never fires) without ever
       // refreshing proactively from the bulk path.
-      if (options.allowRotatingRefresh && !wasRefreshed && isUsageAuthError(usageData?.message)) {
+      if (
+        options.allowRotatingRefresh &&
+        !wasRefreshed &&
+        !result.reauthRequired &&
+        isUsageAuthError(usageData?.message)
+      ) {
         const forced = await refreshAndUpdateCredentials(conn, {
           allowRotatingRefresh: true,
           force: true,
@@ -920,6 +1051,9 @@ export async function fetchAndPersistProviderLimits(
     allowRotatingRefresh: opts.allowRotatingRefresh,
   });
   const newCache = toProviderLimitsCacheEntry(usage, source);
+  if (usage._refreshSkipped === true) {
+    return { connection, usage, cache: getProviderLimitsCache(connectionId) || newCache };
+  }
 
   // Don't persist error-only entries (429 etc.) — would wipe prior good cache.
   // Serve the prior entry instead; only successful fetches update the cache.

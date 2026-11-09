@@ -21,15 +21,23 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-force-re
 const { getExecutor } = await import("../../open-sse/executors/index.ts");
 const { refreshAndUpdateCredentials } = await import("../../src/lib/usage/providerLimits.ts");
 
-function importedCodexConnection() {
-  return {
-    id: "codex-imported-1",
-    provider: "codex",
-    accessToken: "imported-access-token",
-    refreshToken: "imported-refresh-token",
-    tokenExpiresAt: null, // imported: no known expiry → needsRefresh is always false
-    providerSpecificData: {},
-  };
+const providers = await import("../../src/lib/db/providers.ts");
+
+async function importedCodexConnection() {
+  return providers.createProviderConnection(
+    {
+      authType: "oauth",
+      isActive: true,
+      testStatus: "active",
+      id: "codex-imported-1",
+      provider: "codex",
+      accessToken: "imported-access-token",
+      refreshToken: "imported-refresh-token",
+      tokenExpiresAt: null, // imported: no known expiry → needsRefresh is always false
+      providerSpecificData: {},
+    },
+    { skipOAuthDedup: true }
+  );
 }
 
 test("force re-mints an imported rotating account that needsRefresh would skip (#3019 reactive)", async () => {
@@ -44,14 +52,14 @@ test("force re-mints an imported rotating account that needsRefresh would skip (
   };
   try {
     // Baseline: on-demand path WITHOUT force respects needsRefresh → no mint.
-    const noForce = await refreshAndUpdateCredentials(importedCodexConnection(), {
+    const noForce = await refreshAndUpdateCredentials((await importedCodexConnection()) as never, {
       allowRotatingRefresh: true,
     });
     assert.equal(noForce.refreshed, false, "without force, needsRefresh=false → no mint");
     assert.equal(refreshCalls, 0);
 
     // Reactive recovery: force bypasses needsRefresh and re-mints.
-    const forced = await refreshAndUpdateCredentials(importedCodexConnection(), {
+    const forced = await refreshAndUpdateCredentials((await importedCodexConnection()) as never, {
       allowRotatingRefresh: true,
       force: true,
     });
@@ -75,7 +83,7 @@ test("force does NOT override the bulk #3019 guard (no allowRotatingRefresh → 
     return { accessToken: "should-not-happen", expiresIn: 3600 };
   };
   try {
-    const result = await refreshAndUpdateCredentials(importedCodexConnection(), {
+    const result = await refreshAndUpdateCredentials((await importedCodexConnection()) as never, {
       // allowRotatingRefresh omitted → bulk/scheduled semantics
       force: true,
     });

@@ -820,7 +820,9 @@ export class KiroExecutor extends BaseExecutor {
       const result = await refreshKiroToken(
         credentials.refreshToken,
         credentials.providerSpecificData,
-        log
+        log,
+        null,
+        { connectionId: credentials.connectionId, source: credentials.refreshSource || "request" }
       );
 
       if (!result || result.error) return result;

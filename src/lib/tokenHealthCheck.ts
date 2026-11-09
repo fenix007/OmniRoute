@@ -545,6 +545,7 @@ export async function checkConnection(conn) {
   const attemptedAccessToken = conn.accessToken || null;
   const credentials = {
     connectionId: conn.id,
+    refreshSource: "healthcheck",
     refreshToken: attemptedRefreshToken,
     accessToken: attemptedAccessToken,
     expiresAt: getEffectiveTokenExpiryIso(conn),
@@ -652,8 +653,7 @@ export async function checkConnection(conn) {
       return;
     }
 
-    const accessTokenStillValid =
-      getEffectiveTokenExpiryMs(currentConnection || conn) > Date.now() + TOKEN_EXPIRY_BUFFER;
+    const accessTokenStillValid = getEffectiveTokenExpiryMs(currentConnection || conn) > Date.now();
 
     if (accessTokenStillValid) {
       await updateProviderConnection(conn.id, {

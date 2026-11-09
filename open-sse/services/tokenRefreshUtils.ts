@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export function buildFormParams(entries: Record<string, unknown>): URLSearchParams {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(entries)) {
@@ -53,4 +55,39 @@ export function extractOAuthErrorCode(raw: unknown, depth = 0): string | null {
   }
 
   return null;
+}
+
+export type RefreshDiagnosticSource = "quota" | "healthcheck" | "request" | "unknown";
+export type RefreshDiagnosticOutcome = "success" | "failure" | "reauth_required" | "skipped";
+export type RefreshDiagnosticContext = {
+  connectionId?: string;
+  source?: RefreshDiagnosticSource;
+};
+
+/** Emit an allowlisted refresh event; never serialize credentials or upstream payloads. */
+export function recordKiroRefreshDiagnostic(
+  context: RefreshDiagnosticContext,
+  outcome: RefreshDiagnosticOutcome,
+  statusCode: number | null = null
+): void {
+  const sources = new Set(["quota", "healthcheck", "request", "unknown"]);
+  console.info(
+    "TOKEN_REFRESH_DIAGNOSTIC",
+    JSON.stringify({
+      provider: "kiro",
+      connectionHash:
+        typeof context.connectionId === "string" && context.connectionId
+          ? createHash("sha256").update(context.connectionId).digest("hex")
+          : null,
+      source: context.source && sources.has(context.source) ? context.source : "unknown",
+      outcome,
+      statusCode:
+        typeof statusCode === "number" &&
+        Number.isInteger(statusCode) &&
+        statusCode >= 100 &&
+        statusCode <= 599
+          ? statusCode
+          : null,
+    })
+  );
 }

@@ -18,24 +18,31 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-process.env.DATA_DIR = fs.mkdtempSync(
-  path.join(os.tmpdir(), "omniroute-accesstoken-fallback-")
-);
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-accesstoken-fallback-"));
 
 const { getExecutor } = await import("../../open-sse/executors/index.ts");
 const { refreshAndUpdateCredentials } = await import("../../src/lib/usage/providerLimits.ts");
 
 // `gemini` is a non-rotating (no rotation lock group), non-github OAuth provider,
 // so `shouldAttemptRotatingRefresh` is true and the refresh path is reached.
-function geminiConnection() {
-  return {
-    id: "gemini-fallback-1",
-    provider: "gemini",
-    accessToken: "still-valid-access-token",
-    refreshToken: "some-refresh-token",
-    tokenExpiresAt: new Date(Date.now() - 60_000).toISOString(), // expired → needsRefresh fires
-    providerSpecificData: {},
-  };
+const providers = await import("../../src/lib/db/providers.ts");
+
+async function geminiConnection() {
+  return providers.createProviderConnection(
+    {
+      authType: "oauth",
+      isActive: true,
+      testStatus: "active",
+      id: "gemini-fallback-1",
+      provider: "gemini",
+      accessToken: "still-valid-access-token",
+      refreshToken: "some-refresh-token",
+      tokenExpiresAt: new Date(Date.now() - 60_000).toISOString(), // expired → needsRefresh fires
+      providerSpecificData: {},
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    },
+    { skipOAuthDedup: true }
+  );
 }
 
 test("falls back to the existing accessToken for a non-github provider when refreshCredentials returns null", async () => {
@@ -45,7 +52,7 @@ test("falls back to the existing accessToken for a non-github provider when refr
   exec.needsRefresh = () => true; // force the refresh attempt
   exec.refreshCredentials = async () => null; // upstream refresh failed
   try {
-    const result = await refreshAndUpdateCredentials(geminiConnection(), {
+    const result = await refreshAndUpdateCredentials((await geminiConnection()) as never, {
       allowRotatingRefresh: true,
     });
     assert.equal(
@@ -71,10 +78,11 @@ test("still throws when refresh fails AND there is no accessToken to fall back o
   exec.needsRefresh = () => true;
   exec.refreshCredentials = async () => null;
   try {
-    const conn = geminiConnection();
+    const conn = await geminiConnection();
     conn.accessToken = ""; // no usable token → must not silently degrade
+    await providers.updateProviderConnection(String(conn.id), { accessToken: "" });
     await assert.rejects(
-      () => refreshAndUpdateCredentials(conn, { allowRotatingRefresh: true }),
+      () => refreshAndUpdateCredentials(conn as never, { allowRotatingRefresh: true }),
       /Failed to refresh credentials/,
       "without an accessToken the refresh failure must surface as an error"
     );

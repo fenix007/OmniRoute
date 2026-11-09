@@ -606,6 +606,41 @@ export async function updateProviderConnection(id: string, data: JsonRecord) {
   );
 }
 
+/** Record a terminal refresh rejection only while the credential snapshot is unchanged. */
+export function markConnectionRefreshRejectedIfUnchanged(
+  id: string,
+  expectedUpdatedAt: string,
+  accessTokenStillValid: boolean
+): boolean {
+  const db = getDbInstance() as unknown as DbLike;
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      `
+    UPDATE provider_connections SET
+      test_status = CASE WHEN ? THEN test_status ELSE 'expired' END,
+      is_active = CASE WHEN ? THEN is_active ELSE 0 END,
+      last_error = 'Refresh credential rejected. Please re-authenticate this account.',
+      last_error_at = ?, last_error_type = 'unrecoverable_refresh_error',
+      last_error_source = 'oauth', error_code = 'unrecoverable_refresh_error', updated_at = ?
+    WHERE id = ? AND updated_at = ?
+  `
+    )
+    .run(
+      Number(accessTokenStillValid),
+      Number(accessTokenStillValid),
+      now,
+      now,
+      id,
+      expectedUpdatedAt
+    );
+  if ((result.changes ?? 0) === 0) return false;
+  backupDbFile("pre-write");
+  invalidateDbCache("connections");
+  bumpProxyConfigGeneration();
+  return true;
+}
+
 /**
  * Atomic conditional clear of recoverable error state on a connection row.
  *
