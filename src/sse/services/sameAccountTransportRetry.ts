@@ -53,12 +53,15 @@ export function isRetryableTransportStatus(status: unknown): boolean {
 export function isRetryablePreOutputTransportError(
   status: unknown,
   errorText: string | null | undefined,
-  errorCode?: string | null,
+  errorCode?: unknown,
   errorType?: string | null
 ): boolean {
   if (errorType && NON_RETRYABLE_ERROR_TYPES.has(errorType)) return false;
-  if (errorCode && String(errorCode).startsWith("LEASE_")) return false;
-  if (errorCode && NON_TRANSPORT_ERROR_CODES.has(errorCode.toLowerCase())) return false;
+  // Google returns numeric error.code values; only named string codes carry
+  // transport/model semantics. Keep the HTTP status authoritative otherwise.
+  const code = typeof errorCode === "string" ? errorCode : "";
+  if (code.startsWith("LEASE_")) return false;
+  if (NON_TRANSPORT_ERROR_CODES.has(code.toLowerCase())) return false;
 
   const text = String(errorText || "");
   // Explicit model/application failures are not a broken transport, even at 502/503.
@@ -74,9 +77,7 @@ export function isRetryablePreOutputTransportError(
   const statusRetryable = isRetryableTransportStatus(status);
   const textRetryable = RETRYABLE_TRANSPORT_TEXT.some((pattern) => pattern.test(text));
   const codeRetryable =
-    errorCode === "STREAM_EARLY_EOF" ||
-    errorCode === "proxy_unreachable" ||
-    errorCode === "PROXY_UNREACHABLE";
+    code === "STREAM_EARLY_EOF" || code === "proxy_unreachable" || code === "PROXY_UNREACHABLE";
 
   return statusRetryable || textRetryable || codeRetryable;
 }
@@ -92,7 +93,7 @@ export function sameAccountTransportRetryDelayMs(random: () => number = Math.ran
 export function shouldRetrySameAccountTransport(options: {
   status: unknown;
   errorText?: string | null;
-  errorCode?: string | null;
+  errorCode?: unknown;
   errorType?: string | null;
   attempt: number;
   hasForcedConnection?: boolean;

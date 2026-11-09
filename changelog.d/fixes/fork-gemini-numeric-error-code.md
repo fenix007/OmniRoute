@@ -1,0 +1,1 @@
+- Fixed Gemini numeric upstream error codes crashing account retry classification, so Google quota errors can reach account fallback instead of producing empty HTTP 500 responses or broken streams.
