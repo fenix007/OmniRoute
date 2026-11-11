@@ -1,0 +1,1 @@
+- Keep generated Responses IDs within 64 characters, avoid duplicate `resp_` prefixes, and preserve item references across reasoning, text, and tool-call streaming events.

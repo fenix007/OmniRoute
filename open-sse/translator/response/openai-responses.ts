@@ -5,6 +5,7 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { appendToolCallArgumentDelta } from "../../utils/toolCallArguments.ts";
+import { responsesResponseId, responsesOutputItemId } from "../../utils/responsesOutputIds.ts";
 import { fallbackToolCallId } from "../helpers/toolCallHelper.ts";
 import { shouldParseTextualReasoningTags } from "../../handlers/responseSanitizer.ts";
 import {
@@ -127,7 +128,7 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
   // Emit initial events
   if (!state.started) {
     state.started = true;
-    state.responseId = chunk.id ? `resp_${chunk.id}` : state.responseId;
+    state.responseId = chunk.id ? responsesResponseId(chunk.id) : state.responseId;
 
     const createdResponse: Record<string, unknown> = {
       id: state.responseId,
@@ -247,7 +248,7 @@ function recordCompletedItem(state, outputIndex, item) {
 // Helper functions
 function startReasoning(state, emit, idx) {
   if (!state.reasoningId) {
-    state.reasoningId = `rs_${state.responseId}_${idx}`;
+    state.reasoningId = responsesOutputItemId("rs", state.responseId, idx);
     state.reasoningIndex = idx;
 
     emit("response.output_item.added", {
@@ -318,7 +319,7 @@ function closeReasoning(state, emit) {
 function emitTextContent(state, emit, idx, content) {
   if (!state.msgItemAdded[idx]) {
     state.msgItemAdded[idx] = true;
-    const msgId = `msg_${state.responseId}_${idx}`;
+    const msgId = responsesOutputItemId("msg", state.responseId, idx);
 
     emit("response.output_item.added", {
       type: "response.output_item.added",
@@ -332,7 +333,7 @@ function emitTextContent(state, emit, idx, content) {
 
     emit("response.content_part.added", {
       type: "response.content_part.added",
-      item_id: `msg_${state.responseId}_${idx}`,
+      item_id: responsesOutputItemId("msg", state.responseId, idx),
       output_index: idx,
       content_index: 0,
       part: { type: "output_text", annotations: [], logprobs: [], text: "" },
@@ -341,7 +342,7 @@ function emitTextContent(state, emit, idx, content) {
 
   emit("response.output_text.delta", {
     type: "response.output_text.delta",
-    item_id: `msg_${state.responseId}_${idx}`,
+    item_id: responsesOutputItemId("msg", state.responseId, idx),
     output_index: idx,
     content_index: 0,
     delta: content,
@@ -357,7 +358,7 @@ function closeMessage(state, emit, idx) {
     state.msgItemDone[idx] = true;
     const fullText = state.msgTextBuf[idx] || "";
     const normalizedIndex = normalizeOutputIndex(idx);
-    const msgId = `msg_${state.responseId}_${normalizedIndex}`;
+    const msgId = responsesOutputItemId("msg", state.responseId, normalizedIndex);
 
     emit("response.output_text.done", {
       type: "response.output_text.done",
@@ -426,14 +427,14 @@ function emitToolCall(state, emit, tc) {
       output_index: tcIdx,
       item: isCustomTool
         ? {
-            id: `fc_${newCallId}`,
+            id: responsesOutputItemId("fc", newCallId),
             type: "custom_tool_call",
             input: "",
             call_id: newCallId,
             name: state.funcNames[tcIdx] || "",
           }
         : {
-            id: `fc_${newCallId}`,
+            id: responsesOutputItemId("fc", newCallId),
             type: "function_call",
             arguments: "",
             call_id: newCallId,
@@ -458,7 +459,7 @@ function emitToolCall(state, emit, tc) {
         : "response.function_call_arguments.delta";
       emit(deltaEvent, {
         type: deltaEvent,
-        item_id: `fc_${refCallId}`,
+        item_id: responsesOutputItemId("fc", refCallId),
         output_index: tcIdx,
         delta: emittedDelta,
       });
@@ -487,13 +488,13 @@ function closeToolCall(state, emit, idx, recordAsCompleted = true) {
 
       emit("response.custom_tool_call_input.done", {
         type: "response.custom_tool_call_input.done",
-        item_id: `fc_${callId}`,
+        item_id: responsesOutputItemId("fc", callId),
         output_index: normalizedIndex,
         input: rawInput,
       });
 
       funcItem = {
-        id: `fc_${callId}`,
+        id: responsesOutputItemId("fc", callId),
         type: "custom_tool_call",
         input: rawInput,
         call_id: callId,
@@ -508,13 +509,13 @@ function closeToolCall(state, emit, idx, recordAsCompleted = true) {
     } else {
       emit("response.function_call_arguments.done", {
         type: "response.function_call_arguments.done",
-        item_id: `fc_${callId}`,
+        item_id: responsesOutputItemId("fc", callId),
         output_index: normalizedIndex,
         arguments: args,
       });
 
       funcItem = {
-        id: `fc_${callId}`,
+        id: responsesOutputItemId("fc", callId),
         type: "function_call",
         arguments: args,
         call_id: callId,

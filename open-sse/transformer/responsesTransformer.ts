@@ -1,3 +1,4 @@
+import { responsesResponseId, responsesOutputItemId } from "../utils/responsesOutputIds.ts";
 import { appendToolCallArgumentDelta } from "../utils/toolCallArguments.ts";
 import { shouldParseTextualReasoningTags } from "../handlers/responseSanitizer.ts";
 import * as fs from "fs";
@@ -157,7 +158,7 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
   // Helper to start reasoning
   const startReasoning = (controller, idx) => {
     if (!state.reasoningId) {
-      state.reasoningId = `rs_${state.responseId}_${idx}`;
+      state.reasoningId = responsesOutputItemId("rs", state.responseId, idx);
       state.reasoningIndex = idx;
 
       emit(controller, "response.output_item.added", {
@@ -234,7 +235,7 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
       state.msgItemDone[idx] = true;
       const fullText = state.msgTextBuf[idx] || "";
       const normalizedIndex = normalizeOutputIndex(idx);
-      const msgId = `msg_${state.responseId}_${normalizedIndex}`;
+      const msgId = responsesOutputItemId("msg", state.responseId, normalizedIndex);
 
       emit(controller, "response.output_text.done", {
         type: "response.output_text.done",
@@ -298,13 +299,13 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
 
       emit(controller, "response.function_call_arguments.done", {
         type: "response.function_call_arguments.done",
-        item_id: `fc_${callId}`,
+        item_id: responsesOutputItemId("fc", callId),
         output_index: normalizedIndex,
         arguments: args,
       });
 
       const funcItem = {
-        id: `fc_${callId}`,
+        id: responsesOutputItemId("fc", callId),
         type: "function_call",
         arguments: args,
         call_id: callId,
@@ -429,7 +430,7 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
           // Emit initial events
           if (!state.started) {
             state.started = true;
-            state.responseId = parsed.id ? `resp_${parsed.id}` : state.responseId;
+            state.responseId = parsed.id ? responsesResponseId(parsed.id) : state.responseId;
 
             emit(controller, "response.created", {
               type: "response.created",
@@ -518,7 +519,7 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
 
               if (!state.msgItemAdded[msgIdx]) {
                 state.msgItemAdded[msgIdx] = true;
-                const msgId = `msg_${state.responseId}_${msgIdx}`;
+                const msgId = responsesOutputItemId("msg", state.responseId, msgIdx);
 
                 emit(controller, "response.output_item.added", {
                   type: "response.output_item.added",
@@ -532,7 +533,7 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
 
                 emit(controller, "response.content_part.added", {
                   type: "response.content_part.added",
-                  item_id: `msg_${state.responseId}_${msgIdx}`,
+                  item_id: responsesOutputItemId("msg", state.responseId, msgIdx),
                   output_index: msgIdx,
                   content_index: 0,
                   part: { type: "output_text", annotations: [], logprobs: [], text: "" },
@@ -541,7 +542,7 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
 
               emit(controller, "response.output_text.delta", {
                 type: "response.output_text.delta",
-                item_id: `msg_${state.responseId}_${msgIdx}`,
+                item_id: responsesOutputItemId("msg", state.responseId, msgIdx),
                 output_index: msgIdx,
                 content_index: 0,
                 delta: content,
@@ -589,7 +590,7 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
                   type: "response.output_item.added",
                   output_index: tcIdx,
                   item: {
-                    id: `fc_${newCallId}`,
+                    id: responsesOutputItemId("fc", newCallId),
                     type: "function_call",
                     arguments: "",
                     call_id: newCallId,
@@ -625,7 +626,7 @@ export function createResponsesApiTransformStream(logger = null, keepaliveInterv
                 if (refCallId && emittedDelta) {
                   emit(controller, "response.function_call_arguments.delta", {
                     type: "response.function_call_arguments.delta",
-                    item_id: `fc_${refCallId}`,
+                    item_id: responsesOutputItemId("fc", refCallId),
                     output_index: tcIdx,
                     delta: emittedDelta,
                   });
