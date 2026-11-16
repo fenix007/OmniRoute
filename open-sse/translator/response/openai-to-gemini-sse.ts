@@ -143,69 +143,13 @@ export function openAIChunkToGeminiChunk(
     parts.push({ text: String(delta.content) });
   }
 
-  // Accumulate streamed tool-call fragments (OpenAI streams partial JSON
-  // `arguments` across chunks, keyed by index). Requires a caller-supplied
-  // per-stream `state`; nothing is emitted until finish_reason arrives.
-  if (state && Array.isArray(delta.tool_calls)) {
-    const accum = (state.toolCallAccum ??= {});
-    for (const tc of delta.tool_calls) {
-      const idx = tc.index ?? 0;
-      const entry = (accum[idx] ??= { id: "", name: "", arguments: "" });
-      if (tc.id) entry.id = tc.id;
-      if (tc.function?.name) entry.name += tc.function.name;
-      if (tc.function?.arguments) entry.arguments += tc.function.arguments;
-    }
-  }
-
-  // On finish, flush accumulated tool calls as complete functionCall parts.
-  if (choice.finish_reason && state?.toolCallAccum) {
-    for (const key of Object.keys(state.toolCallAccum)) {
-      const entry = state.toolCallAccum[Number(key)];
-      if (!entry.name) continue;
-      let args: Record<string, unknown> = {};
-      try {
-        args = JSON.parse(entry.arguments || "{}") as Record<string, unknown>;
-      } catch {
-        args = {};
-      }
-      parts.push({ functionCall: { name: entry.name, args } });
-    }
-  }
+  if (state && Array.isArray(delta.tool_calls)) accumulateGeminiTools(delta.tool_calls, state);
+  if (choice.finish_reason && state?.toolCallAccum) appendGeminiTools(state, parts);
 
   // Skip pure role-only deltas with no content and no finish signal.
   if (parts.length === 0 && !choice.finish_reason) return null;
 
-  const candidate: GeminiCandidate = {
-    content: {
-      role: "model",
-      parts: parts.length > 0 ? parts : [{ text: "" }],
-    },
-    index: 0,
-  };
-
-  if (choice.finish_reason) {
-    candidate.finishReason = OPENAI_TO_GEMINI_FINISH_REASON[choice.finish_reason] ?? "STOP";
-  }
-
-  const out: GeminiStreamChunk = { candidates: [candidate] };
-
-  // Attach usage + modelVersion on the final chunk (when finish_reason is set).
-  if (choice.finish_reason && parsed.usage) {
-    const u = parsed.usage;
-    const usageMetadata: GeminiUsageMetadata = {
-      promptTokenCount: u.prompt_tokens || 0,
-      candidatesTokenCount: u.completion_tokens || 0,
-      totalTokenCount: u.total_tokens || 0,
-    };
-    const reasoningTokens = u.completion_tokens_details?.reasoning_tokens;
-    if (reasoningTokens) {
-      usageMetadata.thoughtsTokenCount = reasoningTokens;
-    }
-    out.usageMetadata = usageMetadata;
-    out.modelVersion = parsed.model || fallbackModel;
-  }
-
-  return out;
+  return buildGeminiChunk(parts, choice, parsed, fallbackModel);
 }
 
 /**
@@ -377,6 +321,64 @@ export async function convertOpenAIResponseToGemini(
 
   const { message, finish_reason } = choice;
 
+  const parts = geminiMessageParts(message);
+
+  const finishReason = OPENAI_TO_GEMINI_FINISH_REASON[finish_reason ?? "stop"] ?? "STOP";
+
+  const geminiResponse: GeminiNonStreamResponse = {
+    candidates: [
+      {
+        content: { role: "model", parts },
+        finishReason,
+        index: 0,
+      },
+    ],
+    modelVersion: body.model || model,
+  };
+
+  if (body.usage) {
+    geminiResponse.usageMetadata = geminiUsage(body.usage);
+  }
+
+  return Response.json(geminiResponse, {
+    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+  });
+}
+
+function accumulateGeminiTools(toolCalls: OpenAIToolCallDelta[], state: GeminiToolCallState) {
+  const accum = (state.toolCallAccum ??= {});
+  for (const tc of toolCalls) {
+    const idx = tc.index ?? 0;
+    const entry = (accum[idx] ??= { id: "", name: "", arguments: "" });
+    if (tc.id) entry.id = tc.id;
+    if (tc.function?.name) entry.name += tc.function.name;
+    if (tc.function?.arguments) entry.arguments += tc.function.arguments;
+  }
+}
+function appendGeminiTools(state: GeminiToolCallState, parts: GeminiPart[]) {
+  for (const key of Object.keys(state.toolCallAccum)) {
+    const entry = state.toolCallAccum[Number(key)];
+    if (!entry.name) continue;
+    let args: Record<string, unknown> = {};
+    try {
+      args = JSON.parse(entry.arguments || "{}") as Record<string, unknown>;
+    } catch {
+      args = {};
+    }
+    parts.push({ functionCall: { name: entry.name, args } });
+  }
+}
+function geminiUsage(u: OpenAIUsage): GeminiUsageMetadata {
+  const usageMetadata: GeminiUsageMetadata = {
+    promptTokenCount: u.prompt_tokens || 0,
+    candidatesTokenCount: u.completion_tokens || 0,
+    totalTokenCount: u.total_tokens || 0,
+  };
+  const reasoningTokens = u.completion_tokens_details?.reasoning_tokens;
+  if (reasoningTokens) usageMetadata.thoughtsTokenCount = reasoningTokens;
+  return usageMetadata;
+}
+function geminiMessageParts(message: OpenAIMessage): GeminiPart[] {
   const parts: GeminiPart[] = [];
   if (message.reasoning_content) {
     parts.push({ text: String(message.reasoning_content), thought: true });
@@ -398,34 +400,34 @@ export async function convertOpenAIResponseToGemini(
     parts.push({ functionCall: { name: tc.function?.name || "", args } });
   }
 
-  const finishReason = OPENAI_TO_GEMINI_FINISH_REASON[finish_reason ?? "stop"] ?? "STOP";
+  return parts;
+}
 
-  const geminiResponse: GeminiNonStreamResponse = {
-    candidates: [
-      {
-        content: { role: "model", parts },
-        finishReason,
-        index: 0,
-      },
-    ],
-    modelVersion: body.model || model,
+function buildGeminiChunk(
+  parts: GeminiPart[],
+  choice: OpenAIChoice,
+  parsed: OpenAIStreamChunk,
+  fallbackModel: string
+): GeminiStreamChunk {
+  const candidate: GeminiCandidate = {
+    content: {
+      role: "model",
+      parts: parts.length > 0 ? parts : [{ text: "" }],
+    },
+    index: 0,
   };
 
-  if (body.usage) {
-    const u = body.usage;
-    const usageMetadata: GeminiUsageMetadata = {
-      promptTokenCount: u.prompt_tokens || 0,
-      candidatesTokenCount: u.completion_tokens || 0,
-      totalTokenCount: u.total_tokens || 0,
-    };
-    const reasoningTokens = u.completion_tokens_details?.reasoning_tokens;
-    if (reasoningTokens) {
-      usageMetadata.thoughtsTokenCount = reasoningTokens;
-    }
-    geminiResponse.usageMetadata = usageMetadata;
+  if (choice.finish_reason) {
+    candidate.finishReason = OPENAI_TO_GEMINI_FINISH_REASON[choice.finish_reason] ?? "STOP";
   }
 
-  return Response.json(geminiResponse, {
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-  });
+  const out: GeminiStreamChunk = { candidates: [candidate] };
+
+  // Attach usage + modelVersion on the final chunk (when finish_reason is set).
+  if (choice.finish_reason && parsed.usage) {
+    out.usageMetadata = geminiUsage(parsed.usage);
+    out.modelVersion = parsed.model || fallbackModel;
+  }
+
+  return out;
 }

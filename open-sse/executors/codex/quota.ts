@@ -1,4 +1,4 @@
-// Codex quota-snapshot parsing + reset/cooldown scheduling (pure). Verbatim from codex.ts.
+// Codex quota-snapshot parsing + reset/cooldown scheduling (pure).
 
 /**
  * T03: Parsed quota snapshot from Codex response headers.
@@ -23,25 +23,16 @@ export interface CodexQuotaSnapshot {
  *   x-codex-7d-usage / x-codex-7d-limit / x-codex-7d-reset-at
  */
 export function parseCodexQuotaHeaders(headers: Record<string, string>): CodexQuotaSnapshot | null {
-  const usage5h = headers["x-codex-5h-usage"] ?? null;
-  const limit5h = headers["x-codex-5h-limit"] ?? null;
-  const resetAt5h = headers["x-codex-5h-reset-at"] ?? null;
-  const usage7d = headers["x-codex-7d-usage"] ?? null;
-  const limit7d = headers["x-codex-7d-limit"] ?? null;
-  const resetAt7d = headers["x-codex-7d-reset-at"] ?? null;
-
-  // Return null if none of the quota headers are present (not a quota-aware response)
-  if (!usage5h && !limit5h && !resetAt5h && !usage7d && !limit7d && !resetAt7d) {
-    return null;
-  }
-
+  const short = quotaWindow(headers, "5h");
+  const long = quotaWindow(headers, "7d");
+  if (!short.present && !long.present) return null;
   return {
-    usage5h: usage5h ? parseFloat(usage5h) : 0,
-    limit5h: limit5h ? parseFloat(limit5h) : Infinity,
-    resetAt5h: resetAt5h ?? null,
-    usage7d: usage7d ? parseFloat(usage7d) : 0,
-    limit7d: limit7d ? parseFloat(limit7d) : Infinity,
-    resetAt7d: resetAt7d ?? null,
+    usage5h: short.usage,
+    limit5h: short.limit,
+    resetAt5h: short.resetAt,
+    usage7d: long.usage,
+    limit7d: long.limit,
+    resetAt7d: long.resetAt,
   };
 }
 
@@ -111,4 +102,16 @@ export function getCodexDualWindowCooldownMs(
   }
 
   return { cooldownMs: 0, window: "none" };
+}
+
+function quotaWindow(headers: Record<string, string>, window: string) {
+  const usage = headers[`x-codex-${window}-usage`] ?? null;
+  const limit = headers[`x-codex-${window}-limit`] ?? null;
+  const resetAt = headers[`x-codex-${window}-reset-at`] ?? null;
+  return {
+    present: Boolean(usage || limit || resetAt),
+    usage: usage ? parseFloat(usage) : 0,
+    limit: limit ? parseFloat(limit) : Infinity,
+    resetAt,
+  };
 }

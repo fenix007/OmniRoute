@@ -37,22 +37,7 @@ export function stripStoredItemReferences(body: Record<string, unknown>): void {
       return false;
     }
 
-    if (
-      item &&
-      typeof item === "object" &&
-      !Array.isArray(item) &&
-      (item as Record<string, unknown>).type === "item_reference"
-    ) {
-      strippedCount++;
-      return false;
-    }
-
-    if (
-      item &&
-      typeof item === "object" &&
-      !Array.isArray(item) &&
-      (item as Record<string, unknown>).type === "reasoning"
-    ) {
+    if (isDiscardedStoredItem(item)) {
       strippedCount++;
       return false;
     }
@@ -73,4 +58,10 @@ export function stripStoredItemReferences(body: Record<string, unknown>): void {
       `[Codex] stripStoredItemReferences: sanitized ${strippedCount} server-generated ID(s) from input`
     );
   }
+}
+
+function isDiscardedStoredItem(item: unknown): boolean {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+  const type = (item as Record<string, unknown>).type;
+  return type === "item_reference" || type === "reasoning";
 }

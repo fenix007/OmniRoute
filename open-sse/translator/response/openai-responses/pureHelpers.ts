@@ -112,13 +112,7 @@ export function normalizeOutputIndex(outputIndex) {
 }
 
 export function normalizeUpstreamFailure(data, fallbackType = "server_error") {
-  const response = data?.response && typeof data.response === "object" ? data.response : null;
-  const error =
-    response?.error && typeof response.error === "object"
-      ? response.error
-      : data?.error && typeof data.error === "object"
-        ? data.error
-        : null;
+  const error = upstreamErrorObject(data);
 
   const code = typeof error?.code === "string" ? error.code : "";
   const message =
@@ -128,6 +122,26 @@ export function normalizeUpstreamFailure(data, fallbackType = "server_error") {
         ? data.message
         : "Upstream failure";
 
+  const { status, type, fallbackCode } = classifyUpstreamFailure(code, message, fallbackType);
+
+  return {
+    status,
+    type,
+    code: code || fallbackCode,
+    message,
+  };
+}
+
+export function extractResponsesReasoningSummaryText(item) {
+  if (!item || !Array.isArray(item.summary)) return "";
+  return item.summary
+    .map((part) =>
+      part && typeof part === "object" && typeof part.text === "string" ? part.text : ""
+    )
+    .join("");
+}
+
+function classifyUpstreamFailure(code, message, fallbackType) {
   // Preserve upstream error semantics:
   // - invalid_prompt / usage-policy rejection → 400 (request content is not accepted)
   // - context_length_exceeded → 400 (client can retry with smaller context)
@@ -163,19 +177,16 @@ export function normalizeUpstreamFailure(data, fallbackType = "server_error") {
     fallbackCode = "bad_gateway";
   }
 
-  return {
-    status,
-    type,
-    code: code || fallbackCode,
-    message,
-  };
+  return { status, type, fallbackCode };
 }
 
-export function extractResponsesReasoningSummaryText(item) {
-  if (!item || !Array.isArray(item.summary)) return "";
-  return item.summary
-    .map((part) =>
-      part && typeof part === "object" && typeof part.text === "string" ? part.text : ""
-    )
-    .join("");
+function upstreamErrorObject(data) {
+  const response = data?.response && typeof data.response === "object" ? data.response : null;
+  const error =
+    response?.error && typeof response.error === "object"
+      ? response.error
+      : data?.error && typeof data.error === "object"
+        ? data.error
+        : null;
+  return error;
 }

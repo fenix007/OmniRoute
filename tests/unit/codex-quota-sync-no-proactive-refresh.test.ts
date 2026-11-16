@@ -27,6 +27,8 @@ import path from "node:path";
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-codex-quota-"));
 
+const { createProviderConnection, deleteProviderConnection } =
+  await import("../../src/lib/db/providers.ts");
 const { getExecutor } = await import("../../open-sse/executors/index.ts");
 const { refreshAndUpdateCredentials } = await import("../../src/lib/usage/providerLimits.ts");
 
@@ -82,24 +84,29 @@ test("non-rotating OAuth provider is still refreshed proactively from quota-sync
     refreshCalls++;
     return null;
   };
+  const connection = await createProviderConnection({
+    provider: "cursor",
+    authType: "oauth",
+    accessToken: "",
+    refreshToken: "r",
+    isActive: true,
+    providerSpecificData: {},
+  });
   try {
     await assert.rejects(
       refreshAndUpdateCredentials({
-        id: "cursor-1",
+        id: connection.id,
         provider: "cursor",
         accessToken: "",
         refreshToken: "r",
         tokenExpiresAt: new Date(2000).toISOString(),
         providerSpecificData: {},
       }),
-      "a non-rotating provider with a failed refresh should surface the 401"
+      { status: 401 }
     );
-    assert.equal(
-      refreshCalls,
-      1,
-      "non-rotating provider must still attempt the proactive refresh"
-    );
+    assert.equal(refreshCalls, 1, "non-rotating provider must still attempt the proactive refresh");
   } finally {
+    await deleteProviderConnection(connection.id);
     exec.needsRefresh = origNeeds;
     exec.refreshCredentials = origRefresh;
   }

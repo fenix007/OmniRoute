@@ -63,111 +63,20 @@ function handleResponsesTailPayload(
   context: PassthroughTailProcessorContext
 ): string {
   const responsesIdsNormalized = normalizeResponsesSseIds(parsed);
-  const parsedResponse = asRecord(parsed.response);
-  const responseId =
-    (parsedResponse ? stringifyIdValue(parsedResponse.id) : null) ||
-    stringifyIdValue(parsed.response_id);
-  if (responseId) {
-    context.setPassthroughResponsesId(responseId);
-  }
-
-  const extracted = extractUsage(parsed);
-  if (extracted) {
-    context.setUsage(extracted);
-  }
-
-  if (typeof parsed.delta === "string") {
-    context.addTotalContentLength(parsed.delta.length);
-  }
-  if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") {
-    context.appendPassthroughContent(parsed.delta);
-  }
-  if (
-    parsed.type === "response.reasoning_summary_text.delta" ||
-    parsed.type === "response.reasoning_summary_text.done" ||
-    parsed.type === "response.reasoning_summary_part.done"
-  ) {
-    const reasoningKey = context.getResponsesReasoningKey(parsed);
-    if (reasoningKey) {
-      context.markResponsesReasoningSummarySeen(reasoningKey);
-    }
-  }
+  updateTailMetadata(parsed, context);
   if (
     parsed.type === "response.output_item.added" &&
     asRecord(parsed.item).type === "function_call"
   ) {
-    const item = { ...(parsed.item as JsonRecord) };
-    const pendingKey = getFunctionCallPendingKey(item);
-    if (pendingKey) {
-      if (typeof item.arguments !== "string") {
-        item.arguments = "";
-      }
-      context.passthroughResponsesPendingFunctionCalls.set(pendingKey, item);
-      context.setPassthroughResponsesCurrentFunctionCallKey(pendingKey);
-    }
+    startTailFunctionCall(parsed, context);
   }
-  if (parsed.type === "response.function_call_arguments.delta") {
-    const pendingKey =
-      typeof parsed.item_id === "string"
-        ? parsed.item_id
-        : context.getPassthroughResponsesCurrentFunctionCallKey();
-    const pending = pendingKey
-      ? context.passthroughResponsesPendingFunctionCalls.get(pendingKey)
-      : undefined;
-    if (pending && typeof parsed.delta === "string") {
-      const previousArgs = typeof pending.arguments === "string" ? pending.arguments : "";
-      pending.arguments = previousArgs + parsed.delta;
-    }
-  }
-  if (parsed.type === "response.function_call_arguments.done") {
-    const pendingKey =
-      typeof parsed.item_id === "string"
-        ? parsed.item_id
-        : context.getPassthroughResponsesCurrentFunctionCallKey();
-    const pending = pendingKey
-      ? context.passthroughResponsesPendingFunctionCalls.get(pendingKey)
-      : undefined;
-    if (pending) {
-      if (typeof parsed.arguments === "string") {
-        pending.arguments = parsed.arguments;
-      }
-      pushUniqueResponsesOutputItems(context.passthroughResponsesOutputItems, [pending]);
-    }
-  }
-  if (parsed.type === "response.output_item.done" && parsed.item) {
-    context.emitSyntheticResponsesReasoningSummary(parsed);
-    pushUniqueResponsesOutputItems(context.passthroughResponsesOutputItems, [parsed.item]);
-    const item = asRecord(parsed.item);
-    if (item.type === "function_call") {
-      const pendingKey = getFunctionCallPendingKey(item);
-      if (pendingKey) {
-        context.passthroughResponsesPendingFunctionCalls.delete(pendingKey);
-        if (context.getPassthroughResponsesCurrentFunctionCallKey() === pendingKey) {
-          context.setPassthroughResponsesCurrentFunctionCallKey(null);
-        }
-      }
-    }
-  }
-  if (
-    parsed.type === "response.completed" &&
-    Array.isArray(asRecord(parsed.response).output) &&
-    (asRecord(parsed.response).output as unknown[]).length > 0
-  ) {
-    pushUniqueResponsesOutputItems(
-      context.passthroughResponsesOutputItems,
-      asRecord(parsed.response).output as unknown[]
-    );
-  }
-  if (
-    parsed.type === "response.completed" &&
-    context.passthroughResponsesPendingFunctionCalls.size > 0
-  ) {
-    pushUniqueResponsesOutputItems(context.passthroughResponsesOutputItems, [
-      ...context.passthroughResponsesPendingFunctionCalls.values(),
-    ]);
-    context.passthroughResponsesPendingFunctionCalls.clear();
-    context.setPassthroughResponsesCurrentFunctionCallKey(null);
-  }
+  if (parsed.type === "response.function_call_arguments.delta")
+    appendTailFunctionArguments(parsed, context);
+  if (parsed.type === "response.function_call_arguments.done")
+    finishTailFunctionArguments(parsed, context);
+  if (parsed.type === "response.output_item.done" && parsed.item)
+    finishTailOutputItem(parsed, context);
+  completeTailFunctionCalls(parsed, context);
 
   const textualToolCallBackfilled =
     parsed.type === "response.completed" && context.hasPassthroughToolCalls();
@@ -188,6 +97,8 @@ function handleResponsesTailPayload(
 }
 
 function handleOpenAiTailPayload(parsed: JsonRecord, context: PassthroughTailProcessorContext) {
+  const extracted = extractUsage(parsed);
+  if (extracted) context.setUsage(extracted);
   const firstChoice = Array.isArray(parsed.choices)
     ? (parsed.choices[0] as JsonRecord | undefined)
     : undefined;
@@ -275,15 +186,7 @@ export function processBufferedPassthroughLine(
     }
 
     const parsed = parsedPassthroughData as JsonRecord;
-    const parsedType = typeof parsed.type === "string" ? parsed.type : "";
-    const isResponses = parsedType.startsWith("response.");
-    const isClaude = context.isClaudeEventPayload(parsed);
-
-    if (isResponses) {
-      output = handleResponsesTailPayload(parsed, output, context);
-    } else if (!isClaude) {
-      handleOpenAiTailPayload(parsed, context);
-    }
+    output = processTailPayload(parsed, output, context);
 
     context.pushClientPayload(parsed);
   }
@@ -291,4 +194,134 @@ export function processBufferedPassthroughLine(
   output = context.passthroughEventPrefix.prefixData(output, line);
   context.emitConvertedOutput(output);
   return false;
+}
+
+function startTailFunctionCall(parsed: JsonRecord, context: PassthroughTailProcessorContext) {
+  const item = { ...(parsed.item as JsonRecord) };
+  const pendingKey = getFunctionCallPendingKey(item);
+  if (pendingKey) {
+    if (typeof item.arguments !== "string") {
+      item.arguments = "";
+    }
+    context.passthroughResponsesPendingFunctionCalls.set(pendingKey, item);
+    context.setPassthroughResponsesCurrentFunctionCallKey(pendingKey);
+  }
+}
+
+function appendTailFunctionArguments(parsed: JsonRecord, context: PassthroughTailProcessorContext) {
+  const pendingKey =
+    typeof parsed.item_id === "string"
+      ? parsed.item_id
+      : context.getPassthroughResponsesCurrentFunctionCallKey();
+  const pending = pendingKey
+    ? context.passthroughResponsesPendingFunctionCalls.get(pendingKey)
+    : undefined;
+  if (pending && typeof parsed.delta === "string") {
+    const previousArgs = typeof pending.arguments === "string" ? pending.arguments : "";
+    pending.arguments = previousArgs + parsed.delta;
+  }
+}
+
+function finishTailFunctionArguments(parsed: JsonRecord, context: PassthroughTailProcessorContext) {
+  const pendingKey =
+    typeof parsed.item_id === "string"
+      ? parsed.item_id
+      : context.getPassthroughResponsesCurrentFunctionCallKey();
+  const pending = pendingKey
+    ? context.passthroughResponsesPendingFunctionCalls.get(pendingKey)
+    : undefined;
+  if (pending) {
+    if (typeof parsed.arguments === "string") {
+      pending.arguments = parsed.arguments;
+    }
+    pushUniqueResponsesOutputItems(context.passthroughResponsesOutputItems, [pending]);
+  }
+}
+
+function finishTailOutputItem(parsed: JsonRecord, context: PassthroughTailProcessorContext) {
+  context.emitSyntheticResponsesReasoningSummary(parsed);
+  pushUniqueResponsesOutputItems(context.passthroughResponsesOutputItems, [parsed.item]);
+  const item = asRecord(parsed.item);
+  if (item.type === "function_call") {
+    const pendingKey = getFunctionCallPendingKey(item);
+    if (pendingKey) {
+      context.passthroughResponsesPendingFunctionCalls.delete(pendingKey);
+      if (context.getPassthroughResponsesCurrentFunctionCallKey() === pendingKey) {
+        context.setPassthroughResponsesCurrentFunctionCallKey(null);
+      }
+    }
+  }
+}
+
+function processTailPayload(
+  parsed: JsonRecord,
+  output: string,
+  context: PassthroughTailProcessorContext
+): string {
+  const parsedType = typeof parsed.type === "string" ? parsed.type : "";
+  const isResponses = parsedType.startsWith("response.");
+  const isClaude = context.isClaudeEventPayload(parsed);
+
+  if (isResponses) {
+    output = handleResponsesTailPayload(parsed, output, context);
+  } else if (!isClaude) {
+    handleOpenAiTailPayload(parsed, context);
+  }
+
+  return output;
+}
+
+function updateTailMetadata(parsed: JsonRecord, context: PassthroughTailProcessorContext) {
+  const parsedResponse = asRecord(parsed.response);
+  const responseId =
+    (parsedResponse ? stringifyIdValue(parsedResponse.id) : null) ||
+    stringifyIdValue(parsed.response_id);
+  if (responseId) {
+    context.setPassthroughResponsesId(responseId);
+  }
+
+  const extracted = extractUsage(parsed);
+  if (extracted) {
+    context.setUsage(extracted);
+  }
+
+  if (typeof parsed.delta === "string") {
+    context.addTotalContentLength(parsed.delta.length);
+  }
+  if (parsed.type === "response.output_text.delta" && typeof parsed.delta === "string") {
+    context.appendPassthroughContent(parsed.delta);
+  }
+  if (
+    parsed.type === "response.reasoning_summary_text.delta" ||
+    parsed.type === "response.reasoning_summary_text.done" ||
+    parsed.type === "response.reasoning_summary_part.done"
+  ) {
+    const reasoningKey = context.getResponsesReasoningKey(parsed);
+    if (reasoningKey) {
+      context.markResponsesReasoningSummarySeen(reasoningKey);
+    }
+  }
+}
+
+function completeTailFunctionCalls(parsed: JsonRecord, context: PassthroughTailProcessorContext) {
+  if (
+    parsed.type === "response.completed" &&
+    Array.isArray(asRecord(parsed.response).output) &&
+    (asRecord(parsed.response).output as unknown[]).length > 0
+  ) {
+    pushUniqueResponsesOutputItems(
+      context.passthroughResponsesOutputItems,
+      asRecord(parsed.response).output as unknown[]
+    );
+  }
+  if (
+    parsed.type === "response.completed" &&
+    context.passthroughResponsesPendingFunctionCalls.size > 0
+  ) {
+    pushUniqueResponsesOutputItems(context.passthroughResponsesOutputItems, [
+      ...context.passthroughResponsesPendingFunctionCalls.values(),
+    ]);
+    context.passthroughResponsesPendingFunctionCalls.clear();
+    context.setPassthroughResponsesCurrentFunctionCallKey(null);
+  }
 }

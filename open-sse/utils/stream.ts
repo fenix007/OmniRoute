@@ -2184,6 +2184,8 @@ export function createSSEStream(options: StreamOptions = {}) {
               }
               const bufferedPayload = parseSSELine(bufferedLine);
               if (bufferedPayload) {
+                const tailUsage = extractUsage(bufferedPayload);
+                if (tailUsage && Array.isArray(bufferedPayload.choices)) usage = tailUsage;
                 providerPayloadCollector.push(bufferedPayload);
                 if (
                   shouldInjectClaudeEmptyResponseBeforeCurrentEvent(

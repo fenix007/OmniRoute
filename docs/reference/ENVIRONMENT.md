@@ -662,6 +662,7 @@ REQUEST_TIMEOUT_MS (global override)
 | `OMNIROUTE_PPLX_TLS_GRACE_MS`             | `10000`              | JS-side grace added on top of the wire timeout when the native binding is wedged.                                                                               |
 | `OMNIROUTE_PPLX_RESEARCH_TIMEOUT_MS` | `900000` (15min) | Whole-stream timeout for Deep Research in `open-sse/executors/perplexity-web.ts`. |
 | `OMNIROUTE_PPLX_SEARCH_HINT` | `false` | Append the built-in web-search hint to the caller system message. Opt in with `1`, `true`, `yes` or `on`; read per call in `open-sse/executors/perplexity-web/wire.ts`. |
+| `GROK_CLI_VERSION` | `1.0.46` | Grok CLI client version override; accepts stable versions at least 1.0.13 (`open-sse/executors/grok-cli.ts`). |
 | `OMNIROUTE_GROK_TLS_TIMEOUT_MS`           | `60000`              | Wire-level timeout for the bogdanfinn/tls-client koffi binding (`grokTlsClient.ts`).                                                                            |
 | `OMNIROUTE_GROK_TLS_GRACE_MS`             | `10000`              | JS-side grace added on top of the wire timeout when the native binding is wedged.                                                                               |
 | `OMNIROUTE_BROWSER_POOL`                  | `on`                 | Shared Playwright browser pool for browser-backed web-cookie chat (`browserPool.ts`); set `off` to disable.                                                     |

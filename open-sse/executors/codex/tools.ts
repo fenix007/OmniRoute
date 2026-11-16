@@ -1,5 +1,5 @@
 // Codex Responses-API tool normalization (hosted-tool passthrough + free-plan gating).
-// Extracted verbatim from codex.ts. Self-contained (console.debug only).
+// Self-contained helpers for declarations and tool choices (console.debug only).
 
 // Responses-API hosted tool types that OpenAI/Codex executes server-side.
 // These arrive shaped as `{ type, ...params }` with no `function` object and no `name` —
@@ -28,174 +28,118 @@ export function isCodexFreePlan(providerSpecificData: unknown): boolean {
   return typeof plan === "string" && plan.trim().toLowerCase() === "free";
 }
 
-export function normalizeCodexTools(
-  body: Record<string, unknown>,
-  options?: { dropImageGeneration?: boolean; preserveCustomTools?: boolean }
-): void {
-  if (!Array.isArray(body.tools)) {
-    if (body.tool_choice === "auto" || body.tool_choice === "none") {
-      delete body.tool_choice;
-    }
-    return;
+type Tool = Record<string, unknown>;
+type ToolOptions = { dropImageGeneration?: boolean; preserveCustomTools?: boolean };
+
+function toolRecord(value: unknown): Tool | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Tool) : null;
+}
+
+function namespaceToolNames(tool: Tool, validToolNames: Set<string>): void {
+  if (!Array.isArray(tool.tools)) return;
+  for (const sub of tool.tools) {
+    const subTool = toolRecord(sub);
+    const name = typeof subTool?.name === "string" ? subTool.name.trim().slice(0, 128) : "";
+    if (name) validToolNames.add(name);
   }
+}
 
-  const validToolNames = new Set<string>();
-  body.tools = body.tools.filter((toolValue) => {
-    if (!toolValue || typeof toolValue !== "object" || Array.isArray(toolValue)) {
-      return false;
-    }
+function functionProperty(tool: Tool, nested: Tool | null, key: string, type: string): unknown {
+  if (typeof tool[key] === type) return tool[key];
+  if (typeof nested?.[key] === type) return nested[key];
+  return undefined;
+}
 
-    const tool = toolValue as Record<string, unknown>;
-    const toolType = typeof tool.type === "string" ? tool.type : "";
+function normalizeFunctionTool(tool: Tool, validToolNames: Set<string>): boolean {
+  const nested = toolRecord(tool.function);
+  const rawName = functionProperty(tool, nested, "name", "string") as string | undefined;
+  const name = (rawName ?? "").trim();
+  if (!name) return false;
+  const description = functionProperty(tool, nested, "description", "string") ?? "";
+  const parameters = toolRecord(tool.parameters) ??
+    toolRecord(nested?.parameters) ?? { type: "object", properties: {} };
+  const strict = functionProperty(tool, nested, "strict", "boolean");
+  const deferLoading = functionProperty(tool, nested, "defer_loading", "boolean");
+  // Flatten Chat function declarations to the Responses wire shape, preserving deferred tools.
+  for (const key of Object.keys(tool)) delete tool[key];
+  tool.type = "function";
+  tool.name = name.slice(0, 128);
+  if (description) tool.description = description;
+  tool.parameters = parameters;
+  if (strict !== undefined) tool.strict = strict;
+  if (deferLoading !== undefined) tool.defer_loading = deferLoading;
+  validToolNames.add(name);
+  return true;
+}
 
-    // Preserve namespace tools (MCP tool groups used by Codex/OpenAI Responses API).
-    // Codex API supports them natively; register sub-tool names for tool_choice validation.
-    if (toolType === "namespace") {
-      if (Array.isArray(tool.tools)) {
-        for (const st of tool.tools as unknown[]) {
-          if (st && typeof st === "object" && !Array.isArray(st)) {
-            const subTool = st as Record<string, unknown>;
-            const name = typeof subTool.name === "string" ? subTool.name.trim().slice(0, 128) : "";
-            if (name) validToolNames.add(name);
-          }
-        }
-      }
-      return true;
-    }
+function keepHostedTool(tool: Tool, toolType: string, options?: ToolOptions): boolean {
+  const hasFunctionObject = tool.function && typeof tool.function === "object";
+  const hasName = typeof tool.name === "string";
+  if (!toolType || hasFunctionObject || hasName) return false;
+  if (CODEX_HOSTED_TOOL_TYPES.has(toolType)) {
+    return !(toolType === "image_generation" && options?.dropImageGeneration === true);
+  }
+  console.debug(`[Codex] dropping unknown hosted tool type: ${toolType}`);
+  return false;
+}
 
-    // Native Codex clients send Responses API custom tools such as apply_patch as:
-    // { type: "custom", name, format }. Preserve those only on native passthrough;
-    // translated/non-native requests can still contain provider-specific "custom"
-    // shapes that the Codex backend would reject.
-    if (toolType === "custom" && options?.preserveCustomTools === true) {
-      const name = typeof tool.name === "string" ? tool.name.trim().slice(0, 128) : "";
-      if (!name) return false;
-      tool.name = name;
-      validToolNames.add(name);
-      return true;
-    }
-
-    if (toolType !== "function") {
-      const hasFunctionObject = tool.function && typeof tool.function === "object";
-      const hasName = typeof tool.name === "string";
-      if (!toolType || hasFunctionObject || hasName) {
-        return false;
-      }
-      if (CODEX_HOSTED_TOOL_TYPES.has(toolType)) {
-        // #2980: drop the CLI-injected image_generation tool for free-plan
-        // accounts, which can't run it server-side (upstream 400 otherwise).
-        if (toolType === "image_generation" && options?.dropImageGeneration === true) {
-          return false;
-        }
-        return true;
-      }
-      console.debug(`[Codex] dropping unknown hosted tool type: ${toolType}`);
-      return false;
-    }
-
-    const rawName =
-      typeof tool.name === "string"
-        ? tool.name
-        : tool.function &&
-            typeof tool.function === "object" &&
-            !Array.isArray(tool.function) &&
-            typeof (tool.function as Record<string, unknown>).name === "string"
-          ? ((tool.function as Record<string, unknown>).name as string)
-          : "";
-    const name = rawName.trim();
-    if (!name) {
-      return false;
-    }
-
-    // Codex Responses API requires function tools in flat Responses format:
-    // { type: "function", name, description, parameters }
-    // Some clients/translators send Chat Completions shape:
-    // { type: "function", function: { name, description, parameters } }
-    // which upstream rejects with "Missing required parameter: tools[0].name".
-    // Flatten the nested `function` wrapper into top-level fields (#1914).
-    const functionObject =
-      tool.function && typeof tool.function === "object" && !Array.isArray(tool.function)
-        ? (tool.function as Record<string, unknown>)
-        : null;
-    const description =
-      typeof tool.description === "string"
-        ? tool.description
-        : typeof functionObject?.description === "string"
-          ? functionObject.description
-          : "";
-    const parameters =
-      tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)
-        ? tool.parameters
-        : functionObject?.parameters &&
-            typeof functionObject.parameters === "object" &&
-            !Array.isArray(functionObject.parameters)
-          ? functionObject.parameters
-          : { type: "object", properties: {} };
-    const strict =
-      typeof tool.strict === "boolean"
-        ? tool.strict
-        : typeof functionObject?.strict === "boolean"
-          ? functionObject.strict
-          : undefined;
-    // Codex CLI marks MCP/dynamic function tools as deferred (`defer_loading: true`)
-    // whenever it also sends the `tool_search` hosted tool. Upstream rejects
-    // `tool_search` without at least one deferred tool ("tools.tool_search requires
-    // at least one deferred tool"), so the flag must survive the flattening below.
-    const deferLoading =
-      typeof tool.defer_loading === "boolean"
-        ? tool.defer_loading
-        : typeof functionObject?.defer_loading === "boolean"
-          ? functionObject.defer_loading
-          : undefined;
-
-    // Rewrite in-place to Responses format
-    for (const key of Object.keys(tool)) {
-      delete tool[key];
-    }
-    tool.type = "function";
-    tool.name = name.slice(0, 128);
-    if (description) tool.description = description;
-    tool.parameters = parameters;
-    if (strict !== undefined) tool.strict = strict;
-    if (deferLoading !== undefined) tool.defer_loading = deferLoading;
-
-    validToolNames.add(name);
+function keepCodexTool(value: unknown, validNames: Set<string>, options?: ToolOptions): boolean {
+  const tool = toolRecord(value);
+  if (!tool) return false;
+  const type = typeof tool.type === "string" ? tool.type : "";
+  if (type === "namespace") {
+    namespaceToolNames(tool, validNames);
     return true;
-  });
+  }
+  if (type === "custom" && options?.preserveCustomTools === true) {
+    const name = typeof tool.name === "string" ? tool.name.trim().slice(0, 128) : "";
+    if (!name) return false;
+    tool.name = name;
+    validNames.add(name);
+    return true;
+  }
+  if (type === "function") return normalizeFunctionTool(tool, validNames);
+  return keepHostedTool(tool, type, options);
+}
 
-  // Optional choices are redundant without tools and rejected by the Codex backend.
-  // Responses Lite can declare tools in input[].additional_tools instead of top-level tools.
-  // Keep forced choices for upstream validation rather than silently changing their intent.
-  const hasAdditionalTools =
-    Array.isArray(body.input) &&
-    body.input.some((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-      const record = item as Record<string, unknown>;
+function hasAdditionalTools(input: unknown): boolean {
+  return (
+    Array.isArray(input) &&
+    input.some((item) => {
+      const record = toolRecord(item);
       return (
-        record.type === "additional_tools" && Array.isArray(record.tools) && record.tools.length > 0
+        record?.type === "additional_tools" &&
+        Array.isArray(record.tools) &&
+        record.tools.length > 0
       );
-    });
-  if (
-    (body.tools as unknown[]).length === 0 &&
-    !hasAdditionalTools &&
-    (body.tool_choice === "auto" || body.tool_choice === "none")
-  ) {
+    })
+  );
+}
+
+function validateToolChoice(body: Tool, validNames: Set<string>): void {
+  const choice = toolRecord(body.tool_choice);
+  if (!choice) return;
+  if (choice.type === "function") {
+    const name = typeof choice.name === "string" ? choice.name.trim() : "";
+    if (!name || !validNames.has(name)) delete body.tool_choice;
+  } else if (choice.type === "local_shell") {
     delete body.tool_choice;
   }
+}
 
-  if (
-    body.tool_choice &&
-    typeof body.tool_choice === "object" &&
-    !Array.isArray(body.tool_choice)
-  ) {
-    const toolChoice = body.tool_choice as Record<string, unknown>;
-    if (toolChoice.type === "function") {
-      const rawName = typeof toolChoice.name === "string" ? toolChoice.name.trim() : "";
-      if (!rawName || !validToolNames.has(rawName)) {
-        delete body.tool_choice;
-      }
-    } else if (toolChoice.type === "local_shell") {
-      delete body.tool_choice;
-    }
+export function normalizeCodexTools(body: Tool, options?: ToolOptions): void {
+  if (!Array.isArray(body.tools)) {
+    if (body.tool_choice === "auto" || body.tool_choice === "none") delete body.tool_choice;
+    return;
   }
+  const validNames = new Set<string>();
+  body.tools = body.tools.filter((tool) => keepCodexTool(tool, validNames, options));
+  // Responses Lite may carry its declarations in input[].additional_tools.
+  if (
+    (body.tools as unknown[]).length === 0 &&
+    !hasAdditionalTools(body.input) &&
+    (body.tool_choice === "auto" || body.tool_choice === "none")
+  )
+    delete body.tool_choice;
+  validateToolChoice(body, validNames);
 }

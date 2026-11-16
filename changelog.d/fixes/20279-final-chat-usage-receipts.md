@@ -1,0 +1,1 @@
+- **fix(sse):** Retain exact Chat usage receipts when the stream ends without a blank separator, including fragmented and CRLF input ([upstream #20279](https://github.com/diegosouzapw/OmniRoute/pull/20279) — thanks @KiaroSama). Adapt only the EOF receipt contract for the frozen pipeline.

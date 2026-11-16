@@ -53,47 +53,53 @@ export function ensureCodexCompactionWebSearchTool(
   }
   if (!body.input.some((item) => asRecord(item)?.type === "web_search_call")) return bodyInput;
   if (body.tools !== undefined && !Array.isArray(body.tools)) return bodyInput;
-  if (
-    body.tool_choice !== undefined &&
-    body.tool_choice !== "auto" &&
-    body.tool_choice !== "none"
-  ) {
-    return bodyInput;
-  }
+  if (hasForcedToolChoice(body)) return bodyInput;
 
-  const additionalTools = body.input.filter((item) => asRecord(item)?.type === "additional_tools");
-  if (
-    hasWebSearchTool(body.tools) ||
-    additionalTools.some((item) => hasWebSearchTool(asRecord(item)?.tools))
-  ) {
-    return bodyInput;
-  }
+  if (hasDeclaredWebSearch(body)) return bodyInput;
 
   const copy = { ...body };
   const webSearch = { type: "web_search", external_web_access: false };
   if (options.isResponsesLite) {
-    const input = [...body.input];
-    const existingIndex = input.findIndex((item) => asRecord(item)?.type === "additional_tools");
-    if (existingIndex >= 0) {
-      const existing = asRecord(input[existingIndex]);
-      const tools = existing?.tools;
-      if (!Array.isArray(tools)) return bodyInput;
-      input[existingIndex] = { ...existing, tools: [...tools, webSearch] };
-    } else {
-      const insertAt =
-        asRecord(input[input.length - 1])?.type === "compaction_trigger"
-          ? input.length - 1
-          : input.length;
-      input.splice(insertAt, 0, {
-        type: "additional_tools",
-        role: "developer",
-        tools: [webSearch],
-      });
-    }
+    const input = addLiteWebSearch(body.input, webSearch);
+    if (!input) return bodyInput;
     copy.input = input;
   } else {
     copy.tools = [...((copy.tools as unknown[] | undefined) ?? []), webSearch];
   }
   copy.tool_choice = "none";
   return copy;
+}
+
+function hasDeclaredWebSearch(body: JsonRecord): boolean {
+  const additionalTools = (body.input as unknown[]).filter(
+    (item) => asRecord(item)?.type === "additional_tools"
+  );
+  return (
+    hasWebSearchTool(body.tools) ||
+    additionalTools.some((item) => hasWebSearchTool(asRecord(item)?.tools))
+  );
+}
+
+function addLiteWebSearch(original: unknown[], webSearch: JsonRecord): unknown[] | null {
+  const input = [...original];
+  const existingIndex = input.findIndex((item) => asRecord(item)?.type === "additional_tools");
+  if (existingIndex >= 0) {
+    const existing = asRecord(input[existingIndex]);
+    const tools = existing?.tools;
+    if (!Array.isArray(tools)) return null;
+    input[existingIndex] = { ...existing, tools: [...tools, webSearch] };
+  } else {
+    const insertAt =
+      asRecord(input[input.length - 1])?.type === "compaction_trigger"
+        ? input.length - 1
+        : input.length;
+    input.splice(insertAt, 0, { type: "additional_tools", role: "developer", tools: [webSearch] });
+  }
+  return input;
+}
+
+function hasForcedToolChoice(body: JsonRecord): boolean {
+  return (
+    body.tool_choice !== undefined && body.tool_choice !== "auto" && body.tool_choice !== "none"
+  );
 }

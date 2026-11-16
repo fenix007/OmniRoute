@@ -1,5 +1,5 @@
 // Provider-aware reasoning_effort sanitation (xhigh/max normalization + reject strip).
-// Extracted verbatim from base.ts. Deps are config/services only (no host import → no cycle).
+// Deps are config/services only (no host import → no cycle).
 import { PROVIDER_CLAUDE } from "../../services/systemTransforms.ts";
 import { isClaudeCodeCompatible } from "../../services/provider.ts";
 import { supportsClaudeMaxEffort, supportsXHighEffort } from "../../config/providerModels.ts";
@@ -62,62 +62,40 @@ export function sanitizeReasoningEffortForProvider(
   model: string | undefined,
   log?: { info?: (tag: string, msg: string) => void } | null
 ): unknown {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
-  const b = body as Record<string, unknown>;
-  const reasoning =
-    b.reasoning && typeof b.reasoning === "object" && !Array.isArray(b.reasoning)
-      ? (b.reasoning as Record<string, unknown>)
-      : null;
+  const b = reasoningRecord(body);
+  if (!b) return body;
+  const reasoning = reasoningRecord(b.reasoning);
   const hasTopLevelReasoningEffort = Object.prototype.hasOwnProperty.call(b, "reasoning_effort");
   const effort = b.reasoning_effort ?? reasoning?.effort;
   if (effort === undefined) return body;
   const effortStr = typeof effort === "string" ? effort.toLowerCase() : "";
   const modelStr = model || "";
 
-  const githubOptIn =
-    provider === "github" && GITHUB_REASONING_EFFORT_OPT_IN_PATTERN.test(modelStr);
-  const rejecting =
-    (provider === "mistral" && MISTRAL_NO_REASONING_EFFORT_PATTERN.test(modelStr)) ||
-    (provider === "github" && !githubOptIn && GITHUB_NO_REASONING_EFFORT_PATTERN.test(modelStr));
-  if (rejecting) {
+  if (rejectsReasoningEffort(provider, modelStr)) {
     log?.info?.(
       "REASONING_SANITIZE",
       `${provider}/${modelStr}: removed unsupported reasoning_effort`
     );
-    const next: Record<string, unknown> = { ...b };
-    delete next.reasoning_effort;
-    if (reasoning) {
-      const r = { ...reasoning };
-      delete r.effort;
-      if (Object.keys(r).length === 0) delete next.reasoning;
-      else next.reasoning = r;
-    }
-    return next;
+    return withoutReasoningEffort(b, reasoning);
   }
 
-  // Native DeepSeek (api.deepseek.com) — V4 thinking mode accepts reasoning_effort
-  // ONLY as {high, max} (its own top tier is literally "max"). OmniRoute's internal
-  // scale is low|medium|high|xhigh where xhigh is the top, so map onto DeepSeek's
-  // vocabulary: xhigh → max (top→top), low|medium → high (below the enum floor).
-  // high/max pass through unchanged. Without this, the claude→openai translator's
-  // xhigh (and max-normalized-to-xhigh below) reaches DeepSeek as an unknown value,
-  // silently dropping the client's requested effort. This is the INVERSE of the
-  // OpenRouter-DeepSeek path, whose normalized API expects xhigh, not max (pi#4055).
-  if (provider === "deepseek") {
-    const mapped =
-      effortStr === "xhigh" ? "max" : effortStr === "low" || effortStr === "medium" ? "high" : null;
-    if (mapped && mapped !== effortStr) {
-      log?.info?.(
-        "REASONING_SANITIZE",
-        `deepseek/${modelStr}: normalized reasoning_effort ${effortStr} → ${mapped}`
-      );
-      const next: Record<string, unknown> = { ...b };
-      if (hasTopLevelReasoningEffort) next.reasoning_effort = mapped;
-      if (reasoning) next.reasoning = { ...reasoning, effort: mapped };
-      return next;
-    }
-    return body;
-  }
+  const mapped = mappedReasoningEffort(effortStr, provider, modelStr, log);
+  return mapped ? withReasoningEffort(b, reasoning, hasTopLevelReasoningEffort, mapped) : body;
+}
+
+function reasoningRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function mappedReasoningEffort(
+  effortStr: string,
+  provider: string,
+  modelStr: string,
+  log?: { info?: (tag: string, msg: string) => void } | null
+): string | null {
+  if (provider === "deepseek") return mappedDeepSeekEffort(effortStr, modelStr, log);
 
   const supportsXHigh = supportsXHighEffort(provider, modelStr);
   const shouldDowngradeXHigh = effortStr === "xhigh" && !supportsXHigh;
@@ -131,14 +109,7 @@ export function sanitizeReasoningEffortForProvider(
       "REASONING_SANITIZE",
       `${provider}/${modelStr}: normalized reasoning_effort max → xhigh`
     );
-    const next: Record<string, unknown> = { ...b };
-    if (hasTopLevelReasoningEffort) {
-      next.reasoning_effort = "xhigh";
-    }
-    if (reasoning) {
-      next.reasoning = { ...reasoning, effort: "xhigh" };
-    }
-    return next;
+    return "xhigh";
   }
 
   if (shouldDowngradeXHigh || shouldDowngradeMax) {
@@ -146,15 +117,61 @@ export function sanitizeReasoningEffortForProvider(
       "REASONING_SANITIZE",
       `${provider}/${modelStr}: downgraded reasoning_effort ${effortStr} → high`
     );
-    const next: Record<string, unknown> = { ...b };
-    if (hasTopLevelReasoningEffort) {
-      next.reasoning_effort = "high";
-    }
-    if (reasoning) {
-      next.reasoning = { ...reasoning, effort: "high" };
-    }
-    return next;
+    return "high";
   }
 
-  return body;
+  return null;
+}
+
+function rejectsReasoningEffort(provider: string, model: string): boolean {
+  const githubOptIn = provider === "github" && GITHUB_REASONING_EFFORT_OPT_IN_PATTERN.test(model);
+  return (
+    (provider === "mistral" && MISTRAL_NO_REASONING_EFFORT_PATTERN.test(model)) ||
+    (provider === "github" && !githubOptIn && GITHUB_NO_REASONING_EFFORT_PATTERN.test(model))
+  );
+}
+
+function withoutReasoningEffort(
+  body: Record<string, unknown>,
+  reasoning: Record<string, unknown> | null
+) {
+  const next = { ...body };
+  delete next.reasoning_effort;
+  if (reasoning) {
+    const r = { ...reasoning };
+    delete r.effort;
+    if (Object.keys(r).length === 0) delete next.reasoning;
+    else next.reasoning = r;
+  }
+  return next;
+}
+
+function withReasoningEffort(
+  body: Record<string, unknown>,
+  reasoning: Record<string, unknown> | null,
+  hasTopLevelEffort: boolean,
+  effort: string
+) {
+  const next = { ...body };
+  if (hasTopLevelEffort) next.reasoning_effort = effort;
+  if (reasoning) next.reasoning = { ...reasoning, effort };
+  return next;
+}
+
+// Native DeepSeek accepts high|max literally; other providers have independent mappings.
+function mappedDeepSeekEffort(
+  effortStr: string,
+  modelStr: string,
+  log?: { info?: (tag: string, msg: string) => void } | null
+): string | null {
+  const mapped =
+    effortStr === "xhigh" ? "max" : effortStr === "low" || effortStr === "medium" ? "high" : null;
+  if (mapped && mapped !== effortStr) {
+    log?.info?.(
+      "REASONING_SANITIZE",
+      `deepseek/${modelStr}: normalized reasoning_effort ${effortStr} → ${mapped}`
+    );
+    return mapped;
+  }
+  return null;
 }

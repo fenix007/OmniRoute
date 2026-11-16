@@ -1500,3 +1500,121 @@ image publication, workflow dispatch or deployment. Evidence and push confirmati
 are retained in the existing repository-local maintenance ledger. The two-source
 September 11–November 5 technical review remains partial; this continuation does not
 repeat discovery or advance either completed-review boundary.
+
+## Production maintenance — 2026-11-16 (buffered IDs and EOF usage)
+
+Base: `origin/stable` `89888b824cffd74ec9fce97d14950820f1dfa4c9`.
+This continuation fits the previously deferred candidates against the frozen fork;
+it does not advance the incomplete two-source historical-review boundaries.
+
+- **Adapt behavior:** [CLIProxyAPI #4623](https://github.com/router-for-me/CLIProxyAPI/pull/4623),
+  exact head `84f1193d12218c532ddb8daf3a9e47ca8535efd8`, closed without merge
+  on November 14 (status checked November 16), thanks @cls3389. When a final
+  Responses snapshot contains a function call with a missing ID, recover that ID
+  from its authoritative indexed `response.output_item.done` item in the existing
+  buffered SSE-to-JSON parser. Keep populated final IDs, arguments, ordering,
+  usage and status. Require matching type, call ID and name; do not infer IDs from
+  synthetic deltas or unindexed fallback items. The source review identified
+  duplicate-ID reuse in its unindexed fallback; that algorithm is not imported.
+  No Go code, second runtime, dependency or live-provider call is introduced.
+- **Adapt bounded subset:** [OmniRoute #20279](https://github.com/diegosouzapw/OmniRoute/pull/20279),
+  reviewed patch-series head `d3132e501a1ed3e240cd5450fbf7240d1689a587`, open on
+  November 16, thanks @KiaroSama. A final complete Chat usage receipt without
+  the blank-line separator was forwarded but ignored by accounting, which used
+  estimates instead. Read its usage in both existing EOF paths, preserving the
+  normal complete-frame behavior. The broader receipt-provenance, migrations,
+  partial-counter merging and terminal-timing changes remain deferred. The live discussion describes newer follow-up work; the downloaded five-commit
+  patch series remained byte-identical at recheck. Only this independently
+  reproduced contract is adapted. Full upstream CI is not claimed.
+- **Already equivalent:** [OmniRoute #20230](https://github.com/diegosouzapw/OmniRoute/pull/20230),
+  head `6b57a6930759c0858eae08b7d98ce5024f0874cc`, functional commit
+  `698c42ceb0c392a17672e2744f3b9d4983850f25`, open on November 16. Our existing
+  `stripStoredItemReferences` drops reasoning items on every Codex dispatch,
+  including native passthrough, before either account receives the wire payload.
+  Tests verify both account identities, preserved tools and immutable caller input.
+- **Defer:** [OmniRoute #20331](https://github.com/diegosouzapw/OmniRoute/pull/20331),
+  head `56892c1d6da09c04de7d164c866d2aecfaa923c3`, open. This fork does not have
+  the explicit native-level forwarding helper changed by that patch; importing
+  native-level policy is a separate feature, not a validation-only backport.
+- **Defer:** [OmniRoute tool-name commit](https://github.com/diegosouzapw/OmniRoute/commit/9e66706dd3fba756d755708c86867a4ddd145741).
+  The shared alias/restoration infrastructure is absent, and its source patch
+  explicitly excludes Responses bodies used by our OpenCode Go GPT/Grok routes.
+  A correct round-trip naming adaptation needs separate request/history/response tests.
+- **Defer:** [CLIProxyAPI Gemini cooldown commit](https://github.com/router-for-me/CLIProxyAPI/commit/7e82d0d1ca75f0f9954366bff16b0c4928828b8b)
+  and [xAI terminal-error commit](https://github.com/router-for-me/CLIProxyAPI/commit/949b43b330f919fddeeb45e27b90cc9413736ef7).
+  The former changes Go Conductor request-scoped cooldown policy; the latter
+  includes a distinct non-stream executor and apply-patch repair layer. Their
+  failure scenarios remain useful, but account cooldown/rotation and status mapping
+  need independent old-pipeline tests before a behavioral change here.
+
+### Inherited gate repairs
+
+Unchanged stable reproduces five full-suite failures. Add the existing Grok CLI
+version variable to its environment reference; seed a persisted Cursor connection
+in the quota-refresh control and assert HTTP 401; point two Kiro source assertions
+at the extracted internal implementation containing both AWS error branches.
+Read policy-table names with a Bash 3-compatible array loop so the existing
+SQLite snapshot/restore contract passes on macOS. No live database is touched.
+
+The unchanged size gate also rejects providerLimits.ts, tokenRefresh.ts and the
+provider-model route suite. Extract the pure quota recovery policy/types and
+refresh-lead policy, preserving public re-exports. Move the complete xAI catalog
+case to a separate collected suite. TypeScript AST comparison confirms all 51
+quota and 69 refresh declarations and all 60 route tests are preserved. No size
+ceiling, suppression budget, workflow or dependency manifest is relaxed. Register
+18 previously missing covering suites in the existing mutation collector; no
+mutation target or threshold changes.
+
+Regression checks cover missing/null/blank/populated IDs, numeric IDs, mismatched
+calls/types/names/indexes, multiple calls, unindexed duplicate-ID negative control,
+terminal failure/incomplete status, immutable input and actual Codex HTTP-to-JSON
+serialization. EOF receipts cover no newline, one/two newlines, CRLF and one-byte
+fragmentation. Runtime data is isolated; local validation and publication results
+are recorded in the repository-local maintenance ledger.
+
+Validation: the final full unit run passes all three collectors (23,908 native
+passes with 14 skips, 102 dashboard and 20 serial passes). Full coverage reruns
+all three with no failures (23,924 native passes with 14 skips, 102 dashboard
+and 20 serial); unchanged 60% gates pass at 81.26% lines/statements, 78.75%
+branches and 86.74% functions. Native counts vary with existing generated tests.
+The final production build succeeds with inherited tracing warnings. Its first
+attempt compiled but failed while copying an actively regenerated coverage temp
+file; the successful sequential build runs after the completed coverage directory
+is moved outside the worktree. No source/build configuration is changed for this.
+Full lint, core typecheck, frozen size, discovery, mutation registration,
+any-budget, docs/env sync, fabricated-docs, tracked-artifact, changelog, build-scope,
+error-helper and public-credential checks pass.
+
+### Complexity gate continuation
+
+The inherited blocker was repaired without changing gate scripts, thresholds,
+suppressions, dependencies or workflows. Split the existing buffered SSE event
+handlers, Codex tool/reasoning normalization, Codex image parsing, Responses
+translation and provider-limit refresh/recovery into smaller functions. Public
+exports, event order, terminal snapshot selection, tool correlation, refresh
+serialization and proxy fail-closed behavior are preserved. Chat buffering and
+Codex image helpers move into separate internal modules within the frozen size caps.
+
+The complete complexity scan now passes: 2,060 cyclomatic/size violations against
+2,060 and 892 cognitive violations against 895. Independent read-only review found
+no actionable issue in the buffered parser/tail extraction or indexed-ID repair.
+Deterministic comparisons cover 16,000 buffered SSE cases, 9,052 Codex normalization
+cases, 602 translator chunk/state comparisons and 5,000 image event sequences.
+Focused tests cover the original adaptations and proxy retry/error identity.
+Initial extraction errors were caught by tests and corrected before final checks.
+The extracted Codex image fetch-error branch now uses the existing sanitizer;
+a regression checks that source paths and stack lines do not reach its returned error.
+
+Final validation and exact publication status are recorded in the existing local
+maintenance ledger. Publication uses the existing `[skip ci]` policy after checking
+all workflow triggers. No image publication, release, workflow dispatch or
+deployment is authorized by this maintenance. The historical source review remains
+partial, and the unauthenticated GitHub API still returns rate-limit errors.
+
+Final continuation validation: coverage passes 23,923 native tests (14 skips),
+102 dashboard tests and 20 serial tests, with 81.25% lines/statements, 78.79%
+branches and 86.71% functions. This full run preceded the final Codex image
+fetch-error sanitizer and its regression; the final 116-test affected run passes
+with that change. Core typecheck, lint and all previously listed local gates pass;
+complexity is 2,060/892 with unchanged limits. Both source patch downloads remain
+byte-identical to their reviewed copies at the final pre-publication check.

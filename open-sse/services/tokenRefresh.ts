@@ -17,67 +17,10 @@ import {
   type RefreshDiagnosticContext,
 } from "./tokenRefreshUtils.ts";
 
+import { getRefreshLeadMs } from "./refreshLead.ts";
+export { getRefreshLeadMs, TOKEN_EXPIRY_BUFFER_MS, REFRESH_LEAD_MS } from "./refreshLead.ts";
+
 export { extractOAuthErrorCode } from "./tokenRefreshUtils.ts";
-
-// Default token expiry buffer (refresh if expires within 5 minutes).
-// Used as fallback for providers without an explicit lead time in
-// REFRESH_LEAD_MS below.
-export const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
-
-// Per-provider proactive-refresh lead time.
-//
-// For multi-account OAuth on providers that enforce "single active session per
-// client_id" (notably OpenAI Codex / Auth0), refreshing one account's token
-// can invalidate the refresh_token family of OTHER accounts under the same
-// client. We MINIMIZE refresh frequency for these providers: stay on the
-// original access_token until it is genuinely about to expire, so each account
-// gets the full access_token lifetime without triggering Auth0's family-
-// invalidation logic on its siblings.
-//
-// Trade-off: when refresh finally happens (last 5 min before expiry), Auth0
-// MAY invalidate other accounts' refresh_tokens. The user must re-auth those.
-// This is the upstream limitation documented in openai/codex#9648.
-//
-// Providers with non-rotating tokens (Google, Anthropic) or where multi-
-// account is naturally isolated keep longer lead times.
-export const REFRESH_LEAD_MS: Record<string, number> = {
-  // Rotating refresh tokens — minimize refresh frequency to avoid the
-  // "refresh-invalidates-siblings" cascade documented for OpenAI Auth0.
-  codex: 5 * 60 * 1000, // 5 minutes
-  openai: 5 * 60 * 1000, // same Auth0 backend as codex
-  claude: 5 * 60 * 1000, // Anthropic OAuth rotates refresh_tokens (user-reported)
-  "gitlab-duo": 5 * 60 * 1000, // GitLab token family revocation on misuse
-  kiro: 5 * 60 * 1000, // AWS SSO OIDC issues one-time-use refresh tokens
-  "kimi-coding": 5 * 60 * 1000, // Moonshot rotates per-refresh
-  qwen: 5 * 60 * 1000, // Alibaba device-code path also rotates
-  // Non-rotating providers — longer lead is safe.
-  iflow: 24 * 60 * 60 * 1000, // 24 hours
-  // Google OAuth refresh_tokens are permanent (non-rotating) — longer lead
-  // is safe and reduces unnecessary upstream chatter.
-  antigravity: 15 * 60 * 1000,
-  agy: 15 * 60 * 1000, // same Google backend as antigravity (non-rotating refresh tokens)
-};
-
-/**
- * Get the proactive refresh lead time (ms) for a given provider.
- *
- * Precedence:
- *   1. A per-connection override in `providerSpecificData.refreshLeadMs`
- *      (must be a positive finite number), so an operator can tune the lead
- *      time for a single connection without touching the provider defaults.
- *   2. The provider default from REFRESH_LEAD_MS.
- *   3. TOKEN_EXPIRY_BUFFER_MS (5 min) when nothing else applies.
- */
-export function getRefreshLeadMs(
-  provider: string,
-  providerSpecificData?: { refreshLeadMs?: unknown } | null
-): number {
-  const override = providerSpecificData?.refreshLeadMs;
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return override;
-  }
-  return REFRESH_LEAD_MS[provider] ?? TOKEN_EXPIRY_BUFFER_MS;
-}
 
 const CACHE_SECRET = "omniroute-token-cache";
 

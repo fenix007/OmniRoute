@@ -1,4 +1,4 @@
-import { appendToolCallArgumentDelta } from "../utils/toolCallArguments.ts";
+import { recoverCompletedItemId, toResponseOutputIndex } from "./responsesItemId.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
 
 /**
@@ -44,19 +44,7 @@ export function extractSSEErrorMessage(rawSSE: unknown): string | null {
     const err = record.error;
     if (err == null) continue;
 
-    let message = "";
-    if (typeof err === "string") {
-      message = err;
-    } else if (typeof err === "object" && !Array.isArray(err)) {
-      const errRecord = err as Record<string, unknown>;
-      if (typeof errRecord.message === "string") {
-        message = errRecord.message;
-      } else {
-        message = JSON.stringify(err);
-      }
-    } else {
-      message = String(err);
-    }
+    const message = bufferedErrorText(err);
 
     const sanitized = sanitizeErrorMessage(message);
     if (sanitized) return sanitized;
@@ -157,159 +145,97 @@ function toNumber(value, fallback = 0) {
   return fallback;
 }
 
-export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
-  const lines = String(rawSSE || "").split("\n");
-  const chunks = [];
-  let sawChoices = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const payload = trimmed.slice(5).trim();
-    if (!payload || payload === "[DONE]") continue;
-    try {
-      const parsed = JSON.parse(payload);
-      if (Array.isArray(parsed?.choices)) {
-        sawChoices = true;
-      }
-      chunks.push(parsed);
-    } catch {
-      // Ignore malformed SSE lines and continue best-effort parsing.
-    }
-  }
-
-  if (chunks.length === 0 || !sawChoices) return null;
-
-  const first = chunks[0];
-  const contentParts = [];
-  const reasoningParts = [];
-  type AccumulatedToolCall = {
-    id: string | null;
-    index: number;
-    type: string;
-    function: { name: string; arguments: string };
-  };
-
-  const accumulatedToolCalls = new Map<string, AccumulatedToolCall>();
-  let unknownToolCallSeq = 0;
-  let finishReason = "stop";
-  let usage = null;
-
-  const getToolCallKey = (toolCall: Record<string, unknown>) => {
-    if (Number.isInteger(toolCall?.index)) return `idx:${toolCall.index}`;
-    if (toolCall?.id != null) return `id:${String(toolCall.id)}`;
-    unknownToolCallSeq += 1;
-    return `seq:${unknownToolCallSeq}`;
-  };
-
-  for (const chunk of chunks) {
-    const choice = chunk?.choices?.[0];
-    const delta = choice?.delta || {};
-
-    if (typeof delta.content === "string" && delta.content.length > 0) {
-      contentParts.push(delta.content);
-    }
-    if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
-      reasoningParts.push(delta.reasoning_content);
-    }
-    // Normalize `reasoning` alias (NVIDIA kimi-k2.5 etc.)
-    if (
-      typeof delta.reasoning === "string" &&
-      delta.reasoning.length > 0 &&
-      !delta.reasoning_content
-    ) {
-      reasoningParts.push(delta.reasoning);
-    }
-
-    // T18: Accumulate tool calls correctly across streamed chunks
-    if (delta.tool_calls) {
-      for (const tc of delta.tool_calls) {
-        const key = getToolCallKey(tc);
-        const existing = accumulatedToolCalls.get(key);
-        const deltaArgs = typeof tc?.function?.arguments === "string" ? tc.function.arguments : "";
-
-        if (!existing) {
-          accumulatedToolCalls.set(key, {
-            id: tc?.id != null ? String(tc.id) : null,
-            index: Number.isInteger(tc?.index) ? tc.index : accumulatedToolCalls.size,
-            type: tc?.type || "function",
-            function: {
-              name: tc?.function?.name || "unknown",
-              arguments: deltaArgs,
-            },
-          });
-        } else {
-          existing.id = existing.id || (tc?.id != null ? String(tc.id) : null);
-          if (!Number.isInteger(existing.index) && Number.isInteger(tc?.index)) {
-            existing.index = tc.index;
-          }
-          if (tc?.function?.name && !existing.function?.name) {
-            existing.function = existing.function || {};
-            existing.function.name = tc.function.name;
-          }
-          existing.function = existing.function || {};
-          existing.function.arguments = appendToolCallArgumentDelta(
-            existing.function.arguments,
-            deltaArgs
-          );
-          accumulatedToolCalls.set(key, existing);
-        }
-      }
-    }
-
-    if (choice?.finish_reason) {
-      finishReason = choice.finish_reason;
-    }
-    if (chunk?.usage && typeof chunk.usage === "object") {
-      usage = chunk.usage;
-    }
-  }
-
-  const joinedContent = contentParts.length > 0 ? contentParts.join("").trim() : "";
-  const joinedReasoning = reasoningParts.length > 0 ? reasoningParts.join("").trim() : null;
-  const message: Record<string, unknown> = {
-    role: "assistant",
-    content: joinedContent,
-  };
-  if (joinedReasoning) {
-    message.reasoning_content = joinedReasoning;
-  }
-
-  const finalToolCalls = [...accumulatedToolCalls.values()].filter(Boolean).sort((a, b) => {
-    const ai = Number.isInteger(a?.index) ? a.index : 0;
-    const bi = Number.isInteger(b?.index) ? b.index : 0;
-    return ai - bi;
-  });
-  if (finalToolCalls.length > 0) {
-    finishReason = "tool_calls"; // T18 normalization
-    message.tool_calls = finalToolCalls;
-  }
-
-  const result: Record<string, unknown> = {
-    id: first.id != null ? String(first.id) : `chatcmpl-${Date.now()}`,
-    object: "chat.completion",
-    created: first.created || Math.floor(Date.now() / 1000),
-    model: first.model || fallbackModel || "unknown",
-    choices: [
-      {
-        index: 0,
-        message,
-        finish_reason: finishReason,
-      },
-    ],
-  };
-
-  if (usage) {
-    result.usage = usage;
-  }
-
-  return result;
-}
-
 /**
  * Convert Claude-style SSE events into a single non-streaming message object.
  * Used when Claude-compatible upstreams stream even for stream=false.
  */
+function startClaudeBlock(payload, blocks) {
+  const index = toNumber(payload.index, blocks.size);
+  const contentBlock = toRecord(payload.content_block);
+  const blockType = toString(contentBlock.type);
+
+  if (blockType === "thinking") {
+    blocks.set(index, {
+      type: "thinking",
+      index,
+      thinking: toString(contentBlock.thinking),
+      signature: toString(contentBlock.signature) || undefined,
+    });
+  } else if (blockType === "tool_use") {
+    blocks.set(index, {
+      type: "tool_use",
+      index,
+      id: toString(contentBlock.id, `toolu_${Date.now()}_${index}`),
+      name: toString(contentBlock.name),
+      input: contentBlock.input ?? {},
+      inputJson: "",
+    });
+  } else {
+    blocks.set(index, {
+      type: "text",
+      index,
+      text: toString(contentBlock.text),
+    });
+  }
+}
+
+function appendClaudeToolInput(index, existing, delta, blocks) {
+  const toolUse =
+    existing && existing.type === "tool_use"
+      ? existing
+      : {
+          type: "tool_use",
+          index,
+          id: `toolu_${Date.now()}_${index}`,
+          name: "",
+          input: {},
+          inputJson: "",
+        };
+  toolUse.inputJson += toString(delta.partial_json);
+  blocks.set(index, toolUse);
+}
+
+function appendClaudeThinking(index, existing, delta, deltaType, blocks) {
+  const isThinkingDelta = deltaType === "thinking_delta" || typeof delta.thinking === "string";
+  const isSignatureDelta = deltaType === "signature_delta" || typeof delta.signature === "string";
+  if (isThinkingDelta || isSignatureDelta) {
+    const thinking =
+      existing && existing.type === "thinking"
+        ? existing
+        : { type: "thinking", index, thinking: "", signature: undefined };
+    if (isThinkingDelta) thinking.thinking += toString(delta.thinking);
+    const signature = toString(delta.signature);
+    if (signature) thinking.signature = `${thinking.signature || ""}${signature}`;
+    blocks.set(index, thinking);
+    return true;
+  }
+
+  return false;
+}
+
+function appendClaudeBlock(payload, blocks) {
+  const index = toNumber(payload.index, 0);
+  const delta = toRecord(payload.delta);
+  const deltaType = toString(delta.type);
+  const existing = blocks.get(index);
+
+  if (deltaType === "input_json_delta") {
+    appendClaudeToolInput(index, existing, delta, blocks);
+    return;
+  }
+  if (appendClaudeThinking(index, existing, delta, deltaType, blocks)) return;
+  const textBlock =
+    existing && existing.type === "text"
+      ? existing
+      : {
+          type: "text",
+          index,
+          text: "",
+        };
+  textBlock.text += toString(delta.text);
+  blocks.set(index, textBlock);
+}
+
 export function parseSSEToClaudeResponse(rawSSE, fallbackModel) {
   const payloads = readSSEEvents(rawSSE)
     .map((event) => toRecord(event.data))
@@ -326,27 +252,6 @@ export function parseSSEToClaudeResponse(rawSSE, fallbackModel) {
   let stopSequence = null;
   let sawClaudeEvent = false;
 
-  const mergeUsage = (incoming) => {
-    const usageRecord = toRecord(incoming);
-    for (const [key, value] of Object.entries(usageRecord)) {
-      if (typeof value === "number" && Number.isFinite(value)) {
-        usage[key] = value;
-      } else if (value && typeof value === "object" && !Array.isArray(value)) {
-        usage[key] = { ...toRecord(usage[key]), ...toRecord(value) };
-      } else if (typeof value === "string" && value.trim().length > 0) {
-        usage[key] = value;
-      }
-    }
-  };
-
-  const tryParseJson = (raw) => {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return raw;
-    }
-  };
-
   for (const payload of payloads) {
     const eventType = toString(payload.type);
     if (eventType === "message_start") {
@@ -355,91 +260,18 @@ export function parseSSEToClaudeResponse(rawSSE, fallbackModel) {
       messageId = toString(message.id, messageId || `msg_${Date.now()}`);
       model = toString(message.model, model);
       role = toString(message.role, role);
-      mergeUsage(message.usage);
+      mergeClaudeUsage(usage, message.usage);
       continue;
     }
 
     if (eventType === "content_block_start") {
       sawClaudeEvent = true;
-      const index = toNumber(payload.index, blocks.size);
-      const contentBlock = toRecord(payload.content_block);
-      const blockType = toString(contentBlock.type);
-
-      if (blockType === "thinking") {
-        blocks.set(index, {
-          type: "thinking",
-          index,
-          thinking: toString(contentBlock.thinking),
-          signature: toString(contentBlock.signature) || undefined,
-        });
-      } else if (blockType === "tool_use") {
-        blocks.set(index, {
-          type: "tool_use",
-          index,
-          id: toString(contentBlock.id, `toolu_${Date.now()}_${index}`),
-          name: toString(contentBlock.name),
-          input: contentBlock.input ?? {},
-          inputJson: "",
-        });
-      } else {
-        blocks.set(index, {
-          type: "text",
-          index,
-          text: toString(contentBlock.text),
-        });
-      }
+      startClaudeBlock(payload, blocks);
       continue;
     }
-
     if (eventType === "content_block_delta") {
       sawClaudeEvent = true;
-      const index = toNumber(payload.index, 0);
-      const delta = toRecord(payload.delta);
-      const deltaType = toString(delta.type);
-      const existing = blocks.get(index);
-
-      if (deltaType === "input_json_delta") {
-        const toolUse =
-          existing && existing.type === "tool_use"
-            ? existing
-            : {
-                type: "tool_use",
-                index,
-                id: `toolu_${Date.now()}_${index}`,
-                name: "",
-                input: {},
-                inputJson: "",
-              };
-        toolUse.inputJson += toString(delta.partial_json);
-        blocks.set(index, toolUse);
-        continue;
-      }
-
-      const isThinkingDelta = deltaType === "thinking_delta" || typeof delta.thinking === "string";
-      const isSignatureDelta =
-        deltaType === "signature_delta" || typeof delta.signature === "string";
-      if (isThinkingDelta || isSignatureDelta) {
-        const thinking =
-          existing && existing.type === "thinking"
-            ? existing
-            : { type: "thinking", index, thinking: "", signature: undefined };
-        if (isThinkingDelta) thinking.thinking += toString(delta.thinking);
-        const signature = toString(delta.signature);
-        if (signature) thinking.signature = `${thinking.signature || ""}${signature}`;
-        blocks.set(index, thinking);
-        continue;
-      }
-
-      const textBlock =
-        existing && existing.type === "text"
-          ? existing
-          : {
-              type: "text",
-              index,
-              text: "",
-            };
-      textBlock.text += toString(delta.text);
-      blocks.set(index, textBlock);
+      appendClaudeBlock(payload, blocks);
       continue;
     }
 
@@ -447,38 +279,17 @@ export function parseSSEToClaudeResponse(rawSSE, fallbackModel) {
       sawClaudeEvent = true;
       const delta = toRecord(payload.delta);
       stopReason = toString(delta.stop_reason, stopReason);
-      stopSequence =
-        typeof delta.stop_sequence === "string" ? String(delta.stop_sequence) : stopSequence;
-      mergeUsage(payload.usage);
+      stopSequence = toString(delta.stop_sequence, stopSequence);
+      mergeClaudeUsage(usage, payload.usage);
       continue;
     }
 
-    mergeUsage(payload.usage);
+    mergeClaudeUsage(usage, payload.usage);
   }
 
   if (!sawClaudeEvent) return null;
 
-  const content = [];
-  for (const block of [...blocks.values()].sort((a, b) => a.index - b.index)) {
-    if (block.type === "text") {
-      if (block.text) content.push({ type: "text", text: block.text });
-      continue;
-    }
-    if (block.type === "thinking") {
-      const hasSignature = typeof block.signature === "string" && block.signature.length > 0;
-      if (block.thinking || hasSignature) {
-        content.push({
-          type: "thinking",
-          thinking: block.thinking || "",
-          ...(hasSignature ? { signature: block.signature } : {}),
-        });
-      }
-      continue;
-    }
-
-    const input = block.inputJson.trim().length > 0 ? tryParseJson(block.inputJson) : block.input;
-    content.push({ type: "tool_use", id: block.id, name: block.name, input });
-  }
+  const content = buildClaudeContent(blocks);
 
   return {
     id: messageId || `msg_${Date.now()}`,
@@ -504,15 +315,6 @@ const RESPONSES_TERMINAL_EVENT_TYPES = new Set([
   "response.failed",
   "response.incomplete",
 ]);
-
-function toOutputIndex(value) {
-  if (typeof value === "number" && Number.isInteger(value)) return value;
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
-    if (Number.isInteger(parsed)) return parsed;
-  }
-  return null;
-}
 
 function toIdString(value) {
   return value === null || value === undefined ? "" : String(value);
@@ -597,23 +399,19 @@ function ensureResponsesFunctionCallItem(outputItems, outputIndex, itemId, callI
   const existingCallId = existing?.call_id != null ? String(existing.call_id) : "";
 
   if (existing?.type === "function_call") {
-    if (existing.call_id != null) existing.call_id = String(existing.call_id);
-    if (existing.id != null) existing.id = String(existing.id);
-    if (normalizedCallId && !existing.call_id) existing.call_id = normalizedCallId;
-    if (name && !existing.name) existing.name = name;
-    if (normalizedItemId && !existing.id) existing.id = normalizedItemId;
+    updateResponsesFunctionCall(existing, normalizedCallId, name, normalizedItemId);
     return existing;
   }
 
-  const next = {
-    ...(existing && typeof existing === "object" ? existing : {}),
-    id:
-      normalizedItemId || existingId || `fc_${normalizedCallId || `${Date.now()}_${outputIndex}`}`,
-    type: "function_call",
-    call_id: normalizedCallId || existingCallId || "",
-    name: name || existing?.name || "",
-    arguments: typeof existing?.arguments === "string" ? existing.arguments : "",
-  };
+  const next = createResponsesFunctionCall(
+    existing,
+    normalizedItemId,
+    normalizedCallId,
+    existingId,
+    existingCallId,
+    outputIndex,
+    name
+  );
 
   outputItems.set(outputIndex, next);
   return next;
@@ -639,7 +437,7 @@ function mergeResponseItems(existing, incoming) {
   };
 }
 
-export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
+function readResponsesDataLines(rawSSE) {
   const lines = String(rawSSE || "").split("\n");
   const events = [];
 
@@ -659,102 +457,123 @@ export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
     }
   }
 
+  return events;
+}
+
+function addResponsesItem(evt, outputIndex, item, outputItems, completedItems) {
+  outputItems.set(outputIndex, cloneResponseItem(item));
+}
+
+function completeResponsesItem(evt, outputIndex, item, outputItems, completedItems) {
+  completedItems.set(outputIndex, item);
+  const existing = outputItems.get(outputIndex);
+  outputItems.set(outputIndex, mergeResponseItems(existing, item));
+}
+
+function appendResponsesText(evt, outputIndex, item, outputItems, completedItems) {
+  const messageItem = ensureResponsesMessageItem(outputItems, outputIndex);
+  const content = Array.isArray(messageItem.content) ? messageItem.content : [];
+  const firstPart =
+    content.length > 0 ? { ...toRecord(content[0]) } : { type: "output_text", annotations: [] };
+  firstPart.type = firstPart.type || "output_text";
+  firstPart.annotations = Array.isArray(firstPart.annotations) ? firstPart.annotations : [];
+  firstPart.text = `${toString(firstPart.text)}${toString(evt.delta)}`;
+  content[0] = firstPart;
+  messageItem.content = content;
+}
+
+function finishResponsesText(evt, outputIndex, item, outputItems, completedItems) {
+  const messageItem = ensureResponsesMessageItem(outputItems, outputIndex);
+  const content = Array.isArray(messageItem.content) ? messageItem.content : [];
+  const firstPart =
+    content.length > 0 ? { ...toRecord(content[0]) } : { type: "output_text", annotations: [] };
+  firstPart.type = firstPart.type || "output_text";
+  firstPart.annotations = Array.isArray(firstPart.annotations) ? firstPart.annotations : [];
+  firstPart.text = toString(evt.text, toString(firstPart.text));
+  content[0] = firstPart;
+  messageItem.content = content;
+}
+
+function appendResponsesReasoning(evt, outputIndex, item, outputItems, completedItems) {
+  const reasoningItem = ensureResponsesReasoningItem(
+    outputItems,
+    outputIndex,
+    toIdString(evt.item_id)
+  );
+  const summary = Array.isArray(reasoningItem.summary) ? reasoningItem.summary : [];
+  const firstPart =
+    summary.length > 0 ? { ...toRecord(summary[0]) } : { type: "summary_text", text: "" };
+  firstPart.type = firstPart.type || "summary_text";
+  firstPart.text = `${toString(firstPart.text)}${toString(evt.delta)}`;
+  summary[0] = firstPart;
+  reasoningItem.summary = summary;
+}
+
+function finishResponsesReasoning(evt, outputIndex, item, outputItems, completedItems) {
+  const reasoningItem = ensureResponsesReasoningItem(
+    outputItems,
+    outputIndex,
+    toIdString(evt.item_id)
+  );
+  const summary = Array.isArray(reasoningItem.summary) ? reasoningItem.summary : [];
+  const firstPart =
+    summary.length > 0 ? { ...toRecord(summary[0]) } : { type: "summary_text", text: "" };
+  firstPart.type = firstPart.type || "summary_text";
+  firstPart.text = toString(evt.text, toString(firstPart.text));
+  summary[0] = firstPart;
+  reasoningItem.summary = summary;
+}
+
+function appendResponsesArguments(evt, outputIndex, item, outputItems, completedItems) {
+  const functionCallItem = ensureResponsesFunctionCallItem(
+    outputItems,
+    outputIndex,
+    toIdString(evt.item_id),
+    "",
+    ""
+  );
+  functionCallItem.arguments = `${toString(functionCallItem.arguments)}${toString(evt.delta)}`;
+}
+
+function finishResponsesArguments(evt, outputIndex, item, outputItems, completedItems) {
+  const functionCallItem = ensureResponsesFunctionCallItem(
+    outputItems,
+    outputIndex,
+    toIdString(evt.item_id),
+    "",
+    ""
+  );
+  functionCallItem.arguments = toString(evt.arguments, toString(functionCallItem.arguments));
+}
+
+const RESPONSES_ITEM_HANDLERS = {
+  "response.output_item.added": addResponsesItem,
+  "response.output_item.done": completeResponsesItem,
+  "response.output_text.delta": appendResponsesText,
+  "response.output_text.done": finishResponsesText,
+  "response.reasoning_summary_text.delta": appendResponsesReasoning,
+  "response.reasoning_summary_text.done": finishResponsesReasoning,
+  "response.function_call_arguments.delta": appendResponsesArguments,
+  "response.function_call_arguments.done": finishResponsesArguments,
+};
+
+export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
+  const events = readResponsesDataLines(rawSSE);
+
   if (events.length === 0) return null;
 
   let terminalResponse = null;
   let terminalEventType = "";
   let latestResponse = null;
   const outputItems = new Map();
+  const completedItems = new Map<number, Record<string, unknown>>();
 
   for (const evt of events) {
     const eventType = toString(evt?.type);
-    const outputIndex = toOutputIndex(evt?.output_index);
+    const outputIndex = toResponseOutputIndex(evt?.output_index);
     const item = toRecord(evt?.item);
 
-    if (outputIndex !== null && eventType === "response.output_item.added") {
-      outputItems.set(outputIndex, cloneResponseItem(item));
-    }
-
-    if (outputIndex !== null && eventType === "response.output_item.done") {
-      const existing = outputItems.get(outputIndex);
-      outputItems.set(outputIndex, mergeResponseItems(existing, item));
-    }
-
-    if (outputIndex !== null && eventType === "response.output_text.delta") {
-      const messageItem = ensureResponsesMessageItem(outputItems, outputIndex);
-      const content = Array.isArray(messageItem.content) ? messageItem.content : [];
-      const firstPart =
-        content.length > 0 ? { ...toRecord(content[0]) } : { type: "output_text", annotations: [] };
-      firstPart.type = firstPart.type || "output_text";
-      firstPart.annotations = Array.isArray(firstPart.annotations) ? firstPart.annotations : [];
-      firstPart.text = `${toString(firstPart.text)}${toString(evt.delta)}`;
-      content[0] = firstPart;
-      messageItem.content = content;
-    }
-
-    if (outputIndex !== null && eventType === "response.output_text.done") {
-      const messageItem = ensureResponsesMessageItem(outputItems, outputIndex);
-      const content = Array.isArray(messageItem.content) ? messageItem.content : [];
-      const firstPart =
-        content.length > 0 ? { ...toRecord(content[0]) } : { type: "output_text", annotations: [] };
-      firstPart.type = firstPart.type || "output_text";
-      firstPart.annotations = Array.isArray(firstPart.annotations) ? firstPart.annotations : [];
-      firstPart.text = toString(evt.text, toString(firstPart.text));
-      content[0] = firstPart;
-      messageItem.content = content;
-    }
-
-    if (outputIndex !== null && eventType === "response.reasoning_summary_text.delta") {
-      const reasoningItem = ensureResponsesReasoningItem(
-        outputItems,
-        outputIndex,
-        toIdString(evt.item_id)
-      );
-      const summary = Array.isArray(reasoningItem.summary) ? reasoningItem.summary : [];
-      const firstPart =
-        summary.length > 0 ? { ...toRecord(summary[0]) } : { type: "summary_text", text: "" };
-      firstPart.type = firstPart.type || "summary_text";
-      firstPart.text = `${toString(firstPart.text)}${toString(evt.delta)}`;
-      summary[0] = firstPart;
-      reasoningItem.summary = summary;
-    }
-
-    if (outputIndex !== null && eventType === "response.reasoning_summary_text.done") {
-      const reasoningItem = ensureResponsesReasoningItem(
-        outputItems,
-        outputIndex,
-        toIdString(evt.item_id)
-      );
-      const summary = Array.isArray(reasoningItem.summary) ? reasoningItem.summary : [];
-      const firstPart =
-        summary.length > 0 ? { ...toRecord(summary[0]) } : { type: "summary_text", text: "" };
-      firstPart.type = firstPart.type || "summary_text";
-      firstPart.text = toString(evt.text, toString(firstPart.text));
-      summary[0] = firstPart;
-      reasoningItem.summary = summary;
-    }
-
-    if (outputIndex !== null && eventType === "response.function_call_arguments.delta") {
-      const functionCallItem = ensureResponsesFunctionCallItem(
-        outputItems,
-        outputIndex,
-        toIdString(evt.item_id),
-        "",
-        ""
-      );
-      functionCallItem.arguments = `${toString(functionCallItem.arguments)}${toString(evt.delta)}`;
-    }
-
-    if (outputIndex !== null && eventType === "response.function_call_arguments.done") {
-      const functionCallItem = ensureResponsesFunctionCallItem(
-        outputItems,
-        outputIndex,
-        toIdString(evt.item_id),
-        "",
-        ""
-      );
-      functionCallItem.arguments = toString(evt.arguments, toString(functionCallItem.arguments));
-    }
+    consumeIndexedResponsesItem(evt, eventType, outputIndex, item, outputItems, completedItems);
 
     if (RESPONSES_TERMINAL_EVENT_TYPES.has(eventType) && evt.response) {
       terminalResponse = evt.response;
@@ -767,6 +586,24 @@ export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
     }
   }
 
+  return buildBufferedResponsesOutput(
+    terminalResponse,
+    latestResponse,
+    terminalEventType,
+    outputItems,
+    completedItems,
+    fallbackModel
+  );
+}
+
+function buildBufferedResponsesOutput(
+  terminalResponse,
+  latestResponse,
+  terminalEventType,
+  outputItems,
+  completedItems,
+  fallbackModel
+) {
   const picked = terminalResponse || latestResponse;
   if (!picked || typeof picked !== "object") return null;
   const reconstructedOutput = [...outputItems.entries()]
@@ -774,6 +611,113 @@ export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
     .map(([, item]) => item)
     .filter((item) => item && typeof item === "object");
   const pickedOutput = Array.isArray(picked.output) ? picked.output : [];
+  const chosenOutput = chooseBufferedResponsesOutput(pickedOutput, reconstructedOutput);
+  const statusFallback = bufferedResponsesStatus(terminalEventType, terminalResponse);
+
+  return {
+    id: picked.id != null ? String(picked.id) : `resp_${Date.now()}`,
+    object: picked.object || "response",
+    model: picked.model || fallbackModel || "unknown",
+    output: chosenOutput.map((item, index) => {
+      const record = toRecord(item);
+      return {
+        ...record,
+        id: recoverCompletedItemId(
+          record,
+          completedItems.get(index),
+          chosenOutput === pickedOutput
+        ),
+        call_id: record.call_id != null ? String(record.call_id) : record.call_id,
+      };
+    }),
+    usage: picked.usage || null,
+    status: picked.status || statusFallback,
+    ...bufferedResponsesDetails(picked),
+    created_at: picked.created_at || Math.floor(Date.now() / 1000),
+    metadata: picked.metadata || {},
+  };
+}
+
+function bufferedResponsesStatus(terminalEventType, terminalResponse) {
+  return terminalEventType === "response.cancelled"
+    ? "cancelled"
+    : terminalEventType === "response.canceled"
+      ? "canceled"
+      : terminalEventType === "response.failed"
+        ? "failed"
+        : terminalEventType === "response.incomplete"
+          ? "incomplete"
+          : terminalResponse
+            ? "completed"
+            : "in_progress";
+}
+
+function buildClaudeContent(blocks) {
+  const tryParseJson = (raw) => {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  };
+  const content = [];
+  for (const block of [...blocks.values()].sort((a, b) => a.index - b.index)) {
+    if (block.type === "text") {
+      if (block.text) content.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (block.type === "thinking") {
+      appendClaudeThinkingContent(block, content);
+      continue;
+    }
+
+    const input = block.inputJson.trim().length > 0 ? tryParseJson(block.inputJson) : block.input;
+    content.push({ type: "tool_use", id: block.id, name: block.name, input });
+  }
+
+  return content;
+}
+
+function bufferedErrorText(err) {
+  let message = "";
+  if (typeof err === "string") {
+    message = err;
+  } else if (typeof err === "object" && !Array.isArray(err)) {
+    const errRecord = err as Record<string, unknown>;
+    if (typeof errRecord.message === "string") {
+      message = errRecord.message;
+    } else {
+      message = JSON.stringify(err);
+    }
+  } else {
+    message = String(err);
+  }
+
+  return message;
+}
+
+function mergeClaudeUsage(usage, incoming) {
+  const usageRecord = toRecord(incoming);
+  for (const [key, value] of Object.entries(usageRecord)) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      usage[key] = value;
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      usage[key] = { ...toRecord(usage[key]), ...toRecord(value) };
+    } else if (typeof value === "string" && value.trim().length > 0) {
+      usage[key] = value;
+    }
+  }
+}
+
+function updateResponsesFunctionCall(existing, normalizedCallId, name, normalizedItemId) {
+  if (existing.call_id != null) existing.call_id = String(existing.call_id);
+  if (existing.id != null) existing.id = String(existing.id);
+  if (normalizedCallId && !existing.call_id) existing.call_id = normalizedCallId;
+  if (name && !existing.name) existing.name = name;
+  if (normalizedItemId && !existing.id) existing.id = normalizedItemId;
+}
+
+function chooseBufferedResponsesOutput(pickedOutput, reconstructedOutput) {
   // #3948 — A Responses-API terminal snapshot (`response.completed`) can carry a
   // non-empty `output` that LACKS the assistant message item (e.g. only a
   // `reasoning` item) even though the streamed `output_text` deltas reconstructed
@@ -784,46 +728,68 @@ export function parseSSEToResponsesOutput(rawSSE, fallbackModel) {
   // snapshot still wins whenever it already contains the message item.
   const outputHasMessage = (items: unknown[]) =>
     items.some((item) => toRecord(item).type === "message");
-  const chosenOutput =
-    pickedOutput.length > 0 &&
+  return pickedOutput.length > 0 &&
     !outputHasMessage(pickedOutput) &&
     outputHasMessage(reconstructedOutput)
-      ? reconstructedOutput
-      : pickedOutput.length > 0
-        ? pickedOutput
-        : reconstructedOutput;
-  const statusFallback =
-    terminalEventType === "response.cancelled"
-      ? "cancelled"
-      : terminalEventType === "response.canceled"
-        ? "canceled"
-        : terminalEventType === "response.failed"
-          ? "failed"
-          : terminalEventType === "response.incomplete"
-            ? "incomplete"
-            : terminalResponse
-              ? "completed"
-              : "in_progress";
+    ? reconstructedOutput
+    : pickedOutput.length > 0
+      ? pickedOutput
+      : reconstructedOutput;
+}
 
+function appendClaudeThinkingContent(block, content) {
+  const hasSignature = typeof block.signature === "string" && block.signature.length > 0;
+  if (block.thinking || hasSignature) {
+    content.push({
+      type: "thinking",
+      thinking: block.thinking || "",
+      ...(hasSignature ? { signature: block.signature } : {}),
+    });
+  }
+}
+
+function consumeIndexedResponsesItem(
+  evt,
+  eventType,
+  outputIndex,
+  item,
+  outputItems,
+  completedItems
+) {
+  if (outputIndex !== null) {
+    const handleItem = Object.hasOwn(RESPONSES_ITEM_HANDLERS, eventType)
+      ? RESPONSES_ITEM_HANDLERS[eventType]
+      : null;
+    if (handleItem) handleItem(evt, outputIndex, item, outputItems, completedItems);
+  }
+}
+
+function createResponsesFunctionCall(
+  existing,
+  normalizedItemId,
+  normalizedCallId,
+  existingId,
+  existingCallId,
+  outputIndex,
+  name
+) {
   return {
-    id: picked.id != null ? String(picked.id) : `resp_${Date.now()}`,
-    object: picked.object || "response",
-    model: picked.model || fallbackModel || "unknown",
-    output: chosenOutput.map((item) => {
-      const record = toRecord(item);
-      return {
-        ...record,
-        id: record.id != null ? String(record.id) : record.id,
-        call_id: record.call_id != null ? String(record.call_id) : record.call_id,
-      };
-    }),
-    usage: picked.usage || null,
-    status: picked.status || statusFallback,
+    ...(existing && typeof existing === "object" ? existing : {}),
+    id:
+      normalizedItemId || existingId || `fc_${normalizedCallId || `${Date.now()}_${outputIndex}`}`,
+    type: "function_call",
+    call_id: normalizedCallId || existingCallId || "",
+    name: name || existing?.name || "",
+    arguments: typeof existing?.arguments === "string" ? existing.arguments : "",
+  };
+}
+
+function bufferedResponsesDetails(picked) {
+  return {
     ...(picked.error != null ? { error: picked.error } : {}),
     ...(picked.incomplete_details && typeof picked.incomplete_details === "object"
       ? { incomplete_details: picked.incomplete_details }
       : {}),
-    created_at: picked.created_at || Math.floor(Date.now() / 1000),
-    metadata: picked.metadata || {},
   };
 }
+export { parseSSEToOpenAIResponse } from "./sseParserChat.ts";

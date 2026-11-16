@@ -32,6 +32,7 @@ export { normalizeUpstreamFailure } from "./openai-responses/pureHelpers.ts";
 function escapeJsonStringValues(json: string): string {
   let result = "";
   let inString = false;
+  const escapes = { "\n": "\\n", "\r": "\\r", "\t": "\\t" };
 
   for (let i = 0; i < json.length; i++) {
     const ch = json[i];
@@ -51,8 +52,8 @@ function escapeJsonStringValues(json: string): string {
     }
 
     // Escape control characters only inside string values
-    if (inString && (ch === "\n" || ch === "\r" || ch === "\t")) {
-      result += ch === "\n" ? "\\n" : ch === "\r" ? "\\r" : "\\t";
+    if (inString && escapes[ch]) {
+      result += escapes[ch];
       continue;
     }
 
@@ -75,24 +76,7 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
   // Normalize Chat Completions format (prompt_tokens/completion_tokens) to Responses API format
   // (input_tokens/output_tokens) so response.completed always has the fields Codex expects.
   if (chunk.usage) {
-    const u = chunk.usage;
-    const input_tokens = u.input_tokens ?? u.prompt_tokens ?? 0;
-    const output_tokens = u.output_tokens ?? u.completion_tokens ?? 0;
-    state.usage = {
-      input_tokens,
-      output_tokens,
-      total_tokens: u.total_tokens ?? input_tokens + output_tokens,
-    };
-    const cachedTokens =
-      u.input_tokens_details?.cached_tokens ?? u.prompt_tokens_details?.cached_tokens;
-    if (cachedTokens) {
-      state.usage.input_tokens_details = { cached_tokens: cachedTokens };
-    }
-    const reasoningTokens =
-      u.output_tokens_details?.reasoning_tokens ?? u.completion_tokens_details?.reasoning_tokens;
-    if (reasoningTokens) {
-      state.usage.output_tokens_details = { reasoning_tokens: reasoningTokens };
-    }
+    captureChatUsage(chunk.usage, state);
   }
 
   if (!chunk.choices?.length) {
@@ -113,122 +97,32 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
   const choice = chunk.choices[0];
   const idx = choice.index || 0;
   const delta = choice.delta || {};
-  if (state.parseTextualReasoningTags !== true && typeof chunk.model === "string") {
-    state.parseTextualReasoningTags = shouldParseTextualReasoningTags(undefined, chunk.model);
-  }
+  rememberChatModel(chunk, state);
   const parseTextualReasoningTags = state.parseTextualReasoningTags === true;
-  // #3697: remember the upstream-resolved model so response.created/in_progress/completed
-  // can carry a `model` field (the Responses API spec has one; this translator previously
-  // omitted it). Codex CLI compatibility shim (chatCore's echoModel pipeline) rewrites this
-  // field to the client-requested effort-suffixed id for codex-originated requests.
-  if (!state.model && typeof chunk.model === "string" && chunk.model.trim()) {
-    state.model = chunk.model.trim();
-  }
-
   // Emit initial events
   if (!state.started) {
-    state.started = true;
-    state.responseId = chunk.id ? responsesResponseId(chunk.id) : state.responseId;
-
-    const createdResponse: Record<string, unknown> = {
-      id: state.responseId,
-      object: "response",
-      created_at: state.created,
-      status: "in_progress",
-      background: false,
-      error: null,
-      output: [],
-    };
-    if (state.model) createdResponse.model = state.model;
-    emit("response.created", {
-      type: "response.created",
-      response: createdResponse,
-    });
-
-    const inProgressResponse: Record<string, unknown> = {
-      id: state.responseId,
-      object: "response",
-      created_at: state.created,
-      status: "in_progress",
-    };
-    if (state.model) inProgressResponse.model = state.model;
-    emit("response.in_progress", {
-      type: "response.in_progress",
-      response: inProgressResponse,
-    });
+    startResponses(chunk, state, emit);
   }
 
   if (delta.reasoning_content) {
     startReasoning(state, emit, idx);
     emitReasoningDelta(state, emit, delta.reasoning_content);
   }
-  if (delta.content) {
-    if (
-      state.reasoningId &&
-      !state.reasoningDone &&
-      (!parseTextualReasoningTags || !state.inThinking)
-    ) {
-      closeReasoning(state, emit);
-    }
-
-    let content = delta.content;
-
-    if (parseTextualReasoningTags) {
-      if (content.includes("<think>")) {
-        state.inThinking = true;
-        content = content.replaceAll("<think>", "");
-        startReasoning(state, emit, idx);
-      }
-
-      if (content.includes("</think>")) {
-        const parts = content.split("</think>");
-        const thinkPart = parts[0];
-        const textPart = parts.slice(1).join("</think>");
-        if (thinkPart) emitReasoningDelta(state, emit, thinkPart);
-        closeReasoning(state, emit);
-        state.inThinking = false;
-        content = textPart;
-      }
-
-      if (state.inThinking && content) {
-        emitReasoningDelta(state, emit, content);
-        return events;
-      }
-    }
-
-    if (content) {
-      const msgIdx = state.reasoningId ? state.reasoningIndex + 1 : idx;
-      emitTextContent(state, emit, msgIdx, content);
-    }
+  if (
+    delta.content &&
+    emitChatContent(delta.content, state, emit, idx, parseTextualReasoningTags)
+  ) {
+    return events;
   }
 
   // Handle tool_calls
   if (delta.tool_calls) {
-    // Close reasoning first so tool calls do not collide with an open
-    // reasoning item, then close the message at its real index.
-    if (state.reasoningId && !state.reasoningDone) {
-      closeReasoning(state, emit);
-    }
-    const msgIdx = state.reasoningId ? state.reasoningIndex + 1 : idx;
-    closeMessage(state, emit, msgIdx);
-    for (const tc of delta.tool_calls) {
-      emitToolCall(state, emit, tc);
-    }
+    emitChatTools(delta, state, emit, idx);
   }
 
   // Handle finish_reason
   if (choice.finish_reason) {
-    state.responsesTerminalSeen = true;
-    for (const i in state.msgItemAdded) closeMessage(state, emit, i);
-    closeReasoning(state, emit);
-    for (const i in state.funcCallIds) closeToolCall(state, emit, i);
-    // #6906: usage already captured (same chunk or earlier) completes now; otherwise
-    // defer for a trailing usage-only chunk, handled above and in flushEvents().
-    if (state.usage) {
-      sendCompleted(state, emit);
-    } else {
-      state.awaitingTrailingUsage = true;
-    }
+    finishChatResponse(state, emit);
   }
 
   return events;
@@ -399,18 +293,7 @@ function emitToolCall(state, emit, tc) {
   const newCallId = tc.id;
   const funcName = tc.function?.name;
 
-  // T37: If we already have a tool call at this index but the ID changed,
-  // we must close the current one and start a new one to prevent merging.
-  if (state.funcCallIds[tcIdx] && newCallId && state.funcCallIds[tcIdx] !== newCallId) {
-    // Superseded call: close and emit output_item.done but do NOT record as final output
-    // since this call was replaced by a new one at the same index.
-    closeToolCall(state, emit, tcIdx, false);
-    delete state.funcCallIds[tcIdx];
-    delete state.funcNames[tcIdx];
-    delete state.funcArgsBuf[tcIdx];
-    delete state.funcArgsDone[tcIdx];
-    delete state.funcItemDone[tcIdx];
-  }
+  closeSupersededToolCall(state, emit, tcIdx, newCallId);
 
   if (funcName) state.funcNames[tcIdx] = funcName;
 
@@ -446,24 +329,7 @@ function emitToolCall(state, emit, tc) {
   if (!state.funcArgsBuf[tcIdx]) state.funcArgsBuf[tcIdx] = "";
 
   if (tc.function?.arguments) {
-    const refCallId = state.funcCallIds[tcIdx] || newCallId;
-    const existingArgs = state.funcArgsBuf[tcIdx] || "";
-    const sanitized = escapeJsonStringValues(tc.function.arguments);
-    const nextArgs = appendToolCallArgumentDelta(existingArgs, sanitized);
-    const emittedDelta = nextArgs.slice(existingArgs.length);
-    state.funcArgsBuf[tcIdx] = nextArgs;
-
-    if (refCallId && emittedDelta) {
-      const deltaEvent = isCustomTool
-        ? "response.custom_tool_call_input.delta"
-        : "response.function_call_arguments.delta";
-      emit(deltaEvent, {
-        type: deltaEvent,
-        item_id: responsesOutputItemId("fc", refCallId),
-        output_index: tcIdx,
-        delta: emittedDelta,
-      });
-    }
+    emitToolArgumentDelta(state, emit, tc, tcIdx, newCallId, isCustomTool);
   }
 }
 
@@ -669,16 +535,7 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
   const data = chunk.data || chunk;
 
   if (!state.model) {
-    const upstreamModel =
-      (data?.response && typeof data.response === "object" && data.response.model) ||
-      data?.model ||
-      data?.modelVersion ||
-      data?.model_version ||
-      null;
-
-    if (typeof upstreamModel === "string" && upstreamModel.trim().length > 0) {
-      state.model = upstreamModel.trim();
-    }
+    rememberResponsesModel(data, state);
   }
 
   // Initialize state
@@ -690,45 +547,131 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
     state.currentToolCallId = null;
   }
 
-  // Text content delta
-  if (eventType === "response.output_text.delta") {
-    const delta = data.delta || "";
-    if (!delta) return null;
+  const handler = Object.hasOwn(responsesChatHandlers, eventType)
+    ? responsesChatHandlers[eventType]
+    : null;
+  return handler ? handler(data, state) : null;
+}
 
-    return {
-      id: state.chatId,
-      object: "chat.completion.chunk",
-      created: state.created,
-      model: state.model || "gpt-4",
-      choices: [
-        {
-          index: 0,
-          delta: { content: delta },
-          finish_reason: null,
-        },
-      ],
-    };
-  }
+// Register both directions
+register(FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES, null, openaiToOpenAIResponsesResponse);
+register(FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI, null, openaiResponsesToOpenAIResponse);
 
-  // Text content done (ignore, we handle via delta)
-  if (eventType === "response.output_text.done") {
+function responsesTextDelta(data, state) {
+  const delta = data.delta || "";
+  if (!delta) return null;
+
+  return {
+    id: state.chatId,
+    object: "chat.completion.chunk",
+    created: state.created,
+    model: state.model || "gpt-4",
+    choices: [
+      {
+        index: 0,
+        delta: { content: delta },
+        finish_reason: null,
+      },
+    ],
+  };
+}
+
+function responsesTextDone(data, state) {
+  return null;
+}
+
+function responsesToolAdded(data, state) {
+  const item = data.item;
+  state.currentToolCallId = item.call_id || fallbackToolCallId();
+  state.currentToolCallArgsBuffer = ""; // reset per-call arg buffer
+  state.currentToolCallDeferred = false;
+
+  const toolName = normalizeToolName(item.name);
+  if (!toolName) {
+    // Some Responses providers briefly emit placeholder/empty tool names.
+    // Defer emission until output_item.done in case the final name is populated there.
+    state.currentToolCallDeferred = true;
     return null;
   }
 
-  // Function call started
-  if (eventType === "response.output_item.added" && data.item?.type === "function_call") {
-    const item = data.item;
-    state.currentToolCallId = item.call_id || fallbackToolCallId();
-    state.currentToolCallArgsBuffer = ""; // reset per-call arg buffer
-    state.currentToolCallDeferred = false;
+  return {
+    id: state.chatId,
+    object: "chat.completion.chunk",
+    created: state.created,
+    model: state.model || "gpt-4",
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: state.toolCallIndex,
+              id: state.currentToolCallId,
+              type: "function",
+              function: {
+                name: toolName,
+                arguments: "",
+              },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+  };
+}
 
-    const toolName = normalizeToolName(item.name);
+function responsesToolArgsDelta(data, state) {
+  const argsDelta = data.delta || "";
+  if (!argsDelta) return null;
+
+  state.currentToolCallArgsBuffer = (state.currentToolCallArgsBuffer || "") + argsDelta;
+  if (state.currentToolCallDeferred) return null;
+
+  return {
+    id: state.chatId,
+    object: "chat.completion.chunk",
+    created: state.created,
+    model: state.model || "gpt-4",
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: state.toolCallIndex,
+              function: { arguments: argsDelta },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ],
+  };
+}
+
+function responsesToolDone(data, state) {
+  const item = data.item;
+  const buffered = state.currentToolCallArgsBuffer || "";
+  const currentIndex = state.toolCallIndex; // capture before increment
+  const callId = item.call_id || state.currentToolCallId || fallbackToolCallId();
+  const toolName = normalizeToolName(item.name);
+  const toolSchema = state.toolSchemas?.get(toolName);
+
+  if (state.currentToolCallDeferred) {
+    state.currentToolCallDeferred = false;
+    state.currentToolCallArgsBuffer = "";
+    state.currentToolCallId = null;
+
     if (!toolName) {
-      // Some Responses providers briefly emit placeholder/empty tool names.
-      // Defer emission until output_item.done in case the final name is populated there.
-      state.currentToolCallDeferred = true;
       return null;
     }
+
+    state.toolCallIndex++;
+
+    const argsToEmit = stripEmptyOptionalToolArgs(item.arguments, toolName, toolSchema);
+
+    const argsStr = serializeDeferredArgs(argsToEmit, buffered);
 
     return {
       id: state.chatId,
@@ -741,12 +684,12 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
           delta: {
             tool_calls: [
               {
-                index: state.toolCallIndex,
-                id: state.currentToolCallId,
+                index: currentIndex,
+                id: callId,
                 type: "function",
                 function: {
                   name: toolName,
-                  arguments: "",
+                  arguments: argsStr || "",
                 },
               },
             ],
@@ -757,70 +700,16 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
     };
   }
 
-  // Function call arguments delta
-  // NOTE: Do NOT include `id` or `type` here - only first chunk (response.output_item.added)
-  // should have them. Including `id` on every chunk causes openai-to-claude.ts to emit
-  // a new content_block_start for each delta, breaking Claude Code ACP sessions.
-  if (eventType === "response.function_call_arguments.delta") {
-    const argsDelta = data.delta || "";
-    if (!argsDelta) return null;
+  state.toolCallIndex++;
+  state.currentToolCallArgsBuffer = ""; // reset for next tool call
+  state.currentToolCallId = null;
 
-    state.currentToolCallArgsBuffer = (state.currentToolCallArgsBuffer || "") + argsDelta;
-    if (state.currentToolCallDeferred) return null;
+  // Only emit if arguments exist in the done event AND they weren't already streamed via deltas
+  if (item.arguments != null && !buffered) {
+    const argsToEmit = stripEmptyOptionalToolArgs(item.arguments, toolName, toolSchema);
 
-    return {
-      id: state.chatId,
-      object: "chat.completion.chunk",
-      created: state.created,
-      model: state.model || "gpt-4",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            tool_calls: [
-              {
-                index: state.toolCallIndex,
-                function: { arguments: argsDelta },
-              },
-            ],
-          },
-          finish_reason: null,
-        },
-      ],
-    };
-  }
-
-  // Function call done — emit args chunk from item.arguments when no deltas were received,
-  // then advance the tool-call index. This handles Codex Responses API payloads that
-  // carry the complete arguments only in output_item.done (no preceding delta events).
-  if (eventType === "response.output_item.done" && data.item?.type === "function_call") {
-    const item = data.item;
-    const buffered = state.currentToolCallArgsBuffer || "";
-    const currentIndex = state.toolCallIndex; // capture before increment
-    const callId = item.call_id || state.currentToolCallId || fallbackToolCallId();
-    const toolName = normalizeToolName(item.name);
-    const toolSchema = state.toolSchemas?.get(toolName);
-
-    if (state.currentToolCallDeferred) {
-      state.currentToolCallDeferred = false;
-      state.currentToolCallArgsBuffer = "";
-      state.currentToolCallId = null;
-
-      if (!toolName) {
-        return null;
-      }
-
-      state.toolCallIndex++;
-
-      const argsToEmit = stripEmptyOptionalToolArgs(item.arguments, toolName, toolSchema);
-
-      const argsStr =
-        argsToEmit != null
-          ? typeof argsToEmit === "string"
-            ? argsToEmit
-            : JSON.stringify(argsToEmit)
-          : buffered;
-
+    const argsStr = typeof argsToEmit === "string" ? argsToEmit : JSON.stringify(argsToEmit);
+    if (argsStr) {
       return {
         id: state.chatId,
         object: "chat.completion.chunk",
@@ -833,12 +722,7 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
               tool_calls: [
                 {
                   index: currentIndex,
-                  id: callId,
-                  type: "function",
-                  function: {
-                    name: toolName,
-                    arguments: argsStr || "",
-                  },
+                  function: { arguments: argsStr },
                 },
               ],
             },
@@ -847,134 +731,24 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
         ],
       };
     }
-
-    state.toolCallIndex++;
-    state.currentToolCallArgsBuffer = ""; // reset for next tool call
-    state.currentToolCallId = null;
-
-    // Only emit if arguments exist in the done event AND they weren't already streamed via deltas
-    if (item.arguments != null && !buffered) {
-      const argsToEmit = stripEmptyOptionalToolArgs(item.arguments, toolName, toolSchema);
-
-      const argsStr = typeof argsToEmit === "string" ? argsToEmit : JSON.stringify(argsToEmit);
-      if (argsStr) {
-        return {
-          id: state.chatId,
-          object: "chat.completion.chunk",
-          created: state.created,
-          model: state.model || "gpt-4",
-          choices: [
-            {
-              index: 0,
-              delta: {
-                tool_calls: [
-                  {
-                    index: currentIndex,
-                    function: { arguments: argsStr },
-                  },
-                ],
-              },
-              finish_reason: null,
-            },
-          ],
-        };
-      }
-    }
-
-    return null;
   }
 
-  // Response completed
-  if (eventType === "response.completed") {
-    // Extract usage from response.completed event
-    const responseUsage = data.response?.usage;
-    if (responseUsage && typeof responseUsage === "object") {
-      const inputTokens = responseUsage.input_tokens || responseUsage.prompt_tokens || 0;
-      const outputTokens = responseUsage.output_tokens || responseUsage.completion_tokens || 0;
-      const cacheReadTokens =
-        responseUsage.cache_read_input_tokens ||
-        responseUsage.input_tokens_details?.cached_tokens ||
-        responseUsage.prompt_tokens_details?.cached_tokens ||
-        0;
-      const cacheCreationTokens = responseUsage.cache_creation_input_tokens || 0;
-      const reasoningTokens =
-        responseUsage.output_tokens_details?.reasoning_tokens ||
-        responseUsage.completion_tokens_details?.reasoning_tokens ||
-        responseUsage.reasoning_tokens ||
-        0;
+  return null;
+}
 
-      // prompt_tokens = input_tokens + cache_read + cache_creation (all prompt-side tokens)
-      const promptTokens = inputTokens + cacheReadTokens + cacheCreationTokens;
-
-      state.usage = {
-        prompt_tokens: promptTokens,
-        completion_tokens: outputTokens,
-        total_tokens: promptTokens + outputTokens,
-      };
-
-      // Add prompt_tokens_details if cache tokens exist
-      if (cacheReadTokens > 0 || cacheCreationTokens > 0) {
-        state.usage.prompt_tokens_details = {};
-        if (cacheReadTokens > 0) {
-          state.usage.prompt_tokens_details.cached_tokens = cacheReadTokens;
-        }
-        if (cacheCreationTokens > 0) {
-          state.usage.prompt_tokens_details.cache_creation_tokens = cacheCreationTokens;
-        }
-      }
-
-      // Add completion_tokens_details if reasoning tokens exist
-      if (reasoningTokens > 0) {
-        state.usage.completion_tokens_details = {
-          reasoning_tokens: reasoningTokens,
-        };
-      }
-    }
-
-    if (!state.finishReasonSent) {
-      state.finishReasonSent = true;
-      const reason = computeFinishReason(state);
-      state.finishReason = reason; // Mark for usage injection in stream.js
-
-      const finalChunk: Record<string, unknown> = {
-        id: state.chatId,
-        object: "chat.completion.chunk",
-        created: state.created,
-        model: state.model || "gpt-4",
-        choices: [
-          {
-            index: 0,
-            delta: {},
-            finish_reason: reason,
-          },
-        ],
-      };
-
-      // Include usage in final chunk if available
-      if (state.usage && typeof state.usage === "object") {
-        finalChunk.usage = state.usage;
-      }
-
-      return finalChunk;
-    }
-    return null;
+function responsesCompleted(data, state) {
+  // Extract usage from response.completed event
+  const responseUsage = data.response?.usage;
+  if (responseUsage && typeof responseUsage === "object") {
+    captureResponsesUsage(responseUsage, state);
   }
 
-  if (eventType === "response.failed" || eventType === "error") {
-    state.upstreamError = normalizeUpstreamFailure(data);
+  if (!state.finishReasonSent) {
     state.finishReasonSent = true;
-    return null;
-  }
+    const reason = computeFinishReason(state);
+    state.finishReason = reason; // Mark for usage injection in stream.js
 
-  // Reasoning events — emit as reasoning_content in Chat format
-  if (
-    eventType === "response.reasoning_content_text.delta" ||
-    eventType === "response.reasoning_text.delta"
-  ) {
-    const reasoningDelta = data.delta || "";
-    if (!reasoningDelta) return null;
-    markResponsesReasoningDeltaEmitted(state, data.item_id);
-    return {
+    const finalChunk: Record<string, unknown> = {
       id: state.chatId,
       object: "chat.completion.chunk",
       created: state.created,
@@ -982,55 +756,330 @@ function openaiResponsesToOpenAIResponseStream(chunk, state) {
       choices: [
         {
           index: 0,
-          delta: { reasoning_content: reasoningDelta },
-          finish_reason: null,
+          delta: {},
+          finish_reason: reason,
         },
       ],
     };
+
+    // Include usage in final chunk if available
+    if (state.usage && typeof state.usage === "object") {
+      finalChunk.usage = state.usage;
+    }
+
+    return finalChunk;
   }
-
-  // Handle true reasoning summary ("Thought for 15s").
-  // Emit as `delta.reasoning_content` — matches the shape used by the
-  // `reasoning_content_text.delta` branch above and is what Chat clients
-  // (OpenCode, Claude Code, Cursor, etc.) actually render in their thinking
-  // panel. A nested `delta.reasoning.summary` object is swallowed by most
-  // stream mergers and never reaches the user.
-  if (eventType === "response.reasoning_summary_text.delta") {
-    const reasoningDelta = data.delta || "";
-    if (!reasoningDelta) return null;
-    markResponsesReasoningDeltaEmitted(state, data.item_id);
-    return buildResponsesReasoningDeltaChunk(state, reasoningDelta);
-  }
-
-  // #5786 — reasoning summary exposed ONLY as a terminal snapshot on
-  // `response.output_item.done` (no preceding reasoning_summary_text.delta events — e.g.
-  // Codex reasoning models that surface the summary once at item close). Without this the
-  // reasoning channel is silently dropped and never reaches the client's thinking panel.
-  // Only synthesize when NO reasoning delta was already streamed for this item, so normal
-  // delta streams are never duplicated.
-  if (eventType === "response.output_item.done" && data.item?.type === "reasoning") {
-    const item = data.item;
-    const itemId = item.id != null ? String(item.id) : "";
-    const emittedForItem =
-      state.reasoningItemsWithDelta instanceof Set &&
-      itemId &&
-      state.reasoningItemsWithDelta.has(itemId);
-    // Deltas were streamed but carried no item_id: fall back to the global flag and
-    // suppress synthesis to avoid duplicating that same reasoning text.
-    const emittedWithoutItemId =
-      state.reasoningDeltaEmitted &&
-      !(state.reasoningItemsWithDelta instanceof Set && state.reasoningItemsWithDelta.size > 0);
-    if (emittedForItem || emittedWithoutItemId) return null;
-
-    const summaryText = extractResponsesReasoningSummaryText(item);
-    if (!summaryText) return null;
-    return buildResponsesReasoningDeltaChunk(state, summaryText);
-  }
-
-  // Ignore other events
   return null;
 }
 
-// Register both directions
-register(FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES, null, openaiToOpenAIResponsesResponse);
-register(FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI, null, openaiResponsesToOpenAIResponse);
+function responsesFailed(data, state) {
+  state.upstreamError = normalizeUpstreamFailure(data);
+  state.finishReasonSent = true;
+  return null;
+}
+
+function responsesReasoningDelta(data, state) {
+  const reasoningDelta = data.delta || "";
+  if (!reasoningDelta) return null;
+  markResponsesReasoningDeltaEmitted(state, data.item_id);
+  return {
+    id: state.chatId,
+    object: "chat.completion.chunk",
+    created: state.created,
+    model: state.model || "gpt-4",
+    choices: [
+      {
+        index: 0,
+        delta: { reasoning_content: reasoningDelta },
+        finish_reason: null,
+      },
+    ],
+  };
+}
+
+function responsesReasoningSummaryDelta(data, state) {
+  const reasoningDelta = data.delta || "";
+  if (!reasoningDelta) return null;
+  markResponsesReasoningDeltaEmitted(state, data.item_id);
+  return buildResponsesReasoningDeltaChunk(state, reasoningDelta);
+}
+
+function responsesReasoningDone(data, state) {
+  const item = data.item;
+  const itemId = item.id != null ? String(item.id) : "";
+  const emittedForItem =
+    state.reasoningItemsWithDelta instanceof Set &&
+    itemId &&
+    state.reasoningItemsWithDelta.has(itemId);
+  // Deltas were streamed but carried no item_id: fall back to the global flag and
+  // suppress synthesis to avoid duplicating that same reasoning text.
+  const emittedWithoutItemId =
+    state.reasoningDeltaEmitted &&
+    !(state.reasoningItemsWithDelta instanceof Set && state.reasoningItemsWithDelta.size > 0);
+  if (emittedForItem || emittedWithoutItemId) return null;
+
+  const summaryText = extractResponsesReasoningSummaryText(item);
+  if (!summaryText) return null;
+  return buildResponsesReasoningDeltaChunk(state, summaryText);
+}
+
+const responsesChatHandlers = {
+  "response.output_text.delta": responsesTextDelta,
+  "response.output_text.done": responsesTextDone,
+  "response.output_item.added": (data, state) =>
+    data.item?.type === "function_call" ? responsesToolAdded(data, state) : null,
+  "response.function_call_arguments.delta": responsesToolArgsDelta,
+  "response.output_item.done": (data, state) => {
+    if (data.item?.type === "function_call") return responsesToolDone(data, state);
+    if (data.item?.type === "reasoning") return responsesReasoningDone(data, state);
+    return null;
+  },
+  "response.completed": responsesCompleted,
+  "response.failed": responsesFailed,
+  error: responsesFailed,
+  "response.reasoning_content_text.delta": responsesReasoningDelta,
+  "response.reasoning_text.delta": responsesReasoningDelta,
+  "response.reasoning_summary_text.delta": responsesReasoningSummaryDelta,
+};
+
+function captureChatUsage(u, state) {
+  const input_tokens = u.input_tokens ?? u.prompt_tokens ?? 0;
+  const output_tokens = u.output_tokens ?? u.completion_tokens ?? 0;
+  state.usage = {
+    input_tokens,
+    output_tokens,
+    total_tokens: u.total_tokens ?? input_tokens + output_tokens,
+  };
+  const cachedTokens =
+    u.input_tokens_details?.cached_tokens ?? u.prompt_tokens_details?.cached_tokens;
+  if (cachedTokens) {
+    state.usage.input_tokens_details = { cached_tokens: cachedTokens };
+  }
+  const reasoningTokens =
+    u.output_tokens_details?.reasoning_tokens ?? u.completion_tokens_details?.reasoning_tokens;
+  if (reasoningTokens) {
+    state.usage.output_tokens_details = { reasoning_tokens: reasoningTokens };
+  }
+}
+
+function startResponses(chunk, state, emit) {
+  state.started = true;
+  state.responseId = chunk.id ? responsesResponseId(chunk.id) : state.responseId;
+
+  const createdResponse: Record<string, unknown> = {
+    id: state.responseId,
+    object: "response",
+    created_at: state.created,
+    status: "in_progress",
+    background: false,
+    error: null,
+    output: [],
+  };
+  if (state.model) createdResponse.model = state.model;
+  emit("response.created", {
+    type: "response.created",
+    response: createdResponse,
+  });
+
+  const inProgressResponse: Record<string, unknown> = {
+    id: state.responseId,
+    object: "response",
+    created_at: state.created,
+    status: "in_progress",
+  };
+  if (state.model) inProgressResponse.model = state.model;
+  emit("response.in_progress", {
+    type: "response.in_progress",
+    response: inProgressResponse,
+  });
+}
+
+function emitChatContent(content, state, emit, idx, parseTextualReasoningTags) {
+  if (
+    state.reasoningId &&
+    !state.reasoningDone &&
+    (!parseTextualReasoningTags || !state.inThinking)
+  ) {
+    closeReasoning(state, emit);
+  }
+
+  if (parseTextualReasoningTags) {
+    if (content.includes("<think>")) {
+      state.inThinking = true;
+      content = content.replaceAll("<think>", "");
+      startReasoning(state, emit, idx);
+    }
+
+    if (content.includes("</think>")) {
+      content = finishTextualThinking(content, state, emit);
+    }
+
+    if (state.inThinking && content) {
+      emitReasoningDelta(state, emit, content);
+      return true;
+    }
+  }
+
+  if (content) {
+    const msgIdx = state.reasoningId ? state.reasoningIndex + 1 : idx;
+    emitTextContent(state, emit, msgIdx, content);
+  }
+  return false;
+}
+
+function rememberChatModel(chunk, state) {
+  if (state.parseTextualReasoningTags !== true && typeof chunk.model === "string") {
+    state.parseTextualReasoningTags = shouldParseTextualReasoningTags(undefined, chunk.model);
+  }
+  // #3697: remember the upstream-resolved model so response.created/in_progress/completed
+  // can carry a `model` field (the Responses API spec has one; this translator previously
+  // omitted it). Codex CLI compatibility shim (chatCore's echoModel pipeline) rewrites this
+  // field to the client-requested effort-suffixed id for codex-originated requests.
+  if (!state.model && typeof chunk.model === "string" && chunk.model.trim()) {
+    state.model = chunk.model.trim();
+  }
+}
+
+function emitChatTools(delta, state, emit, idx) {
+  // Close reasoning first so tool calls do not collide with an open
+  // reasoning item, then close the message at its real index.
+  if (state.reasoningId && !state.reasoningDone) {
+    closeReasoning(state, emit);
+  }
+  const msgIdx = state.reasoningId ? state.reasoningIndex + 1 : idx;
+  closeMessage(state, emit, msgIdx);
+  for (const tc of delta.tool_calls) {
+    emitToolCall(state, emit, tc);
+  }
+}
+
+function finishChatResponse(state, emit) {
+  state.responsesTerminalSeen = true;
+  for (const i in state.msgItemAdded) closeMessage(state, emit, i);
+  closeReasoning(state, emit);
+  for (const i in state.funcCallIds) closeToolCall(state, emit, i);
+  // #6906: usage already captured (same chunk or earlier) completes now; otherwise
+  // defer for a trailing usage-only chunk, handled above and in flushEvents().
+  if (state.usage) {
+    sendCompleted(state, emit);
+  } else {
+    state.awaitingTrailingUsage = true;
+  }
+}
+
+function rememberResponsesModel(data, state) {
+  const upstreamModel =
+    (data?.response && typeof data.response === "object" && data.response.model) ||
+    data?.model ||
+    data?.modelVersion ||
+    data?.model_version ||
+    null;
+
+  if (typeof upstreamModel === "string" && upstreamModel.trim().length > 0) {
+    state.model = upstreamModel.trim();
+  }
+}
+
+function captureResponsesUsage(responseUsage, state) {
+  const inputTokens = responseUsage.input_tokens || responseUsage.prompt_tokens || 0;
+  const outputTokens = responseUsage.output_tokens || responseUsage.completion_tokens || 0;
+  const cacheReadTokens =
+    responseUsage.cache_read_input_tokens ||
+    responseUsage.input_tokens_details?.cached_tokens ||
+    responseUsage.prompt_tokens_details?.cached_tokens ||
+    0;
+  const cacheCreationTokens = responseUsage.cache_creation_input_tokens || 0;
+  const reasoningTokens = responsesReasoningTokens(responseUsage);
+
+  // prompt_tokens = input_tokens + cache_read + cache_creation (all prompt-side tokens)
+  const promptTokens = inputTokens + cacheReadTokens + cacheCreationTokens;
+
+  state.usage = {
+    prompt_tokens: promptTokens,
+    completion_tokens: outputTokens,
+    total_tokens: promptTokens + outputTokens,
+  };
+
+  captureUsageDetails(state, cacheReadTokens, cacheCreationTokens, reasoningTokens);
+}
+
+function captureUsageDetails(state, cacheReadTokens, cacheCreationTokens, reasoningTokens) {
+  // Add prompt_tokens_details if cache tokens exist
+  if (cacheReadTokens > 0 || cacheCreationTokens > 0) {
+    state.usage.prompt_tokens_details = {};
+    if (cacheReadTokens > 0) {
+      state.usage.prompt_tokens_details.cached_tokens = cacheReadTokens;
+    }
+    if (cacheCreationTokens > 0) {
+      state.usage.prompt_tokens_details.cache_creation_tokens = cacheCreationTokens;
+    }
+  }
+
+  // Add completion_tokens_details if reasoning tokens exist
+  if (reasoningTokens > 0) {
+    state.usage.completion_tokens_details = {
+      reasoning_tokens: reasoningTokens,
+    };
+  }
+}
+
+function serializeDeferredArgs(value, buffered) {
+  if (value == null) return buffered;
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function closeSupersededToolCall(state, emit, tcIdx, newCallId) {
+  // T37: If we already have a tool call at this index but the ID changed,
+  // we must close the current one and start a new one to prevent merging.
+  if (state.funcCallIds[tcIdx] && newCallId && state.funcCallIds[tcIdx] !== newCallId) {
+    // Superseded call: close and emit output_item.done but do NOT record as final output
+    // since this call was replaced by a new one at the same index.
+    closeToolCall(state, emit, tcIdx, false);
+    delete state.funcCallIds[tcIdx];
+    delete state.funcNames[tcIdx];
+    delete state.funcArgsBuf[tcIdx];
+    delete state.funcArgsDone[tcIdx];
+    delete state.funcItemDone[tcIdx];
+  }
+}
+
+function emitToolArgumentDelta(state, emit, tc, tcIdx, newCallId, isCustomTool) {
+  const refCallId = state.funcCallIds[tcIdx] || newCallId;
+  const existingArgs = state.funcArgsBuf[tcIdx] || "";
+  const sanitized = escapeJsonStringValues(tc.function.arguments);
+  const nextArgs = appendToolCallArgumentDelta(existingArgs, sanitized);
+  const emittedDelta = nextArgs.slice(existingArgs.length);
+  state.funcArgsBuf[tcIdx] = nextArgs;
+
+  if (refCallId && emittedDelta) {
+    const deltaEvent = isCustomTool
+      ? "response.custom_tool_call_input.delta"
+      : "response.function_call_arguments.delta";
+    emit(deltaEvent, {
+      type: deltaEvent,
+      item_id: responsesOutputItemId("fc", refCallId),
+      output_index: tcIdx,
+      delta: emittedDelta,
+    });
+  }
+}
+
+function finishTextualThinking(content, state, emit) {
+  const parts = content.split("</think>");
+  const thinkPart = parts[0];
+  const textPart = parts.slice(1).join("</think>");
+  if (thinkPart) emitReasoningDelta(state, emit, thinkPart);
+  closeReasoning(state, emit);
+  state.inThinking = false;
+  content = textPart;
+  return content;
+}
+
+function responsesReasoningTokens(responseUsage) {
+  const reasoningTokens =
+    responseUsage.output_tokens_details?.reasoning_tokens ||
+    responseUsage.completion_tokens_details?.reasoning_tokens ||
+    responseUsage.reasoning_tokens ||
+    0;
+  return reasoningTokens;
+}

@@ -1,0 +1,1 @@
+- **fix(responses):** Recover missing buffered terminal tool-call IDs from matching indexed done items, preserving final fields and avoiding ambiguous fallback reuse ([CLIProxyAPI #4623](https://github.com/router-for-me/CLIProxyAPI/pull/4623) — thanks @cls3389). Implemented independently for the frozen TypeScript pipeline.

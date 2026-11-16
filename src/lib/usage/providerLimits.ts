@@ -1,4 +1,3 @@
-import { markConnectionRefreshRejectedIfUnchanged } from "@/lib/db/providers";
 import {
   getAllProviderLimitsCache,
   getProviderConnectionById,
@@ -14,12 +13,7 @@ import {
 } from "@/lib/localDb";
 import { syncToCloud } from "@/lib/cloudSync";
 import { setQuotaCache } from "@/domain/quotaCache";
-import {
-  buildClaudeExtraUsageConnectionUpdate,
-  CLAUDE_EXTRA_USAGE_ERROR_SOURCE,
-  isClaudeExtraUsageBlockEnabled,
-  isClaudeExtraUsageQueued,
-} from "@/lib/providers/claudeExtraUsage";
+import { buildClaudeExtraUsageConnectionUpdate } from "@/lib/providers/claudeExtraUsage";
 import { clearRecoveredProviderState } from "@/sse/services/auth";
 import { getMachineId } from "@/shared/utils/machine";
 import { USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
@@ -35,7 +29,26 @@ import {
 } from "@omniroute/open-sse/services/codeAssistSubscription.ts";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { isUnrecoverableRefreshError } from "@omniroute/open-sse/services/tokenRefresh.ts";
-import { recordKiroRefreshDiagnostic } from "@omniroute/open-sse/services/tokenRefreshUtils.ts";
+import { fetchQuotaWithProxyRetry } from "./providerLimits/proxyRetry";
+import {
+  withStatus,
+  isQuotaRefreshBlocked,
+  recordQuotaRefreshSkipped,
+  quotaRefreshSnapshotChanged,
+  quotaRefreshCredentials,
+  handleRejectedQuotaRefresh,
+  quotaCredentialUpdate,
+} from "./providerLimits/refreshState";
+import {
+  isUsageAuthError,
+  hasUsableQuota,
+  quotaPathShouldMarkExpired,
+  isTerminalStatusForQuotaRecovery,
+  quotaRecoveryStillBlocked,
+  hasTransientQuotaState,
+} from "./providerLimits/recoveryPolicy";
+export { hasUsableQuota, quotaPathShouldMarkExpired } from "./providerLimits/recoveryPolicy";
+import type { JsonRecord, ProviderConnectionLike, SyncSource } from "./providerLimits/types";
 import { onUsageRecorded } from "./usageEvents";
 import {
   isRecord,
@@ -44,30 +57,6 @@ import {
   sanitizeUsageQuotasForProvider,
   toProviderLimitsCacheEntry,
 } from "./providerLimits/quotaNormalize";
-
-type JsonRecord = Record<string, unknown>;
-type SyncSource = "manual" | "scheduled";
-
-interface ProviderConnectionLike {
-  id: string;
-  provider: string;
-  authType?: string;
-  accessToken?: string;
-  refreshToken?: string;
-  expiresAt?: string;
-  tokenExpiresAt?: string;
-  providerSpecificData?: JsonRecord;
-  testStatus?: string;
-  isActive?: boolean;
-  lastError?: string | null;
-  lastErrorAt?: string | null;
-  lastErrorType?: string | null;
-  lastErrorSource?: string | null;
-  errorCode?: string | number | null;
-  rateLimitedUntil?: string | null;
-  backoffLevel?: number;
-  updatedAt?: string;
-}
 
 const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
   "glm",
@@ -189,10 +178,6 @@ export function isSupportedUsageConnection(connection: ProviderConnectionLike | 
   );
 }
 
-function withStatus(error: Error, status: number): Error & { status: number } {
-  return Object.assign(error, { status });
-}
-
 async function syncToCloudIfEnabled() {
   try {
     const machineId = await getMachineId();
@@ -222,20 +207,6 @@ export function shouldAttemptRotatingRefresh(
 ): boolean {
   if (rotationGroupFor(provider) === null) return true;
   return allowRotatingRefresh === true;
-}
-
-const QUOTA_REFRESH_TERMINAL_STATUSES = new Set(["banned", "expired", "deactivated"]);
-
-function isQuotaRefreshBlocked(connection: ProviderConnectionLike): boolean {
-  return (
-    connection.isActive === false || QUOTA_REFRESH_TERMINAL_STATUSES.has(connection.testStatus)
-  );
-}
-
-function recordQuotaRefreshSkipped(connection: ProviderConnectionLike): void {
-  if (connection.provider === "kiro") {
-    recordKiroRefreshDiagnostic({ connectionId: connection.id, source: "quota" }, "skipped");
-  }
 }
 
 function skippedQuotaUsage(connection: ProviderConnectionLike): JsonRecord {
@@ -270,16 +241,7 @@ export async function refreshAndUpdateCredentials(
     return { connection, refreshed: false };
   }
   const executor = await getExecutor(connection.provider);
-  const credentials = {
-    connectionId: connection.id,
-    refreshSource: "quota" as const,
-    accessToken: connection.accessToken,
-    refreshToken: connection.refreshToken,
-    expiresAt: connection.tokenExpiresAt || connection.expiresAt || null,
-    providerSpecificData: connection.providerSpecificData,
-    copilotToken: connection.providerSpecificData?.copilotToken,
-    copilotTokenExpiresAt: connection.providerSpecificData?.copilotTokenExpiresAt,
-  };
+  const credentials = quotaRefreshCredentials(connection);
 
   // `force` is used ONLY on the reactive 401 recovery path (a usage fetch came
   // back unauthorized) — it bypasses the proactive `needsRefresh` heuristic so
@@ -299,12 +261,7 @@ export async function refreshAndUpdateCredentials(
       connection.id
     )) as unknown as ProviderConnectionLike | null;
     if (!latest) throw withStatus(new Error("Connection not found"), 404);
-    if (
-      latest &&
-      (isQuotaRefreshBlocked(latest) ||
-        latest.refreshToken !== connection.refreshToken ||
-        (latest.accessToken || "") !== (connection.accessToken || ""))
-    ) {
+    if (quotaRefreshSnapshotChanged(latest, connection)) {
       skippedConnection = latest;
       recordQuotaRefreshSkipped(latest);
       return null;
@@ -335,49 +292,7 @@ export async function refreshAndUpdateCredentials(
   }
 
   if (isUnrecoverableRefreshError(refreshResult)) {
-    // A refresh can overlap re-authentication or another writer. Never mark its newer
-    // credentials invalid because the older snapshot was rejected upstream.
-    const latest = (await getProviderConnectionById(
-      connection.id
-    )) as unknown as ProviderConnectionLike | null;
-    if (!latest) throw withStatus(new Error("Connection not found"), 404);
-    if (
-      latest &&
-      (isQuotaRefreshBlocked(latest) ||
-        latest.refreshToken !== connection.refreshToken ||
-        (latest.accessToken || "") !== (connection.accessToken || ""))
-    ) {
-      return { connection: latest, refreshed: false };
-    }
-    const current = latest || connection;
-    const expiry = Date.parse(current.tokenExpiresAt || current.expiresAt || "");
-    const accessTokenStillValid =
-      Boolean(current.accessToken) && Number.isFinite(expiry) && expiry > Date.now();
-    if (latest?.updatedAt) {
-      const applied = markConnectionRefreshRejectedIfUnchanged(
-        connection.id,
-        latest.updatedAt,
-        accessTokenStillValid
-      );
-      if (!applied) {
-        return {
-          connection: ((await getProviderConnectionById(connection.id)) ||
-            current) as ProviderConnectionLike,
-          refreshed: false,
-        };
-      }
-    }
-    if (accessTokenStillValid) {
-      return {
-        connection: { ...current, lastErrorType: "unrecoverable_refresh_error" },
-        refreshed: false,
-        reauthRequired: true,
-      };
-    }
-    throw withStatus(
-      new Error("Refresh credential rejected. Please re-authenticate this account."),
-      401
-    );
+    return handleRejectedQuotaRefresh(connection);
   }
 
   if (!refreshResult) {
@@ -395,31 +310,7 @@ export async function refreshAndUpdateCredentials(
     );
   }
 
-  const updateData: JsonRecord = {
-    updatedAt: new Date().toISOString(),
-  };
-
-  if (refreshResult.accessToken) {
-    updateData.accessToken = refreshResult.accessToken;
-  }
-  if (refreshResult.refreshToken) {
-    updateData.refreshToken = refreshResult.refreshToken;
-  }
-  if (refreshResult.expiresIn) {
-    const expiresAt = new Date(Date.now() + refreshResult.expiresIn * 1000).toISOString();
-    updateData.expiresAt = expiresAt;
-    updateData.tokenExpiresAt = expiresAt;
-  } else if (refreshResult.expiresAt) {
-    updateData.expiresAt = refreshResult.expiresAt;
-    updateData.tokenExpiresAt = refreshResult.expiresAt;
-  }
-  if (refreshResult.copilotToken || refreshResult.copilotTokenExpiresAt) {
-    updateData.providerSpecificData = {
-      ...(connection.providerSpecificData || {}),
-      copilotToken: refreshResult.copilotToken,
-      copilotTokenExpiresAt: refreshResult.copilotTokenExpiresAt,
-    };
-  }
+  const updateData = quotaCredentialUpdate(connection, refreshResult);
 
   await updateProviderConnection(connection.id, updateData);
 
@@ -435,30 +326,6 @@ export async function refreshAndUpdateCredentials(
   };
 }
 
-function isUsageAuthError(message: unknown): boolean {
-  if (typeof message !== "string") return false;
-  const m = message.toLowerCase();
-  return (
-    m.includes("token expired") ||
-    m.includes("unauthorized") ||
-    m.includes("re-authenticate") ||
-    m.includes("access denied") ||
-    m.includes("invalidated") ||
-    m.includes("401")
-  );
-}
-
-function isNetworkFailureMessage(message: unknown): boolean {
-  if (typeof message !== "string") return false;
-  return (
-    message.includes("fetch failed") ||
-    message.includes("ECONNREFUSED") ||
-    message.includes("ETIMEDOUT") ||
-    message.includes("Proxy unreachable") ||
-    message.includes("UND_ERR_CONNECT_TIMEOUT")
-  );
-}
-
 function isAccountScopedProxyResolution(proxyInfo: unknown): boolean {
   if (!isRecord(proxyInfo)) return false;
   if (!proxyInfo.proxy) return false;
@@ -472,90 +339,6 @@ function shouldFailClosedForProviderLimitsProxy(
   return connection.authType === "oauth" && isAccountScopedProxyResolution(proxyInfo);
 }
 
-/**
- * Decide whether the quota-sync path should flag a connection `expired` from an
- * auth-style usage error. Exported for unit testing.
- *
- * Rotating-refresh providers (Codex/OpenAI/Claude/etc. — see refreshSerializer's
- * ROTATION_LOCK_GROUP) have their access_token deliberately NOT proactively
- * refreshed in this quota path (#3019, to avoid the Auth0 family-revocation
- * cascade). So a "token expired" from the quota fetch is a recoverable
- * false-negative: the credential is still valid (its `expires_at` is in the
- * future) and the reactive, serialized 401 path refreshes the access_token on
- * next use. Flagging it `expired` hides a healthy account from the quota page
- * (observed: freshly-added Codex accounts flagged expired while a providers-page
- * refresh turns them green). So never mark a rotating provider expired from the
- * quota sync — leave its status to the reactive path / connection test.
- */
-export function quotaPathShouldMarkExpired(
-  provider: string,
-  usageMessage: unknown,
-  currentTestStatus: string | null | undefined
-): boolean {
-  if (currentTestStatus === "expired") return false;
-
-  const message = typeof usageMessage === "string" ? usageMessage.toLowerCase() : "";
-  const isAuthError =
-    message.includes("token expired") ||
-    message.includes("access denied") ||
-    message.includes("re-authenticate") ||
-    message.includes("unauthorized");
-  if (!isAuthError) return false;
-
-  if (rotationGroupFor(provider) !== null) return false;
-
-  return true;
-}
-
-const TERMINAL_STATUSES_FOR_QUOTA_RECOVERY = new Set([
-  "credits_exhausted",
-  "banned",
-  "expired",
-  "deactivated",
-]);
-
-function isTerminalStatusForQuotaRecovery(testStatus: string | null | undefined): boolean {
-  if (!testStatus) return false;
-  return TERMINAL_STATUSES_FOR_QUOTA_RECOVERY.has(testStatus);
-}
-
-export function hasUsableQuota(usage: JsonRecord): boolean {
-  const quotas = usage?.quotas;
-  if (!isRecord(quotas)) return false;
-  for (const value of Object.values(quotas)) {
-    if (!isRecord(value)) continue;
-    if (value.unlimited === true) return true;
-    const remaining =
-      typeof value.remaining === "number"
-        ? value.remaining
-        : typeof value.remainingPercentage === "number"
-          ? value.remainingPercentage
-          : null;
-    if (remaining !== null && remaining > 0) return true;
-  }
-  return false;
-}
-
-// A window "still blocks" recovery when it governs quota and is either still
-// exhausted with a real reset that hasn't passed yet, or exhausted with no
-// parseable real reset at all (unknown-reset windows stay locked, matching
-// the pre-existing kimi-coding partial-refresh semantics).
-function windowStillExhaustedAfterRealReset(value: unknown, nowMs: number): boolean {
-  if (!isRecord(value)) return false;
-  if (value.unlimited === true) return false;
-  const remaining =
-    typeof value.remaining === "number"
-      ? value.remaining
-      : typeof value.remainingPercentage === "number"
-        ? value.remainingPercentage
-        : null;
-  if (remaining !== null && remaining > 0) return false;
-  if (value.resetAt == null) return true;
-  const resetMs = Date.parse(String(value.resetAt));
-  if (Number.isNaN(resetMs)) return true;
-  return resetMs > nowMs;
-}
-
 export async function maybeClearRecoveredQuotaState(
   connection: ProviderConnectionLike,
   usage: JsonRecord
@@ -564,76 +347,12 @@ export async function maybeClearRecoveredQuotaState(
   if (isTerminalStatusForQuotaRecovery(connection.testStatus)) return connection;
   // An accepted access token or positive quota does not validate its rejected refresh credential.
   if (connection.lastErrorType === "unrecoverable_refresh_error") return connection;
-  if (connection.lastErrorType === "quota_exhausted") {
-    if (
-      connection.lastErrorSource === CLAUDE_EXTRA_USAGE_ERROR_SOURCE &&
-      isClaudeExtraUsageBlockEnabled(connection.provider, connection.providerSpecificData) &&
-      isClaudeExtraUsageQueued(usage)
-    ) {
-      // Claude's pay-as-you-go extra-usage block is orthogonal to the
-      // session/weekly quota windows checked below: the upstream can report a
-      // fully recovered quota window while extraUsage.queued is still true.
-      // Only syncClaudeExtraUsageStateIfNeeded (buildClaudeExtraUsageConnectionUpdate)
-      // owns clearing this specific state — the general window-recovery logic
-      // below must not release it just because some quota window looks fresh.
-      return connection;
-    }
-
-    const quotas = usage?.quotas;
-    if (isRecord(quotas)) {
-      // Honor the REAL per-window resetAt from the freshly fetched quota
-      // instead of the synthetic cooldown persisted at failure time (e.g.
-      // Claude's flat 1h SUBSCRIPTION_QUOTA_COOLDOWN_MS when no upstream
-      // reset was parseable). Only stay locked if some window that governs
-      // this connection's quota is still demonstrably exhausted.
-      const anyStillBlocking = Object.values(quotas).some((value) =>
-        windowStillExhaustedAfterRealReset(value, Date.now())
-      );
-      if (anyStillBlocking) return connection;
-    } else if (
-      connection.rateLimitedUntil &&
-      new Date(connection.rateLimitedUntil).getTime() > Date.now()
-    ) {
-      // No quota object at all (degraded/failed fetch shape) — fall back to
-      // the previous synthetic-cooldown guard.
-      return connection;
-    }
-  }
-
-  const hasTransientState =
-    connection.testStatus === "unavailable" ||
-    Boolean(connection.rateLimitedUntil) ||
-    Boolean(connection.lastError) ||
-    Boolean(connection.errorCode) ||
-    Boolean(connection.lastErrorType) ||
-    Boolean(connection.lastErrorSource) ||
-    (connection.backoffLevel ?? 0) > 0;
+  if (quotaRecoveryStillBlocked(connection, usage)) return connection;
+  const hasTransientState = hasTransientQuotaState(connection);
 
   if (!hasTransientState) return connection;
 
-  let cleared = true;
-  try {
-    const result = await clearRecoveredProviderState(
-      {
-        connectionId: connection.id,
-        testStatus: connection.testStatus,
-        lastError: connection.lastError ?? null,
-        rateLimitedUntil: connection.rateLimitedUntil ?? null,
-        errorCode: connection.errorCode ?? null,
-        lastErrorType: connection.lastErrorType ?? null,
-        lastErrorSource: connection.lastErrorSource ?? null,
-      },
-      {
-        testStatus: connection.testStatus ?? null,
-        lastErrorAt: connection.lastErrorAt ?? null,
-        rateLimitedUntil: connection.rateLimitedUntil ?? null,
-      }
-    );
-    cleared = result.applied;
-  } catch (dbError) {
-    console.warn("[ProviderLimits] Failed to clear recovered quota state:", dbError);
-    return connection;
-  }
+  const cleared = await clearRecoveredQuotaSnapshot(connection);
 
   if (!cleared) {
     // CAS miss — a concurrent writer (markAccountUnavailable, etc.) updated
@@ -653,6 +372,31 @@ export async function maybeClearRecoveredQuotaState(
     rateLimitedUntil: null,
     backoffLevel: 0,
   };
+}
+
+async function clearRecoveredQuotaSnapshot(connection: ProviderConnectionLike): Promise<boolean> {
+  try {
+    const result = await clearRecoveredProviderState(
+      {
+        connectionId: connection.id,
+        testStatus: connection.testStatus,
+        lastError: connection.lastError ?? null,
+        rateLimitedUntil: connection.rateLimitedUntil ?? null,
+        errorCode: connection.errorCode ?? null,
+        lastErrorType: connection.lastErrorType ?? null,
+        lastErrorSource: connection.lastErrorSource ?? null,
+      },
+      {
+        testStatus: connection.testStatus ?? null,
+        lastErrorAt: connection.lastErrorAt ?? null,
+        rateLimitedUntil: connection.rateLimitedUntil ?? null,
+      }
+    );
+    return result.applied;
+  } catch (dbError) {
+    console.warn("[ProviderLimits] Failed to clear recovered quota state:", dbError);
+    return false;
+  }
 }
 
 async function syncExpiredStatusIfNeeded(
@@ -901,14 +645,7 @@ async function fetchLiveProviderLimitsWithOptions(
         getUsageForProvider(connection as unknown as JsonRecord, options)
       )) as JsonRecord
     );
-    if (isRecord(usage.quotas)) {
-      setQuotaCache(connectionId, connection.provider, usage.quotas);
-    }
-    connection = await syncExpiredStatusIfNeeded(connection, usage);
-    connection = await syncClaudeExtraUsageStateIfNeeded(connection, usage);
-    connection = await syncClaudeBootstrapIfNeeded(connection, usage);
-    connection = await syncAntigravitySubscriptionIfNeeded(connection, usage);
-    connection = await maybeClearRecoveredQuotaState(connection, usage);
+    connection = await applyProviderQuotaState(connection, usage);
     return { connection, usage };
   }
 
@@ -930,10 +667,7 @@ async function fetchLiveProviderLimitsWithOptions(
         await syncToCloudIfEnabled();
       }
 
-      let usageData = sanitizeUsageQuotasForProvider(
-        conn.provider,
-        (await getUsageForProvider(conn as unknown as JsonRecord, options)) as JsonRecord
-      );
+      let usageData = await fetchSanitizedProviderUsage(conn, options);
 
       // Reactive 401 recovery (on-demand/force path only): an unauthorized usage
       // response means the access token is actually dead. Force ONE serialized
@@ -953,10 +687,7 @@ async function fetchLiveProviderLimitsWithOptions(
         if (forced.refreshed) {
           conn = forced.connection;
           await syncToCloudIfEnabled();
-          usageData = sanitizeUsageQuotasForProvider(
-            conn.provider,
-            (await getUsageForProvider(conn as unknown as JsonRecord, options)) as JsonRecord
-          );
+          usageData = await fetchSanitizedProviderUsage(conn, options);
         }
       }
 
@@ -964,77 +695,34 @@ async function fetchLiveProviderLimitsWithOptions(
       return { usage: usageData };
     });
 
-  let result: { usage: JsonRecord };
-  const proxyConfig = proxyInfo?.proxy || null;
-  const failClosedOnProxyFailure = shouldFailClosedForProviderLimitsProxy(connection, proxyInfo);
+  const result = await fetchQuotaWithProxyRetry(
+    connection,
+    proxyInfo,
+    shouldFailClosedForProviderLimitsProxy(connection, proxyInfo),
+    fetchUsageWithContext
+  );
 
-  try {
-    result = await fetchUsageWithContext(proxyConfig);
-  } catch (error: any) {
-    const isThrownNetworkError =
-      error?.message === "fetch failed" ||
-      error?.code === "PROXY_UNREACHABLE" ||
-      error?.code === "UND_ERR_CONNECT_TIMEOUT" ||
-      error?.cause?.code === "ECONNREFUSED";
-
-    if (proxyConfig && isThrownNetworkError) {
-      if (failClosedOnProxyFailure) {
-        console.warn(
-          "[ProviderLimits] Account-scoped %s proxy fetch failed for %s; failing closed without direct retry:",
-          connection.provider,
-          connectionId,
-          error?.message
-        );
-        throw error;
-      }
-
-      console.warn(
-        "[ProviderLimits] Proxy fetch threw for %s, retrying without proxy:",
-        connectionId,
-        error?.message
-      );
-      result = await fetchUsageWithContext(null);
-    } else {
-      throw error;
-    }
-  }
-
-  if (proxyConfig && isNetworkFailureMessage(result.usage?.message)) {
-    if (failClosedOnProxyFailure) {
-      const message =
-        typeof result.usage.message === "string"
-          ? result.usage.message
-          : "Provider-limits proxy request failed";
-      console.warn(
-        "[ProviderLimits] Account-scoped %s proxy usage failed for %s; failing closed without direct retry:",
-        connection.provider,
-        connectionId,
-        message
-      );
-      throw withStatus(new Error(message), 503);
-    }
-
-    console.warn(
-      "[ProviderLimits] Proxy usage returned network error for %s, retrying without proxy:",
-      connectionId,
-      result.usage.message
-    );
-    result = await fetchUsageWithContext(null);
-  }
-
-  if (isRecord(result.usage.quotas)) {
-    setQuotaCache(connectionId, connection.provider, result.usage.quotas);
-  }
-  connection = await syncExpiredStatusIfNeeded(connection, result.usage);
-  connection = await syncClaudeExtraUsageStateIfNeeded(connection, result.usage);
-  connection = await syncClaudeBootstrapIfNeeded(connection, result.usage);
-  connection = await syncAntigravitySubscriptionIfNeeded(connection, result.usage);
-  connection = await maybeClearRecoveredQuotaState(connection, result.usage);
+  connection = await applyProviderQuotaState(connection, result.usage);
 
   return {
     connection,
     usage: result.usage,
   };
+}
+
+async function applyProviderQuotaState(
+  connection: ProviderConnectionLike,
+  usage: JsonRecord
+): Promise<ProviderConnectionLike> {
+  if (isRecord(usage.quotas)) {
+    setQuotaCache(connection.id, connection.provider, usage.quotas);
+  }
+  connection = await syncExpiredStatusIfNeeded(connection, usage);
+  connection = await syncClaudeExtraUsageStateIfNeeded(connection, usage);
+  connection = await syncClaudeBootstrapIfNeeded(connection, usage);
+  connection = await syncAntigravitySubscriptionIfNeeded(connection, usage);
+  connection = await maybeClearRecoveredQuotaState(connection, usage);
+  return connection;
 }
 
 export async function fetchAndPersistProviderLimits(
@@ -1100,30 +788,6 @@ export async function syncAllProviderLimits(
   const caches: Record<string, ProviderLimitsCacheEntry> = {};
   const errors: Record<string, string> = {};
 
-  const recordResult = (
-    connectionId: string,
-    result: PromiseSettledResult<{ connectionId: string; cache: ProviderLimitsCacheEntry }>
-  ) => {
-    if (result.status === "fulfilled") {
-      const { cache } = result.value;
-      // Don't persist error-only entries; show prior cache or pass through.
-      if (!cache.quotas && cache.message) {
-        const previous = getProviderLimitsCache(connectionId);
-        if (previous?.quotas && Object.keys(previous.quotas).length > 0) {
-          caches[connectionId] = previous;
-        } else {
-          caches[connectionId] = cache;
-        }
-        return;
-      }
-      cacheEntries.push({ connectionId, entry: cache });
-      caches[connectionId] = cache;
-      return;
-    }
-    const reason = result.reason as { message?: string } | undefined;
-    errors[connectionId] = reason?.message || "Failed to refresh provider limits";
-  };
-
   const fetchOne = async (connection: ProviderConnectionLike) => {
     const existingCache = getProviderLimitsCache(connection.id);
     const forceRefresh =
@@ -1149,14 +813,15 @@ export async function syncAllProviderLimits(
     const results = await Promise.allSettled(chunk.map(fetchOne));
     results.forEach((result, index) => {
       const connectionId = chunk[index]?.id;
-      if (connectionId) recordResult(connectionId, result);
+      if (connectionId)
+        recordProviderQuotaResult(connectionId, result, cacheEntries, caches, errors);
     });
   }
 
   for (let i = 0; i < oauthConnections.length; i++) {
     const connection = oauthConnections[i];
     const [result] = await Promise.allSettled([fetchOne(connection)]);
-    recordResult(connection.id, result);
+    recordProviderQuotaResult(connection.id, result, cacheEntries, caches, errors);
     if (spacingMs > 0 && i < oauthConnections.length - 1) {
       await syncDelay(spacingMs);
     }
@@ -1177,4 +842,41 @@ export async function syncAllProviderLimits(
     caches,
     errors,
   };
+}
+
+function recordProviderQuotaResult(
+  connectionId: string,
+  result: PromiseSettledResult<{ connectionId: string; cache: ProviderLimitsCacheEntry }>,
+  cacheEntries: Array<{ connectionId: string; entry: ProviderLimitsCacheEntry }>,
+  caches: Record<string, ProviderLimitsCacheEntry>,
+  errors: Record<string, string>
+) {
+  if (result.status === "fulfilled") {
+    const { cache } = result.value;
+    // Don't persist error-only entries; show prior cache or pass through.
+    if (!cache.quotas && cache.message) {
+      const previous = getProviderLimitsCache(connectionId);
+      if (previous?.quotas && Object.keys(previous.quotas).length > 0) {
+        caches[connectionId] = previous;
+      } else {
+        caches[connectionId] = cache;
+      }
+      return;
+    }
+    cacheEntries.push({ connectionId, entry: cache });
+    caches[connectionId] = cache;
+    return;
+  }
+  const reason = result.reason as { message?: string } | undefined;
+  errors[connectionId] = reason?.message || "Failed to refresh provider limits";
+}
+
+async function fetchSanitizedProviderUsage(
+  connection: ProviderConnectionLike,
+  options: { forceRefresh?: boolean; allowRotatingRefresh?: boolean }
+): Promise<JsonRecord> {
+  return sanitizeUsageQuotasForProvider(
+    connection.provider,
+    (await getUsageForProvider(connection as unknown as JsonRecord, options)) as JsonRecord
+  );
 }

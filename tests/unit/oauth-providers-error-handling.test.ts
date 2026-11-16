@@ -180,7 +180,7 @@ test("P2: refreshQwenToken handles invalid_grant in addition to invalid_request"
 
 test("P2: refreshKiroToken parses AWS InvalidGrantException", async () => {
   const src = await read("open-sse/services/tokenRefresh.ts");
-  const fnMatch = src.match(/export\s+async\s+function\s+refreshKiroToken\([\s\S]+?\n\}/);
+  const fnMatch = src.match(/async\s+function\s+refreshKiroTokenInternal\([\s\S]+?\n\}/);
   assert.ok(fnMatch, "refreshKiroToken function body not found");
   assert.match(
     fnMatch[0],
@@ -192,7 +192,7 @@ test("P2: refreshKiroToken parses AWS InvalidGrantException", async () => {
 
 test("P2: refreshKiroToken handles AWS errors on both AWS OIDC and social auth paths", async () => {
   const src = await read("open-sse/services/tokenRefresh.ts");
-  const fnMatch = src.match(/export\s+async\s+function\s+refreshKiroToken\([\s\S]+?\n\}/);
+  const fnMatch = src.match(/async\s+function\s+refreshKiroTokenInternal\([\s\S]+?\n\}/);
   assert.ok(fnMatch, "refreshKiroToken function body not found");
   // Count occurrences of InvalidGrantException — should appear in both paths
   const matchCount = (fnMatch[0].match(/InvalidGrantException/g) || []).length;

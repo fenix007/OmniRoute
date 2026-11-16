@@ -1,0 +1,2 @@
+- **chore(maintenance):** Preserve frozen size limits with policy/module and test splits, repair stale quota/Kiro fixtures, document the existing Grok CLI version override, and keep policy snapshot restoration compatible with macOS Bash.
+- **refactor(core):** Split existing SSE, Codex, image and quota helpers to satisfy the frozen complexity gates while preserving protocol and account behavior.
