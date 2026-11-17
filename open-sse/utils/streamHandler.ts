@@ -1,5 +1,6 @@
 import { getStreamErrorStatusMapping } from "./streamErrorStatus.ts";
 import { trackPendingRequest } from "@/lib/usageDb";
+import { finalizePendingRequestById, type PendingRequestMetadata } from "@/lib/usage/usageHistory";
 import { STREAM_IDLE_TIMEOUT_MS } from "../config/constants.ts";
 import { FORMATS } from "../translator/formats.ts";
 import { PENDING_REQUEST_CLEARED_MARKER } from "./stream.ts";
@@ -35,6 +36,7 @@ type StreamControllerOptions = {
   provider?: string;
   model?: string;
   connectionId?: string | null;
+  pendingRequestId?: string | null;
   clientResponseFormat?: string | null;
   clientAbortSignal?: AbortSignal | null;
   /**
@@ -187,6 +189,7 @@ export function createStreamController({
   provider,
   model,
   connectionId,
+  pendingRequestId,
   clientResponseFormat,
   clientAbortSignal,
   upstreamAbortSignal,
@@ -207,9 +210,10 @@ export function createStreamController({
     );
   };
 
-  const clearPendingRequest = (error?: unknown) => {
+  const clearPendingRequest = (error?: unknown, metadata: PendingRequestMetadata = {}) => {
     if (pendingRequestCleared) return;
     if (
+      !pendingRequestId &&
       error &&
       typeof error === "object" &&
       (error as Record<string, unknown>)[PENDING_REQUEST_CLEARED_MARKER] === true
@@ -219,9 +223,14 @@ export function createStreamController({
     }
 
     pendingRequestCleared = true;
-    if (!model && !provider && !connectionId) return;
+    if (!pendingRequestId && !model && !provider && !connectionId) return;
     try {
-      trackPendingRequest(model || "", provider || "", connectionId ?? null, false);
+      if (pendingRequestId) {
+        // An explicit id that has already completed must never clear a sibling.
+        finalizePendingRequestById(pendingRequestId, metadata);
+      } else {
+        trackPendingRequest(model || "", provider || "", connectionId ?? null, false);
+      }
     } catch {}
   };
 
@@ -271,13 +280,19 @@ export function createStreamController({
 
       logStream(`disconnect: ${reason}`);
 
-      // Decrement pending request counter — the TransformStream flush() won't
-      // fire when the client aborts mid-stream, so we must clean up here.
-      clearPendingRequest();
+      // Let the request owner record full terminal evidence before fallback cleanup.
+      // A cancelled transform never runs flush(), so a fallback is still required.
+      try {
+        pendingRequestCleared =
+          onDisconnect?.({ reason, duration: Date.now() - startTime }) === true;
+      } catch {}
+      clearPendingRequest(undefined, {
+        status: 499,
+        error: `Client disconnected: ${reason}`,
+        errorCode: "client_disconnected",
+      });
 
       abortController.abort(reason);
-
-      onDisconnect?.({ reason, duration: Date.now() - startTime });
     },
 
     // Call when stream completes normally
@@ -286,6 +301,9 @@ export function createStreamController({
       disconnected = true;
       cleanupAbortListeners();
 
+      // Clients may stop reading immediately after a terminal SSE event, before
+      // the transform flushes. Finalize this request without touching its peers.
+      if (pendingRequestId) clearPendingRequest(undefined, { status: 200 });
       logStream("complete");
     },
 
@@ -302,7 +320,7 @@ export function createStreamController({
       // skip the onError failover/cooldown path — otherwise one cancelled request marks
       // the upstream connection unavailable.
       if (disconnected || isClientDisconnectError(error)) {
-        clearPendingRequest(error);
+        clearPendingRequest(error, { status: 499, errorCode: "client_disconnected" });
         logStream(disconnected ? "client_disconnect (post-abort)" : "client_disconnect");
         return;
       }
@@ -322,7 +340,11 @@ export function createStreamController({
       }
 
       if (!handled) {
-        clearPendingRequest(error);
+        clearPendingRequest(error, {
+          status: getErrorStatusCode(error),
+          error: getErrorMessage(error),
+          errorCode: "stream_pipeline_error",
+        });
       } else {
         pendingRequestCleared = true;
       }

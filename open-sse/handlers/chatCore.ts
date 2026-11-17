@@ -2325,6 +2325,7 @@ export async function handleChatCore({
 
   // Create stream controller for disconnect detection
   const streamController = createStreamController({
+    pendingRequestId,
     onDisconnect: (event) => {
       let finalized = false;
       try {

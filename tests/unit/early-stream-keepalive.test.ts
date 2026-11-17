@@ -70,7 +70,10 @@ test("ANTHROPIC_PING_FRAME is a real Anthropic ping event (not a comment)", () =
 
 test("slow handler emits the custom keepaliveFrame (Anthropic ping) before the body", async () => {
   const slow = new Promise<Response>((resolve) => {
-    setTimeout(() => resolve(sseResponse("event: message_start\ndata: {}\n\ndata: [DONE]\n\n")), 120);
+    setTimeout(
+      () => resolve(sseResponse("event: message_start\ndata: {}\n\ndata: [DONE]\n\n")),
+      120
+    );
   });
 
   const result = await withEarlyStreamKeepalive(slow, {
@@ -150,3 +153,45 @@ test("aborting the client signal stops the keepalive stream (#2544)", async () =
   const timed = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500));
   assert.equal(await Promise.race([drained, timed]), true, "stream should close after abort");
 });
+
+for (const disconnect of ["signal", "cancel", "already-aborted"] as const) {
+  test(`a ${disconnect} disconnect cancels the handler body when it arrives late`, async () => {
+    const abortController = new AbortController();
+    let resolveHandler!: (response: Response) => void;
+    const handler = new Promise<Response>((resolve) => {
+      resolveHandler = resolve;
+    });
+    if (disconnect === "already-aborted") abortController.abort("client closed");
+    const response = await withEarlyStreamKeepalive(handler, {
+      thresholdMs: 1,
+      signal: abortController.signal,
+    });
+    const reader = response.body!.getReader();
+    if (disconnect !== "already-aborted") await reader.read();
+    if (disconnect === "signal") abortController.abort("client closed");
+    else if (disconnect === "cancel") await reader.cancel("client closed");
+    let cancelledReason: unknown;
+    let didCancel!: () => void;
+    const cancelled = new Promise<void>((resolve) => {
+      didCancel = resolve;
+    });
+    resolveHandler(
+      new Response(
+        new ReadableStream({
+          cancel(reason) {
+            cancelledReason = reason;
+            didCancel();
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } }
+      )
+    );
+    await Promise.race([
+      cancelled,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("late body not cancelled")), 250)
+      ),
+    ]);
+    assert.equal(cancelledReason, "client closed");
+  });
+}
