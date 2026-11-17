@@ -284,6 +284,7 @@ export async function withEarlyStreamKeepalive(
   let stopKeepalive = () => {};
   let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   let aborted = false;
+  let abortReason: unknown;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -317,20 +318,27 @@ export async function withEarlyStreamKeepalive(
 
       const onAbort = () => {
         aborted = true;
+        abortReason = signal?.reason;
         stopKeepalive();
-        upstreamReader?.cancel().catch(() => {});
+        upstreamReader?.cancel(abortReason).catch(() => {});
         try {
           controller.close();
         } catch {
           /* already closed */
         }
       };
-      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener("abort", onAbort, { once: true });
 
       try {
         const result = await settled;
         stopKeepalive();
-        if (aborted) return; // client disconnected while we were waiting
+        if (aborted) {
+          // A handler can resolve after its caller left, before a reader existed.
+          // Cancel that late body too so its disconnect finalizer releases provider work.
+          if (result.ok) await result.response.body?.cancel(abortReason).catch(() => {});
+          return;
+        }
 
         if (!result.ok) {
           // Handler rejected — emit a generic error frame (never the raw error/stack).
@@ -359,7 +367,7 @@ export async function withEarlyStreamKeepalive(
               // received partial content and a late error frame would corrupt
               // the SSE stream. Silently close instead; the client will see
               // the stream end naturally.
-              if (bytesForwarded === 0) {
+              if (!aborted && bytesForwarded === 0) {
                 controller.enqueue(genericErrorFrame);
               }
             }
@@ -396,11 +404,12 @@ export async function withEarlyStreamKeepalive(
         }
       }
     },
-    cancel() {
+    cancel(reason) {
       // Consumer (Next.js → client) went away — stop keepalives and release the upstream.
       aborted = true;
+      abortReason = reason;
       stopKeepalive();
-      upstreamReader?.cancel().catch(() => {});
+      return upstreamReader?.cancel(reason).catch(() => {});
     },
   });
 

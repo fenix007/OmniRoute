@@ -14,13 +14,17 @@ export type PendingRequestScope = {
 };
 
 export function updatePendingScope(scope: PendingRequestScope, metadata: PendingRequestMetadata) {
-  if (!updatePendingRequestById(scope.id || null, metadata)) {
+  if (scope.id) {
+    updatePendingRequestById(scope.id, metadata);
+  } else {
     updatePendingRequest(scope.model, scope.provider, scope.connectionId, metadata);
   }
 }
 
 export function finalizePendingScope(scope: PendingRequestScope, metadata: PendingRequestMetadata) {
-  if (!finalizePendingRequestById(scope.id, metadata)) {
+  if (scope.id) {
+    finalizePendingRequestById(scope.id, metadata);
+  } else {
     finalizePendingRequest(scope.model, scope.provider, scope.connectionId, metadata);
   }
 }
