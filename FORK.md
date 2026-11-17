@@ -1618,3 +1618,7 @@ fetch-error sanitizer and its regression; the final 116-test affected run passes
 with that change. Core typecheck, lint and all previously listed local gates pass;
 complexity is 2,060/892 with unchanged limits. Both source patch downloads remain
 byte-identical to their reviewed copies at the final pre-publication check.
+
+On November 17 the user requested tightening the cognitive ratchet to the measured 892. The combined scan confirms 2,060 cyclomatic/size and 892 cognitive violations;
+only the cognitive baseline decreases from 895 to 892. The preceding validation
+remains applicable because this follow-up changes only the baseline and this note.
