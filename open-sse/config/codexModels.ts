@@ -10,6 +10,7 @@ export const GPT_5_6_ULTRA_ALIAS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra
 // model id. `ultra` is an OmniRoute-side tier that goes out as wire effort `max`
 // while keeping parallel tool calls for sub-agent delegation.
 export const GPT_6_ALIAS_MODELS = new Set([
+  "gpt-6.2-sol",
   "gpt-6.1-sol",
   "gpt-6-astra",
   "gpt-6-sol",
@@ -31,7 +32,7 @@ export function splitCodexReasoningSuffix(model: unknown): {
     }
   }
 
-  const gpt6AliasMatch = /^(gpt-6-(?:astra|sol|luna)|gpt-6\.1-sol)-(max|ultra)$/.exec(modelId);
+  const gpt6AliasMatch = /^(gpt-6-(?:astra|sol|luna)|gpt-6\.[12]-sol)-(max|ultra)$/.exec(modelId);
   if (gpt6AliasMatch) {
     const [, baseModel, alias] = gpt6AliasMatch;
     if (GPT_6_ALIAS_MODELS.has(baseModel) && !(baseModel === "gpt-6-luna" && alias === "ultra")) {

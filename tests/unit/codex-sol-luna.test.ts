@@ -120,8 +120,8 @@ test("upstream identity stays pinned regardless of caller version or User-Agent"
         true,
         clientHeaders
       );
-      assert.equal(headers.Version, "0.159.2");
-      assert.equal(headers["User-Agent"], "codex-cli/0.159.2 (Windows 10.0.26200; x64)");
+      assert.equal(headers.Version, "0.169.0");
+      assert.equal(headers["User-Agent"], "codex-cli/0.169.0 (Windows 10.0.26200; x64)");
     }
   }
 });

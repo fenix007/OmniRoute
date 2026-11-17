@@ -34,7 +34,7 @@ export function extendCodexGpt56EffortValues(
     return values;
   }
 
-  if (/^gpt-6\.1-sol(?:-(?:low|medium|high|xhigh|max|ultra))?$/.test(normalizedModel)) {
+  if (/^gpt-6\.[12]-sol(?:-(?:low|medium|high|xhigh|max|ultra))?$/.test(normalizedModel)) {
     return ["low", "medium", "high", "xhigh", "max", "ultra"];
   }
 

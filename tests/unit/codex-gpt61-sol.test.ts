@@ -213,8 +213,8 @@ test("Sol streams tool events and retains Ultra parallel calls with the updated 
     assert.match(output, /response.completed/);
     assert.match(output, /call_sol/);
     const sent = captured.at(-1)!;
-    assert.equal(sent.headers.get("version"), "0.159.2");
-    assert.match(sent.headers.get("user-agent") || "", /0\.159\.2/);
+    assert.equal(sent.headers.get("version"), "0.169.0");
+    assert.match(sent.headers.get("user-agent") || "", /0\.169\.0/);
     assert.equal(sent.body.model, MODEL);
     assert.equal(sent.body.parallel_tool_calls, effort === "ultra");
     assert.equal((sent.body.tools as { name: string }[])[0].name, "lookup");

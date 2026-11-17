@@ -1622,3 +1622,27 @@ byte-identical to their reviewed copies at the final pre-publication check.
 On November 17 the user requested tightening the cognitive ratchet to the measured 892. The combined scan confirms 2,060 cyclomatic/size and 892 cognitive violations;
 only the cognitive baseline decreases from 895 to 892. The preceding validation
 remains applicable because this follow-up changes only the baseline and this note.
+
+### GPT-6.2 Sol on Codex OAuth
+
+The Codex catalog includes `gpt-6.2-sol` and its Low, Medium, High, xHigh, Max,
+and Ultra aliases. They use the existing 872K Codex context budget and default
+to Low, matching the current official Codex model catalog. The aliases resolve
+to the base wire model for account eligibility and routing hints. Max survives
+Chat Completions translation; Ultra retains parallel tool delegation. VS Code
+discovery exposes the same efforts without generating nested aliases.
+
+Sources: `open-sse/config/providers/registry/codex/index.ts`,
+`open-sse/config/codexModels.ts`, `open-sse/executors/codex.ts`, and
+`src/lib/vscode/reasoningMetadata.ts`. Regression coverage:
+`tests/unit/codex-gpt62-sol.test.ts`. Public API limits are not inferred from
+the OAuth catalog. Codex pricing follows the official
+[ChatGPT pricing table](https://learn.chatgpt.com/docs/pricing): 50 / 2.5 / 250
+credits per million input / cached input / output tokens, matching GPT-6.1 Sol.
+Fast is eligible by default and uses the documented 2x multiplier; output
+pricing counts reasoning-inclusive output once.
+
+Codex upstream identity, discovery requests, the compatible-provider CLI preset,
+and the optional Docker CLI are pinned to the official `0.169.0` release.
+Existing identity regression tests check the updated Version and User-Agent
+headers, including WebSocket and compact requests.

@@ -101,8 +101,10 @@ export function getCodexFastCostMultiplier(
 
   const modelKey = stripCodexEffortSuffix(normalizeModelName(String(model || "")).toLowerCase());
   const compactModelKey = modelKey.replace(/-/g, "");
-  // Purchased credits use 2x; included subscription allowance uses 2.5x.
-  if (compactModelKey === "gpt6.1sol") return 2;
+  // GPT-6.2 Sol Fast uses 2x for both credits and included usage.
+  // GPT-6.1 Sol retains its existing purchased-credit estimate of 2x.
+  // https://learn.chatgpt.com/docs/pricing
+  if (/^gpt6\.[12]sol$/.test(compactModelKey)) return 2;
   // Codex Astra Fast is 2.5x Standard (https://developers.openai.com/codex/pricing).
   if (
     /^gpt-6-(?:astra|sol|luna)$/.test(modelKey) ||
@@ -173,7 +175,7 @@ export function computeCostFromPricing(
   if (reasoningTokens > 0) {
     const model = stripCodexEffortSuffix(normalizeModelName(options.model || ""));
     const solOutputIncludesReasoning =
-      model === "gpt-6.1-sol" && ["openai", "codex", "cx"].includes(options.provider || "");
+      /^gpt-6\.[12]-sol$/.test(model) && ["openai", "codex", "cx"].includes(options.provider || "");
     const reasoningRate = solOutputIncludesReasoning
       ? Math.max(0, reasoningPrice - outputPrice)
       : reasoningPrice;

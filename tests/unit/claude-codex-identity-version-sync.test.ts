@@ -42,10 +42,10 @@ test("Claude CLI is pinned to the captured 2.1.207 release", () => {
   assert.equal(id.CLAUDE_CODE_VERSION, "2.1.207");
 });
 
-test("Codex client is pinned to the captured 0.159.2 release", () => {
-  assert.equal(codexCfg.getCodexClientVersion(), "0.159.2");
-  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.159.2 (Windows 10.0.26200; x64)");
-  assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.159.2");
+test("Codex client is pinned to the captured 0.169.0 release", () => {
+  assert.equal(codexCfg.getCodexClientVersion(), "0.169.0");
+  assert.equal(codexCfg.getCodexUserAgent(), "codex-cli/0.169.0 (Windows 10.0.26200; x64)");
+  assert.equal(codexCfg.getCodexDefaultHeaders().Version, "0.169.0");
 });
 
 test("Codex CLI preset and optional Docker CLI stay aligned with the wire version", () => {

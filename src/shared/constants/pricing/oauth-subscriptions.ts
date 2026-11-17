@@ -13,7 +13,8 @@ import {
   GPT_5_6_TERRA_PRICING,
 } from "./shared-tiers";
 
-// Codex: 50 / 2.5 / 250 credits per MTok at 25 credits/USD; no cache-write charge.
+// GPT-6.1 Sol and GPT-6.2 Sol share 50 / 2.5 / 250 credits per MTok
+// at 25 credits/USD; no cache-write charge.
 // https://learn.chatgpt.com/docs/pricing
 const GPT_6_1_SOL_CODEX_PRICING = { input: 2, output: 10, cached: 0.1, reasoning: 10 };
 
@@ -84,6 +85,14 @@ export const DEFAULT_PRICING_OAUTH = {
     },
   },
   cx: {
+    "gpt-6.2-sol": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.2-sol-low": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.2-sol-medium": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.2-sol-high": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.2-sol-xhigh": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.2-sol-max": GPT_6_1_SOL_CODEX_PRICING,
+    "gpt-6.2-sol-ultra": GPT_6_1_SOL_CODEX_PRICING,
+
     "gpt-6.1-sol": GPT_6_1_SOL_CODEX_PRICING,
     "gpt-6.1-sol-low": GPT_6_1_SOL_CODEX_PRICING,
     "gpt-6.1-sol-medium": GPT_6_1_SOL_CODEX_PRICING,
