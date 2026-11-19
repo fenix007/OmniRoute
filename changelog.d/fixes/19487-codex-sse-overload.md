@@ -1,0 +1,1 @@
+- **fix(codex):** Recognize overload failures in Codex SSE before output so routing can try another account, even when the upstream omits the content type. Ordinary output containing the same text is no longer mistaken for an error. Thanks @rafacpti23 for [#19487](https://github.com/cheaper-inference/OmniRoute/pull/19487).

@@ -35,6 +35,7 @@ import {
 } from "../config/codexInstructions.ts";
 import { FETCH_BODY_TIMEOUT_MS, HTTP_STATUS, PROVIDERS } from "../config/constants.ts";
 import { readCodexPeekChunk, buildCodexTimeoutSafePassthroughBody } from "./codex/bodyTimeout.ts";
+import { CodexSsePeek } from "./codex/ssePeek.ts";
 import { getCodexClientVersion, getCodexUserAgent } from "../config/codexClient.ts";
 import {
   applyCodexClientIdentityHeaders,
@@ -560,58 +561,7 @@ export function filterNonstandardCodexSse(response: Response): Response {
 // signature is found, convert the response into a real 503 so account rotation
 // kicks in. Otherwise re-assemble the stream from the peeked prefix + the
 // remaining upstream body so the passthrough stays byte-identical.
-const CODEX_SSE_TRANSIENT_ERROR_PATTERNS = [
-  "selected model is at capacity",
-  "server_is_overloaded",
-  "service_unavailable_error",
-] as const;
-// A capacity/overloaded rejection is delivered as the very first SSE event, so a
-// small peek window is enough — this bounds how much of a legitimate response we
-// buffer before giving up and passing the stream through unchanged.
 const CODEX_SSE_PEEK_MAX_BYTES = 8192;
-const CODEX_SSE_HANDSHAKE_EVENT_TYPES = new Set([
-  "response.created",
-  "response.in_progress",
-  "codex.rate_limits",
-]);
-
-// Matches the JSON `type` of data payloads (not `event:` lines), so a chunk split
-// between an `event: error` line and its data cannot end the peek before the
-// error text is visible.
-function hasCodexSsePostHandshakeEvent(lowerText: string): boolean {
-  for (const match of lowerText.matchAll(/"type"\s*:\s*"(response\.[^"]+)"/g)) {
-    if (!CODEX_SSE_HANDSHAKE_EVENT_TYPES.has(match[1])) return true;
-  }
-  return false;
-}
-
-/**
- * Best-effort extraction of the human-readable error message from a peeked SSE
- * chunk, so the resulting 503 body carries something more useful than the raw
- * pattern that matched. Falls back to the matched pattern when no structured
- * `data:` payload could be parsed.
- */
-function extractCodexSseErrorMessage(text: string, fallback: string): string {
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice("data:".length).trim();
-    if (!data || data === "[DONE]") continue;
-    try {
-      const parsed = JSON.parse(data) as Record<string, unknown>;
-      const directError = parsed.error as Record<string, unknown> | undefined;
-      const nestedError = (parsed.response as Record<string, unknown> | undefined)?.error as
-        Record<string, unknown> | undefined;
-      const message =
-        (typeof directError?.message === "string" && directError.message) ||
-        (typeof nestedError?.message === "string" && nestedError.message) ||
-        (typeof parsed.message === "string" && parsed.message);
-      if (message) return message;
-    } catch {
-      // Non-JSON SSE data line — keep scanning subsequent lines.
-    }
-  }
-  return fallback;
-}
 
 type CodexSseTransientErrorPeek =
   | { matched: string; message: string; replacementBody: null; timedOut?: false }
@@ -652,38 +602,26 @@ export async function peekCodexSseTransientError(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  const inspector = new CodexSsePeek(contentType === "");
   const chunks: Uint8Array[] = [];
-  let text = "";
-  let matched: string | null = null;
+  let inspected = 0;
 
   try {
-    while (text.length < CODEX_SSE_PEEK_MAX_BYTES) {
-      const { done, value, timedOut } = await readCodexPeekChunk(reader, timeoutMs);
+    while (inspected < CODEX_SSE_PEEK_MAX_BYTES) {
+      const { value, timedOut } = await readCodexPeekChunk(reader, timeoutMs);
       if (timedOut) {
         return { matched: null, message: null, replacementBody: null, timedOut: true };
       }
-      if (done) break;
-      if (!value) continue;
+      if (!value) break;
       chunks.push(value);
       onChunk?.(value);
-      text += decoder.decode(value, { stream: true });
-      // An untyped body that does not start like SSE is a plain JSON reply:
-      // replay it untouched instead of scanning its text for error patterns.
-      if (!contentType && !/^\s*(?:event|data|id|retry)?:/.test(text)) break;
-      const lower = text.toLowerCase();
-      const hit = CODEX_SSE_TRANSIENT_ERROR_PATTERNS.find((pattern) => lower.includes(pattern));
-      if (hit) {
-        matched = hit;
-        break;
-      }
-      // Capacity rejections arrive before any output, right after the
-      // created/in_progress handshake. The first event past that handshake
-      // (reasoning, tool-call arguments, output items, text) proves the
-      // response is healthy; holding it longer only delays the client's
-      // headers and first token.
-      if (hasCodexSsePostHandshakeEvent(lower)) {
-        break;
-      }
+      const prefix = value.subarray(0, CODEX_SSE_PEEK_MAX_BYTES - inspected);
+      inspected += prefix.length;
+      const decision = inspector.push(decoder.decode(prefix, { stream: true }));
+      if (decision === "passthrough") break;
+      if (!decision) continue;
+      await reader.cancel().catch(() => {});
+      return { ...decision, replacementBody: null };
     }
   } catch (err) {
     console.warn(
@@ -691,15 +629,6 @@ export async function peekCodexSseTransientError(
         err instanceof Error ? err.message : String(err)
       }`
     );
-  }
-
-  if (matched) {
-    try {
-      await reader.cancel();
-    } catch {
-      // Upstream socket may already be closing; nothing to clean up.
-    }
-    return { matched, message: extractCodexSseErrorMessage(text, matched), replacementBody: null };
   }
 
   // Re-assemble the stream: peeked prefix chunks, then continue draining the

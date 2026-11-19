@@ -43,8 +43,15 @@ function codexResponse() {
   );
 }
 
-for (const mode of ["recover", "both-timeout", "allowlist", "cooldown", "disabled"] as const) {
-  test(`Codex timeout before compatible fallback: ${mode}`, async () => {
+for (const mode of [
+  "recover",
+  "both-timeout",
+  "allowlist",
+  "cooldown",
+  "disabled",
+  "overload",
+] as const) {
+  test(`Codex account retry before compatible fallback: ${mode}`, async () => {
     const first = await h.seedConnection("codex", { name: "first", priority: 1 });
     const second = await h.seedConnection("codex", { name: "second", priority: 2 });
     await updateProviderConnection(first.id, { accessToken: "test-first", authType: "oauth" });
@@ -90,7 +97,15 @@ for (const mode of ["recover", "both-timeout", "allowlist", "cooldown", "disable
         const token = new Headers(init.headers).get("authorization");
         const account = token === "Bearer test-first" ? "first" : "second";
         attempts.push(account);
-        if (account === "second" && mode === "recover") return codexResponse();
+        if (account === "second" && (mode === "recover" || mode === "overload")) {
+          return codexResponse();
+        }
+        if (mode === "overload") {
+          return new Response(
+            'event: response.failed\ndata: {"type":"response.failed","response":{"error":{"code":"server_error","message":"Our servers are currently overloaded."}}}\n\n',
+            { headers: { "Content-Type": "text/event-stream" } }
+          );
+        }
         return new Promise<Response>((_resolve, reject) => {
           const abort = () =>
             reject(Object.assign(new Error("combo deadline"), { name: "AbortError" }));
@@ -116,7 +131,7 @@ for (const mode of ["recover", "both-timeout", "allowlist", "cooldown", "disable
     assert.ok(probes >= 1, "account support probe must remain enabled");
     assert.deepEqual(
       attempts,
-      mode === "recover"
+      mode === "recover" || mode === "overload"
         ? ["first", "second"]
         : mode === "both-timeout"
           ? ["first", "second", "fallback"]
@@ -124,7 +139,7 @@ for (const mode of ["recover", "both-timeout", "allowlist", "cooldown", "disable
     );
     assert.equal(
       payload.choices[0].message.content,
-      mode === "recover" ? "Alternate Codex answered" : "Fallback answered"
+      mode === "recover" || mode === "overload" ? "Alternate Codex answered" : "Fallback answered"
     );
   });
 }

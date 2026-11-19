@@ -1646,3 +1646,22 @@ Codex upstream identity, discovery requests, the compatible-provider CLI preset,
 and the optional Docker CLI are pinned to the official `0.169.0` release.
 Existing identity regression tests check the updated Version and User-Agent
 headers, including WebSocket and compact requests.
+
+## Codex HTTP SSE overload fallback — 2026-11-19
+
+**Adapt** [OmniRoute #19487](https://github.com/cheaper-inference/OmniRoute/pull/19487)
+by @rafacpti23, reviewed head `ae47a8978f28527dc6b22a36bd61b09aaa2e323a`,
+merged as `c77f9061c61f22278756acf9f19e753a70a15002` on November 12.
+On frozen stable, an HTTP 200 carrying a Codex `response.failed` frame with
+“currently overloaded” did not reach account fallback as a 503.
+
+Inspect complete SSE frames within the existing peek budget and classify only
+structured failures before output. The parser accepts fragmented and headerless
+SSE, preserves non-SSE JSON and passthrough bytes, and keeps the existing
+timeout, observability callback and account policy. Do not import upstream's
+optional headerless event filtering or change WebSocket handling.
+
+Regression coverage in `tests/unit/codex-sse-capacity-fallback.test.ts` and
+`tests/integration/combo-codex-account-timeout.test.ts` covers fragmented
+overload, upstream cancellation, quoted error text, the byte budget, preserved
+JSON, and retry on a second mock Codex account before provider fallback.

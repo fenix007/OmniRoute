@@ -9,7 +9,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { CodexExecutor, __setCodexWebSocketTransportForTesting } from "../../open-sse/executors/codex.ts";
+import {
+  CodexExecutor,
+  __setCodexWebSocketTransportForTesting,
+  peekCodexSseTransientError,
+} from "../../open-sse/executors/codex.ts";
 
 test.afterEach(() => {
   __setCodexWebSocketTransportForTesting(undefined);
@@ -29,6 +33,93 @@ function sseStreamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
     },
   });
 }
+
+const overloadMessage = "Our servers are currently overloaded. Please try again later.";
+const overloadData = JSON.stringify({
+  type: "response.failed",
+  response: { status: "failed", error: { code: "server_error", message: overloadMessage } },
+});
+const overloadEvent = `event: response.failed\r\ndata: ${overloadData}\r\n\r\n`;
+
+test("a fragmented headerless Codex overload returns 503 and cancels the upstream body", async (t) => {
+  const chunks = [
+    "ev",
+    'ent: response.created\r\ndata: {"type":"response.created"}\r\n\r\n',
+    "event: response.failed\r\ndata: {\r\n",
+    `data: ${overloadData.slice(1, -1)}`,
+    "\r\ndata: }\r\n\r",
+    "\n",
+  ];
+  let cancelled = false;
+  let chunkIndex = 0;
+  const encoder = new TextEncoder();
+  t.mock.method(globalThis, "fetch", async () => {
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (chunkIndex < chunks.length) controller.enqueue(encoder.encode(chunks[chunkIndex++]));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      })
+    );
+  });
+  const { response } = await new CodexExecutor().execute({
+    model: "gpt-5.5",
+    body: { input: [{ role: "user", content: "hello" }] },
+    stream: true,
+    credentials: { accessToken: "codex-token" },
+  });
+
+  try {
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.message, overloadMessage);
+    assert.equal(cancelled, true);
+  } finally {
+    await response.body?.cancel().catch(() => {});
+  }
+});
+
+test("Codex recognizes the overload phrase only in an error frame before output", async () => {
+  const validError = await peekCodexSseTransientError(
+    new Response(overloadEvent, { headers: { "content-type": "text/event-stream" } })
+  );
+  assert.equal(validError.matched, "currently overloaded");
+  assert.equal(validError.message, overloadMessage);
+
+  const output = `data: ${JSON.stringify({
+    type: "response.output_text.delta",
+    delta: `${overloadMessage} server_is_overloaded service_unavailable_error`,
+  })}\n\n`;
+  for (const payload of [
+    output,
+    output + overloadEvent,
+    ": selected model is at capacity\n\n" + output,
+    `event: error\ndata: {"type":"error","code":"invalid_request","message":"Other error"}\n\n${overloadEvent}`,
+    `event: response.failed\ndata: {"type":"response.failed","error":"${overloadMessage}\n\n`,
+  ]) {
+    const peek = await peekCodexSseTransientError(
+      new Response(payload, { headers: { "content-type": "text/event-stream" } })
+    );
+    assert.equal(peek.matched, null);
+    assert.equal(await new Response(peek.replacementBody).text(), payload);
+  }
+});
+
+test("Codex replays an error outside the peek byte budget unchanged", async () => {
+  const payload = `:${" ".repeat(8192)}\n\n${overloadEvent}`;
+  const peek = await peekCodexSseTransientError(new Response(sseStreamFromChunks([payload])));
+  assert.equal(peek.matched, null);
+  assert.equal(await new Response(peek.replacementBody).text(), payload);
+});
+
+test("a headerless compact JSON body is replayed unchanged", async () => {
+  const chunks = [" ", JSON.stringify({ error: { message: overloadMessage } })];
+  const peek = await peekCodexSseTransientError(new Response(sseStreamFromChunks(chunks)));
+  assert.equal(peek.matched, null);
+  assert.equal(await new Response(peek.replacementBody).text(), chunks.join(""));
+});
 
 test("CodexExecutor.execute converts a 200-OK SSE stream carrying a model-at-capacity error into a 503 Response", async () => {
   const executor = new CodexExecutor();
