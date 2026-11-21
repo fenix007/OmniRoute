@@ -36,7 +36,9 @@ function connectionIdOf(credentials: any): string | null {
 }
 
 function isCredentialSentinel(credentials: any): boolean {
-  return Boolean(credentials?.allRateLimited || credentials?.allExpired);
+  return Boolean(
+    credentials?.allRateLimited || credentials?.allExpired || credentials?.modelUnsupported
+  );
 }
 
 async function selectNextCredentials(
@@ -50,6 +52,7 @@ async function selectNextCredentials(
     requiredWorkspacePlan,
     preferredWorkspacePlan: requiredWorkspacePlan ? null : provider === "codex" ? "plus" : null,
     skipModelDiagnostics: true,
+    reportModelUnsupported: true,
   });
 }
 
@@ -143,6 +146,18 @@ export async function executeImageWithCredentialFallback({
   if (!credentials) {
     return { credentials, result: await execute(credentials) };
   }
+  if (credentials?.modelUnsupported) {
+    return {
+      credentials,
+      result: {
+        success: false,
+        status: Number(credentials.lastErrorCode) || 400,
+        error:
+          credentials.lastError ||
+          `The '${requestedModel || "requested"}' model is not supported by any available ${provider} account.`,
+      },
+    };
+  }
 
   const excludedConnectionIds = new Set<string>();
   let currentCredentials = credentials;
@@ -199,6 +214,19 @@ export async function executeImageWithCredentialFallback({
       requestedModel,
       excludedConnectionIds
     );
+  }
+
+  if (currentCredentials?.modelUnsupported && !lastResult) {
+    return {
+      credentials: currentCredentials,
+      result: {
+        success: false,
+        status: Number(currentCredentials.lastErrorCode) || 400,
+        error:
+          currentCredentials.lastError ||
+          `The '${requestedModel || "requested"}' model is not supported by any available ${provider} account.`,
+      },
+    };
   }
 
   return {

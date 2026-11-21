@@ -735,13 +735,13 @@ export async function handleChat(
         resolvedModel,
         {
           sessionKey: sessionAffinityKey,
-          sessionSource: sessionIdentity.source,
+          sessionSource: sessionIdentity.source, reportModelUnsupported: true,
           ...(target?.allowRateLimitedConnection ? { allowRateLimitedConnections: true } : {}),
           ...(target?.connectionId ? { forcedConnectionId: target.connectionId } : {}),
           ...(bypassProviderQuotaPolicy ? { bypassQuotaPolicy: true } : {}),
         }
       );
-      if (!creds || creds.allRateLimited) return false;
+      if (!creds || ("allRateLimited" in creds && creds.allRateLimited) || ("allExpired" in creds && creds.allExpired) || ("modelUnsupported" in creds && creds.modelUnsupported)) return false;
 
       comboPreselectedCredentials.set(getComboCredentialCacheKey(modelString, target), creds);
       return true;
@@ -1242,14 +1242,13 @@ async function handleSingleModelChat(
                 ...(!forceLiveComboTest && bypassProviderQuotaPolicy
                   ? { bypassQuotaPolicy: true }
                   : {}),
-                ...(runtimeOptions.forcedConnectionId
-                  ? { forcedConnectionId: runtimeOptions.forcedConnectionId }
-                  : {}),
+                ...(runtimeOptions.forcedConnectionId ? { forcedConnectionId: runtimeOptions.forcedConnectionId } : {}),
+                reportModelUnsupported: true,
               }
             );
       preselectedCredentials = null;
 
-      if (!credentials || "allRateLimited" in credentials || !credentials.connectionId) {
+      if (!credentials || "allRateLimited" in credentials || "allExpired" in credentials || "modelUnsupported" in credentials || !credentials.connectionId) {
         if (credentials?.allRateLimited) {
           const retryDecision = getCooldownAwareRetryDecision({
             retryAfter: credentials.retryAfter,

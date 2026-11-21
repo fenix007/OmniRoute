@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
-import { getAccountModelSupport, saveAccountModelSupport } from "@/lib/db/accountModelSupport";
+import { saveAccountModelSupport } from "@/lib/db/accountModelSupport";
 import { diagnoseAccountModel } from "./accountModelDiagnostics";
+import { buildModelUnsupportedResult, findUnsupportedModelEntry, getKnownSupportedCooldownResets, hasKnownSupportedConnection, isModelUnsupportedResult, latestFutureTimestampMs, mergeUnsupportedConnections, type CredentialSelectionReturn, type UnsupportedModelConnection } from "./modelUnsupportedResult";
 import {
   getProviderConnections,
   getProviderNodes,
@@ -146,6 +147,7 @@ interface CredentialSelectionOptions {
   requiredWorkspacePlan?: string | null;
   preferredWorkspacePlan?: string | null;
   skipModelDiagnostics?: boolean;
+  reportModelUnsupported?: boolean;
   sessionKey?: string | null;
   sessionSource?: SessionSource;
   previousConnectionId?: string | null;
@@ -422,10 +424,10 @@ export function evaluateQuotaLimitPolicy(
   provider: string,
   connection: ProviderConnectionView,
   requestedModel: string | null = null
-): { blocked: boolean; reasons: string[]; resetAt: string | null } {
+): { blocked: boolean; reasons: string[]; resetAt: string | null; resetCandidates: Array<string | null> } {
   const policy = resolveQuotaLimitPolicy(provider, connection.providerSpecificData);
   if (!policy.enabled || policy.windows.length === 0) {
-    return { blocked: false, reasons: [], resetAt: null };
+    return { blocked: false, reasons: [], resetAt: null, resetCandidates: [] };
   }
 
   const reasons: string[] = [];
@@ -448,6 +450,7 @@ export function evaluateQuotaLimitPolicy(
     blocked: reasons.length > 0,
     reasons,
     resetAt: getEarliestFutureDate(resetCandidates),
+    resetCandidates,
   };
 }
 
@@ -949,13 +952,10 @@ async function getProviderSearchPool(provider: string): Promise<string[]> {
  * @param {string} provider - Provider name
  * @param {string|null} excludeConnectionId - Connection ID to exclude (for retry with next account)
  */
-export async function getProviderCredentials(
-  provider: string,
-  excludeConnectionId: string | null = null,
-  allowedConnections: string[] | null = null,
-  requestedModel: string | null = null,
-  options: CredentialSelectionOptions = {}
-) {
+export async function getProviderCredentials<TOptions extends CredentialSelectionOptions = Omit<CredentialSelectionOptions, "reportModelUnsupported">>(provider: string, excludeConnectionId: string | null = null, allowedConnections: string[] | null = null, requestedModel: string | null = null, options: TOptions = {} as TOptions): Promise<CredentialSelectionReturn<Awaited<ReturnType<typeof selectProviderCredentials>>, TOptions>> {
+  return selectProviderCredentials(provider, excludeConnectionId, allowedConnections, requestedModel, options) as Promise<CredentialSelectionReturn<Awaited<ReturnType<typeof selectProviderCredentials>>, TOptions>>;
+}
+async function selectProviderCredentials(provider: string, excludeConnectionId: string | null = null, allowedConnections: string[] | null = null, requestedModel: string | null = null, options: CredentialSelectionOptions = {}) {
   const selectionLock = createSelectionLock(getSelectionMutexKey(provider, options));
 
   try {
@@ -1180,23 +1180,21 @@ export async function getProviderCredentials(
     // #9708: connections held out only by a transport cooldown, so an
     // all-quota-exhausted verdict can be told apart from a transient one.
     const transportCooledIds = new Set<string>();
+    const unsupportedModelConnections: UnsupportedModelConnection[] = [];
     // Filter out unavailable accounts and excluded connection
     const availableConnections = connections.filter((c) => {
       if (excludedConnectionIds.has(c.id)) return false;
       if (requestedModel && isModelExcludedByConnection(requestedModel, c.providerSpecificData)) {
         return false;
       }
-      // The account's plan lacks this exact model (see markAccountUnavailable).
-      if (
-        requestedModel &&
-        (provider === "codex"
-          ? getAccountModelSupport(provider, c, requestedModel)?.status === "unsupported"
-          : isAccountModelUnsupported(provider, c.id, requestedModel))
-      )
-        return false;
       if (!allowSuppressedConnections) {
         if (!allowRateLimitedConnections && isAccountUnavailable(c.rateLimitedUntil)) {
-          if (isTransportCooldownErrorCode(c.errorCode)) transportCooledIds.add(c.id);
+          if (
+            isTransportCooldownErrorCode(c.errorCode) &&
+            !findUnsupportedModelEntry(provider, c, requestedModel)
+          ) {
+            transportCooledIds.add(c.id);
+          }
           return false;
         }
         if (isTerminalConnectionStatus(c)) return false;
@@ -1213,6 +1211,11 @@ export async function getProviderCredentials(
           }
           return false;
         }
+      }
+      const unsupportedEntry = findUnsupportedModelEntry(provider, c, requestedModel);
+      if (unsupportedEntry) {
+        if ((bypassQuotaPolicy || !evaluateQuotaLimitPolicy(provider, c, requestedModel).blocked) && !isQuotaExhaustedForRequest(c.id, provider, requestedModel)) unsupportedModelConnections.push(unsupportedEntry);
+        return false;
       }
       return true;
     });
@@ -1273,8 +1276,10 @@ export async function getProviderCredentials(
       }
     });
 
+    const modelAllowedConnections = connections.filter((c) => !(requestedModel && isModelExcludedByConnection(requestedModel, c.providerSpecificData)));
+    const knownSupportedPool = modelAllowedConnections.filter((c) => !excludedConnectionIds.has(c.id) && (allowSuppressedConnections || !isTerminalConnectionStatus(c)));
     if (availableConnections.length === 0) {
-      const cooldownStates: CooldownInspectionState[] = connections.map((connection) => {
+      const cooldownStates: CooldownInspectionState[] = modelAllowedConnections.map((connection) => {
         const connectionCooldownMs = parseFutureDateMs(connection.rateLimitedUntil);
         const codexScopeCooldownMs =
           provider === "codex"
@@ -1300,26 +1305,36 @@ export async function getProviderCredentials(
         };
       });
 
-      const cooldownCandidates = cooldownStates
-        .flatMap((state) => {
-          const candidates: Array<{ ms: number; connection: ProviderConnectionView }> = [];
-          if (state.connectionCooldownMs !== null) {
-            candidates.push({ ms: state.connectionCooldownMs, connection: state.connection });
-          }
-          if (state.codexScopeCooldownMs !== null) {
-            candidates.push({ ms: state.codexScopeCooldownMs, connection: state.connection });
-          }
-          if (state.retryableModelCooldownMs !== null) {
-            candidates.push({ ms: state.retryableModelCooldownMs, connection: state.connection });
-          }
-          return candidates;
+      const eligibleCooldownStates = cooldownStates.filter(
+        (state) => !findUnsupportedModelEntry(provider, state.connection, requestedModel)
+      );
+      const activeCooldownStates = eligibleCooldownStates.some(
+        (state) =>
+          state.connectionCooldownMs !== null ||
+          state.codexScopeCooldownMs !== null ||
+          state.retryableModelCooldownMs !== null
+      )
+        ? eligibleCooldownStates
+        : cooldownStates;
+
+      const cooldownCandidates = activeCooldownStates
+        .map((state) => {
+          const hasCooldown = state.connectionCooldownMs !== null || state.codexScopeCooldownMs !== null || state.retryableModelCooldownMs !== null;
+          if (!hasCooldown) return null;
+          const quotaCandidates = [
+            ...(!bypassQuotaPolicy ? evaluateQuotaLimitPolicy(provider, state.connection, requestedModel).resetCandidates : []),
+            isQuotaExhaustedForRequest(state.connection.id, provider, requestedModel) ? getQuotaCache(state.connection.id)?.nextResetAt || null : null,
+          ];
+          const readyMs = latestFutureTimestampMs([state.connectionCooldownMs, state.codexScopeCooldownMs, state.retryableModelCooldownMs, ...quotaCandidates]);
+          return readyMs !== null ? { ms: readyMs, connection: state.connection } : null;
         })
+        .filter((entry): entry is { ms: number; connection: ProviderConnectionView } => entry !== null)
         .sort((a, b) => a.ms - b.ms);
 
       const allBlockedByModelCooldown =
         Boolean(requestedModel) &&
-        cooldownStates.length > 0 &&
-        cooldownStates.every((state) => {
+        activeCooldownStates.length > 0 &&
+        activeCooldownStates.every((state) => {
           const hasModelSpecificCooldown =
             state.codexScopeCooldownMs !== null || state.retryableModelCooldownMs !== null;
           return hasModelSpecificCooldown && state.connectionCooldownMs === null;
@@ -1332,6 +1347,8 @@ export async function getProviderCredentials(
           : null;
 
       if (earliest) {
+        const hasKnownSupported = hasKnownSupportedConnection(provider, knownSupportedPool, requestedModel);
+        if (options.reportModelUnsupported && unsupportedModelConnections.length > 0 && !hasKnownSupported) return buildModelUnsupportedResult(provider, requestedModel, unsupportedModelConnections);
         const earliestConn = earliestCandidate?.connection;
         log.warn(
           "AUTH",
@@ -1348,8 +1365,10 @@ export async function getProviderCredentials(
           cooldownScope: allBlockedByModelCooldown ? "model" : "connection",
           cooldownModel: allBlockedByModelCooldown ? requestedModel : null,
           connectionsCount: connections.length,
+          hasKnownSupportedCoolingAccount: hasKnownSupported,
         };
       }
+      if (options.reportModelUnsupported && unsupportedModelConnections.length > 0) return buildModelUnsupportedResult(provider, requestedModel, unsupportedModelConnections);
       const syntheticFallback = await maybeSyntheticNoAuthFallback(
         resolvedId,
         excludedConnectionIds
@@ -1371,10 +1390,11 @@ export async function getProviderCredentials(
         const evaluation = evaluateQuotaLimitPolicy(provider, connection, requestedModel);
         if (!evaluation.blocked) return true;
 
+        const policyLatestMs = latestFutureTimestampMs(evaluation.resetCandidates);
         blockedByPolicy.push({
           id: connection.id,
           reasons: evaluation.reasons,
-          resetAt: evaluation.resetAt,
+          resetAt: policyLatestMs !== null ? new Date(policyLatestMs).toISOString() : evaluation.resetAt,
         });
         return false;
       });
@@ -1392,6 +1412,8 @@ export async function getProviderCredentials(
     }
 
     if (policyEligibleConnections.length === 0 && availableConnections.length > 0) {
+      const hasKnownSupported = hasKnownSupportedConnection(provider, knownSupportedPool, requestedModel);
+      if (options.reportModelUnsupported && unsupportedModelConnections.length > 0 && !hasKnownSupported) return buildModelUnsupportedResult(provider, requestedModel, unsupportedModelConnections);
       const transportUnavailable = connections.filter((connection) =>
         transportCooledIds.has(connection.id)
       );
@@ -1412,10 +1434,14 @@ export async function getProviderCredentials(
           retryAfterHuman: formatRetryAfter(retryAfter),
           lastError: mixed.lastError,
           lastErrorCode: mixed.lastErrorCode,
+          hasKnownSupportedCoolingAccount: hasKnownSupported,
         };
       }
 
-      const earliestResetAt = getEarliestFutureDate(blockedByPolicy.map((entry) => entry.resetAt));
+      const earliestResetAt = getEarliestFutureDate([
+        ...blockedByPolicy.map((entry) => entry.resetAt),
+        ...getKnownSupportedCooldownResets(provider, knownSupportedPool, requestedModel, getCodexScopeRateLimitedUntil, isRetryableModelLockoutReason, (c) => [...(!bypassQuotaPolicy ? evaluateQuotaLimitPolicy(provider, c, requestedModel).resetCandidates : []), isQuotaExhaustedForRequest(c.id, provider, requestedModel) ? getQuotaCache(c.id)?.nextResetAt || null : null]),
+      ]);
       const earliestResetMs = parseFutureDateMs(earliestResetAt);
 
       const retryAfter = earliestResetMs
@@ -1428,6 +1454,7 @@ export async function getProviderCredentials(
         retryAfterHuman: formatRetryAfter(retryAfter),
         lastError: `All ${provider} accounts reached configured quota threshold`,
         lastErrorCode: 429,
+        hasKnownSupportedCoolingAccount: hasKnownSupported,
       };
     }
 
@@ -1472,13 +1499,13 @@ export async function getProviderCredentials(
     }
 
     if (withQuota.length === 0 && exhaustedQuota.length > 0) {
+      const hasKnownSupported = hasKnownSupportedConnection(provider, knownSupportedPool, requestedModel);
+      if (options.reportModelUnsupported && unsupportedModelConnections.length > 0 && !hasKnownSupported) return buildModelUnsupportedResult(provider, requestedModel, unsupportedModelConnections);
       // All remaining eligible accounts are exhausted
-      const earliestResetAt = getEarliestFutureDate(
-        exhaustedQuota.map((c) => {
-          const entry = getQuotaCache(c.id);
-          return entry?.nextResetAt || null;
-        })
-      );
+      const earliestResetAt = getEarliestFutureDate([
+        ...exhaustedQuota.map((c) => getQuotaCache(c.id)?.nextResetAt || null),
+        ...getKnownSupportedCooldownResets(provider, knownSupportedPool, requestedModel, getCodexScopeRateLimitedUntil, isRetryableModelLockoutReason, (c) => [...(!bypassQuotaPolicy ? evaluateQuotaLimitPolicy(provider, c, requestedModel).resetCandidates : []), isQuotaExhaustedForRequest(c.id, provider, requestedModel) ? getQuotaCache(c.id)?.nextResetAt || null : null]),
+      ]);
       const earliestResetMs = parseFutureDateMs(earliestResetAt);
       const retryAfter = earliestResetMs
         ? new Date(earliestResetMs).toISOString()
@@ -1490,6 +1517,7 @@ export async function getProviderCredentials(
         retryAfterHuman: formatRetryAfter(retryAfter),
         lastError: `All ${provider} accounts have exhausted their quota`,
         lastErrorCode: 429,
+        hasKnownSupportedCoolingAccount: hasKnownSupported,
       };
     }
 
@@ -1769,18 +1797,17 @@ export async function getProviderCredentials(
   }
 }
 
-export async function getProviderCredentialsWithQuotaPreflight(
-  provider: string,
-  excludeConnectionId: string | null = null,
-  allowedConnections: string[] | null = null,
-  requestedModel: string | null = null,
-  options: CredentialSelectionOptions = {}
-) {
+export async function getProviderCredentialsWithQuotaPreflight<TOptions extends CredentialSelectionOptions = Omit<CredentialSelectionOptions, "reportModelUnsupported">>(provider: string, excludeConnectionId: string | null = null, allowedConnections: string[] | null = null, requestedModel: string | null = null, options: TOptions = {} as TOptions): Promise<CredentialSelectionReturn<Awaited<ReturnType<typeof selectProviderCredentialsWithQuotaPreflight>>, TOptions>> {
+  return selectProviderCredentialsWithQuotaPreflight(provider, excludeConnectionId, allowedConnections, requestedModel, options) as Promise<CredentialSelectionReturn<Awaited<ReturnType<typeof selectProviderCredentialsWithQuotaPreflight>>, TOptions>>;
+}
+async function selectProviderCredentialsWithQuotaPreflight(provider: string, excludeConnectionId: string | null = null, allowedConnections: string[] | null = null, requestedModel: string | null = null, options: CredentialSelectionOptions = {}) {
+  const reportModelUnsupported = options.reportModelUnsupported === true;
   const blockedByPreflight: Array<{
     id: string;
     quotaPercent?: number;
     resetAt?: string | null;
   }> = [];
+  const unsupportedConnections: UnsupportedModelConnection[] = [];
   const excludedConnectionIds = normalizeExcludedConnectionIds(
     excludeConnectionId,
     options.excludeConnectionIds
@@ -1801,38 +1828,30 @@ export async function getProviderCredentialsWithQuotaPreflight(
 
   let previousConnectionId = options.previousConnectionId ?? excludeConnectionId;
   while (true) {
-    const credentials = await getProviderCredentials(
+    const credentials = await selectProviderCredentials(
       provider,
       null,
       allowedConnections,
       requestedModel,
       {
         ...options,
+        reportModelUnsupported,
         previousConnectionId,
         excludeConnectionIds: Array.from(excludedConnectionIds),
       }
     );
 
-    if (!credentials) {
-      if (blockedByPreflight.length > 0) {
-        return buildQuotaPreflightRateLimitedResult(provider, blockedByPreflight);
+      if (!credentials) return blockedByPreflight.length > 0 ? buildQuotaPreflightRateLimitedResult(provider, blockedByPreflight) : reportModelUnsupported && unsupportedConnections.length > 0 ? buildModelUnsupportedResult(provider, requestedModel, unsupportedConnections) : null;
+      if (isModelUnsupportedResult(credentials)) {
+        if (blockedByPreflight.length > 0) return buildQuotaPreflightRateLimitedResult(provider, blockedByPreflight);
+        const merged = mergeUnsupportedConnections(unsupportedConnections, credentials.unsupportedConnections);
+        return merged.length > credentials.unsupportedCount ? buildModelUnsupportedResult(provider, requestedModel, merged) : credentials;
       }
-      return null;
-    }
-
-    if (
-      ("allRateLimited" in credentials && credentials.allRateLimited) ||
-      ("allExpired" in credentials && credentials.allExpired)
-    ) {
-      if (
-        "allRateLimited" in credentials &&
-        credentials.allRateLimited &&
-        blockedByPreflight.length > 0
-      ) {
-        return buildQuotaPreflightRateLimitedResult(provider, blockedByPreflight);
+      if (("allRateLimited" in credentials && credentials.allRateLimited) || ("allExpired" in credentials && credentials.allExpired)) {
+        if ("allRateLimited" in credentials && credentials.allRateLimited && blockedByPreflight.length > 0) return buildQuotaPreflightRateLimitedResult(provider, blockedByPreflight);
+        const hasKnownSupported = "hasKnownSupportedCoolingAccount" in credentials && credentials.hasKnownSupportedCoolingAccount === true;
+        return reportModelUnsupported && unsupportedConnections.length > 0 && !hasKnownSupported ? buildModelUnsupportedResult(provider, requestedModel, unsupportedConnections) : credentials;
       }
-      return credentials;
-    }
 
     const connectionId = credentials.connectionId;
     if (!connectionId) {
@@ -1844,6 +1863,7 @@ export async function getProviderCredentialsWithQuotaPreflight(
     if (provider === "codex" && requestedModel && !options.skipModelDiagnostics) {
       const diagnosis = await diagnoseAccountModel(provider, credentials, requestedModel);
       if (diagnosis?.status === "unsupported") {
+        unsupportedConnections.push({ id: connectionId, httpStatus: diagnosis.httpStatus ?? null });
         excludedConnectionIds.add(connectionId);
         previousConnectionId = connectionId;
         log.info(

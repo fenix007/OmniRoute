@@ -228,7 +228,11 @@ async function postHandler(request, context) {
       null,
       null,
       requestedModel,
-      { skipModelDiagnostics: true, preferredWorkspacePlan: provider === "codex" ? "plus" : null }
+      {
+        skipModelDiagnostics: true,
+        reportModelUnsupported: true,
+        preferredWorkspacePlan: provider === "codex" ? "plus" : null,
+      }
     );
     if (!credentials) {
       return errorResponse(
@@ -236,7 +240,13 @@ async function postHandler(request, context) {
         `No credentials for image provider: ${provider}`
       );
     }
-    if (credentials.allRateLimited) {
+    if ("modelUnsupported" in credentials && credentials.modelUnsupported) {
+      return errorResponse(
+        credentials.lastErrorCode || HTTP_STATUS.BAD_REQUEST,
+        credentials.lastError
+      );
+    }
+    if ("allRateLimited" in credentials && credentials.allRateLimited) {
       return unavailableResponse(
         HTTP_STATUS.RATE_LIMITED,
         `[${provider}] All accounts rate limited`,
@@ -250,7 +260,11 @@ async function postHandler(request, context) {
       null,
       null,
       requestedModel,
-      { skipModelDiagnostics: true, preferredWorkspacePlan: provider === "codex" ? "plus" : null }
+      {
+        skipModelDiagnostics: true,
+        reportModelUnsupported: true,
+        preferredWorkspacePlan: provider === "codex" ? "plus" : null,
+      }
     );
     if (!credentials) {
       return errorResponse(
@@ -258,7 +272,13 @@ async function postHandler(request, context) {
         `No credentials for custom image provider: ${provider}`
       );
     }
-    if (credentials.allRateLimited) {
+    if ("modelUnsupported" in credentials && credentials.modelUnsupported) {
+      return errorResponse(
+        credentials.lastErrorCode || HTTP_STATUS.BAD_REQUEST,
+        credentials.lastError
+      );
+    }
+    if ("allRateLimited" in credentials && credentials.allRateLimited) {
       return unavailableResponse(
         HTTP_STATUS.RATE_LIMITED,
         `[${provider}] All accounts rate limited`,

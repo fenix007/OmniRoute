@@ -656,6 +656,14 @@ export function handleNoCredentials(
     });
     return errorResponse(lastStatus, lastError);
   }
+  if (credentials?.modelUnsupported) {
+    const status = Number(credentials.lastErrorCode) || HTTP_STATUS.BAD_REQUEST;
+    const message =
+      credentials.lastError ||
+      `The '${model}' model is not supported by any available ${provider} account.`;
+    log.warn("CHAT", `[${provider}/${model}] ${message}`);
+    return errorResponse(status, message);
+  }
   if (!excludeConnectionId) {
     // Ported from upstream decolua/9router#336 (Ibrahim Ryan): surface as 404
     // NOT_FOUND instead of 400 BAD_REQUEST so combo routing can fall through to

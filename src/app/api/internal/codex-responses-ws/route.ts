@@ -403,10 +403,23 @@ async function prepare(body: JsonRecord) {
     {
       sessionKey: sessionIdentity.key,
       sessionSource: sessionIdentity.source,
+      reportModelUnsupported: true,
     }
   );
 
-  if (!credentials || "allRateLimited" in credentials) {
+  if (credentials && "modelUnsupported" in credentials && credentials.modelUnsupported) {
+    return jsonError(
+      credentials.lastErrorCode || 400,
+      "codex_model_unsupported",
+      credentials.lastError || `The '${model}' model is not supported by any available Codex account.`
+    );
+  }
+
+  if (
+    !credentials ||
+    ("allRateLimited" in credentials && credentials.allRateLimited) ||
+    ("allExpired" in credentials && credentials.allExpired)
+  ) {
     return jsonError(
       503,
       "codex_credentials_unavailable",
