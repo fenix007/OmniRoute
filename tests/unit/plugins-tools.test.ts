@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { isolatePluginInstallDir } from "../_setup/isolatePluginDir.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,9 @@ const core = await import("../../src/lib/db/core.ts");
 const dbPlugins = await import("../../src/lib/db/plugins.ts");
 const hooks = await import("../../src/lib/plugins/hooks.ts");
 const { pluginTools } = await import("../../open-sse/mcp-server/tools/pluginTools.ts");
+
+const { pluginManager: isolatedPluginManager } = await import("../../src/lib/plugins/manager.ts");
+isolatePluginInstallDir(isolatedPluginManager);
 
 // ── Helpers ──
 
@@ -45,9 +49,11 @@ function writeTestPlugin(opts?: { name?: string; onRequest?: boolean }) {
     },
   };
   fs.writeFileSync(path.join(pluginDir, "plugin.json"), JSON.stringify(manifest, null, 2));
-  fs.writeFileSync(path.join(pluginDir, "index.js"), onRequest
-    ? `module.exports.onRequest = function(ctx) { ctx.metadata = ctx.metadata || {}; ctx.metadata.hookCalled = true; };`
-    : `module.exports = {};`
+  fs.writeFileSync(
+    path.join(pluginDir, "index.js"),
+    onRequest
+      ? `module.exports.onRequest = function(ctx) { ctx.metadata = ctx.metadata || {}; ctx.metadata.hookCalled = true; };`
+      : `module.exports = {};`
   );
   return { sourceDir, pluginDir, name };
 }
@@ -56,7 +62,9 @@ const activeSourceDirs: string[] = [];
 
 function cleanupSourceDirs() {
   for (const dir of activeSourceDirs) {
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
   }
   activeSourceDirs.length = 0;
 }
@@ -74,7 +82,9 @@ test.beforeEach(() => {
 test.after(() => {
   core.resetDbInstance();
   cleanupSourceDirs();
-  try { fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }); } catch {}
+  try {
+    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  } catch {}
 });
 
 // ── plugin_list ──
@@ -309,7 +319,10 @@ test("plugin_configure: accepts valid config matching schema", async () => {
   await pluginManager.install(sourceDir);
 
   const tool = getTool("plugin_configure");
-  const result = await tool.handler({ name, config: { apiUrl: "https://ok.example.com", maxRetries: 5 } });
+  const result = await tool.handler({
+    name,
+    config: { apiUrl: "https://ok.example.com", maxRetries: 5 },
+  });
   assert.equal(result.success, true, "should succeed for valid config");
   assert.equal(result.config.apiUrl, "https://ok.example.com");
 
@@ -325,14 +338,17 @@ test("plugin_configure: allows any config when plugin has no configSchema", asyn
   const pluginDir = sourceDir + "/" + name;
   const fs = await import("node:fs");
   const path = await import("node:path");
-  fs.writeFileSync(path.join(pluginDir, "plugin.json"), JSON.stringify({
-    name,
-    version: "1.0.0",
-    main: "index.js",
-    hooks: { onRequest: false, onResponse: false, onError: false },
-    requires: { permissions: [] },
-    // no configSchema
-  }));
+  fs.writeFileSync(
+    path.join(pluginDir, "plugin.json"),
+    JSON.stringify({
+      name,
+      version: "1.0.0",
+      main: "index.js",
+      hooks: { onRequest: false, onResponse: false, onError: false },
+      requires: { permissions: [] },
+      // no configSchema
+    })
+  );
 
   const { pluginManager } = await import("../../src/lib/plugins/manager.ts");
   await pluginManager.install(sourceDir);

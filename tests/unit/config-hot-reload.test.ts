@@ -128,12 +128,16 @@ test("updateSettings applies runtime settings incrementally without restart", as
   assert.equal(getGeminiThoughtSignatureMode(), "enabled");
 });
 
-test("hot-reload watcher picks up external sqlite changes via polling fallback", async () => {
+test("hot-reload watcher picks up external sqlite changes via polling fallback", async (t) => {
+  const watch = t.mock.method(fs, "watch", () => {
+    throw new Error("file watching unavailable in polling-fallback test");
+  });
   await applyRuntimeSettings(await settingsDb.getSettings(), {
     force: true,
     source: "test:startup",
   });
   startRuntimeConfigHotReload({ pollIntervalMs: 100 });
+  assert.equal(watch.mock.callCount(), 1);
 
   const db = getDbInstance();
   db.prepare(

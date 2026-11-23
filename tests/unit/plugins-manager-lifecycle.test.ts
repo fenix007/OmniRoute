@@ -1,10 +1,12 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { isolatePluginInstallDir } from "../_setup/isolatePluginDir.ts";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const mod = await import("../../src/lib/plugins/manager.ts");
+isolatePluginInstallDir(mod.pluginManager);
 const db = await import("../../src/lib/db/plugins.ts");
 const { getDbInstance } = await import("../../src/lib/db/core.ts");
 
@@ -24,7 +26,9 @@ function makeTmpPlugin(name: string, manifest: Record<string, unknown> = {}) {
 }
 
 function cleanup(name: string) {
-  try { db.deletePlugin(name); } catch {}
+  try {
+    db.deletePlugin(name);
+  } catch {}
 }
 
 describe("pluginManager lifecycle", () => {
@@ -37,7 +41,9 @@ describe("pluginManager lifecycle", () => {
     getDbInstance();
     // Clean up test plugins
     for (const name of testPlugins) {
-      try { db.deletePlugin(name); } catch {}
+      try {
+        db.deletePlugin(name);
+      } catch {}
     }
     testPlugins.length = 0;
   });

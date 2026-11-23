@@ -25,7 +25,7 @@
  * code returns installed:false / reason:"not_found" — this is the RED proof.
  */
 
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -35,13 +35,17 @@ const { getCliRuntimeStatus } = await import("../../src/shared/services/cliRunti
 
 describe("#6701 — claude detection should fall back to settings.json when binary is unresolvable", () => {
   let configHome: string;
+  let fixtureHome: string;
+  let restoreHomedir: () => void;
   const prevBin = process.env.CLI_CLAUDE_BIN;
   const prevConfigHome = process.env.CLI_CONFIG_HOME;
 
   before(() => {
-    // Isolated config home *within* os.homedir() (CLI_CONFIG_HOME validation
-    // requires this) so we never touch the real ~/.claude directory.
-    configHome = fs.mkdtempSync(path.join(os.homedir(), ".omniroute-test-6701-"));
+    // Preserve the within-home validation using a temporary home fixture.
+    fixtureHome = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-cli-home-6701-"));
+    const homedir = mock.method(os, "homedir", () => fixtureHome);
+    restoreHomedir = () => homedir.mock.restore();
+    configHome = fs.mkdtempSync(path.join(fixtureHome, ".omniroute-test-6701-"));
     const claudeDir = path.join(configHome, ".claude");
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(
@@ -55,7 +59,8 @@ describe("#6701 — claude detection should fall back to settings.json when bina
   });
 
   after(() => {
-    fs.rmSync(configHome, { recursive: true, force: true });
+    if (fixtureHome) fs.rmSync(fixtureHome, { recursive: true, force: true });
+    restoreHomedir?.();
     if (prevBin === undefined) delete process.env.CLI_CLAUDE_BIN;
     else process.env.CLI_CLAUDE_BIN = prevBin;
     if (prevConfigHome === undefined) delete process.env.CLI_CONFIG_HOME;
