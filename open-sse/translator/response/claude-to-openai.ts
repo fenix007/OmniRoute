@@ -45,266 +45,293 @@ export function claudeToOpenAIResponse(chunk, state) {
     }
 
     case "content_block_start": {
-      const block = chunk.content_block;
-      if (block?.type === "text") {
-        state.textBlockStarted = true;
-      } else if (block?.type === "thinking") {
-        state.inThinkingBlock = true;
-        state.currentBlockIndex = chunk.index;
-        // Emit empty reasoning_content to signal thinking block start
-        // (clients like Claude Code look for reasoning_content, not <think> tags)
-        results.push(createChunk(state, { reasoning_content: "" }));
-      } else if (block?.type === "tool_use") {
-        const toolCallIndex = state.toolCallIndex++;
-        // Restore original tool name from mapping (Claude OAuth)
-        const toolName = state.toolNameMap?.get(block.name) || block.name;
-        const toolCall = {
-          index: toolCallIndex,
-          id: block.id,
-          type: "function",
-          function: {
-            name: toolName,
-            arguments: "",
-          },
-        };
-        state.toolCalls.set(chunk.index, toolCall);
-        results.push(createChunk(state, { tool_calls: [toolCall] }));
-      }
+      handleBlockStart(chunk, state, results);
       break;
     }
 
     case "content_block_delta": {
-      const delta = chunk.delta;
-      if (delta?.type === "text_delta" && delta.text) {
-        // Flush the deferred </think> close marker before the first text delta so
-        // clients like Claude Code / Cursor (that scan content for </think>) see it
-        // immediately before the assistant reply begins — but NOT in tool-use streams
-        // where no text_delta ever arrives (#5123).
-        if (state.pendingThinkClose) {
-          // Suppressed for clients that render the marker verbatim (#5245);
-          // still clear the flag so it never re-fires later in the stream.
-          if (!state.suppressThinkClose) {
-            results.push(createChunk(state, { content: "</think>" }));
-          }
-          state.pendingThinkClose = false;
-        }
-        results.push(createChunk(state, { content: delta.text }));
-      } else if (delta?.type === "thinking_delta" && delta.thinking) {
-        // Map Claude thinking_delta → OpenAI reasoning_content
-        // Clients (Claude Code, Cursor, etc.) display reasoning_content as the thinking panel
-        results.push(createChunk(state, { reasoning_content: delta.thinking }));
-      } else if (delta?.type === "input_json_delta" && delta.partial_json) {
-        const toolCall = state.toolCalls.get(chunk.index);
-        if (toolCall) {
-          toolCall.function.arguments += delta.partial_json;
-          results.push(
-            createChunk(state, {
-              tool_calls: [
-                {
-                  index: toolCall.index,
-                  function: { arguments: delta.partial_json },
-                },
-              ],
-            })
-          );
-        }
-      }
+      handleBlockDelta(chunk, state, results);
       break;
     }
 
     case "content_block_stop": {
-      if (state.inThinkingBlock && chunk.index === state.currentBlockIndex) {
-        // Defer the </think> close marker instead of emitting immediately.
-        // If the next block is tool_use there will be no text_delta, so the
-        // marker would appear as a spurious assistant text chunk before
-        // tool_calls, corrupting OpenAI-compatible clients (#5123).
-        // The marker is flushed in the text_delta branch (for pure-text
-        // thinking responses — preserving the #4633 / decolua/9router#454
-        // behavior) or in the message_delta finish path when no tool_calls
-        // were collected.
-        state.pendingThinkClose = true;
-        state.inThinkingBlock = false;
-      }
-      state.textBlockStarted = false;
-      state.thinkingBlockStarted = false;
+      handleBlockStop(chunk, state, results);
       break;
     }
 
     case "message_delta": {
-      // Extract usage from message_delta event (Claude native format)
-      // Normalize to OpenAI format (prompt_tokens/completion_tokens) for consistent logging
-      if (chunk.usage && typeof chunk.usage === "object") {
-        const previousUsage = state.usage && typeof state.usage === "object" ? state.usage : {};
-        const previousInputTokens =
-          typeof previousUsage.input_tokens === "number"
-            ? previousUsage.input_tokens
-            : typeof previousUsage.prompt_tokens === "number"
-              ? previousUsage.prompt_tokens
-              : 0;
-        const previousCacheReadTokens =
-          typeof previousUsage.cache_read_input_tokens === "number"
-            ? previousUsage.cache_read_input_tokens
-            : 0;
-        const previousCacheCreationTokens =
-          typeof previousUsage.cache_creation_input_tokens === "number"
-            ? previousUsage.cache_creation_input_tokens
-            : 0;
-        const inputTokens =
-          typeof chunk.usage.input_tokens === "number" ? chunk.usage.input_tokens : 0;
-        const outputTokens =
-          typeof chunk.usage.output_tokens === "number" ? chunk.usage.output_tokens : 0;
-        const cacheReadTokens =
-          typeof chunk.usage.cache_read_input_tokens === "number"
-            ? chunk.usage.cache_read_input_tokens
-            : 0;
-        const cacheCreationTokens =
-          typeof chunk.usage.cache_creation_input_tokens === "number"
-            ? chunk.usage.cache_creation_input_tokens
-            : 0;
-
-        // Use OpenAI format keys for consistent logging in stream.js
-        // Issue #1426: Include cache_read tokens in prompt_tokens so cached input
-        // is visible to downstream billing systems.
-        // Issue #2215: Exclude cache_creation_input_tokens from prompt_tokens —
-        // Anthropic's cache-creation pads short prompts up to a 1024-token
-        // minimum, so a 2-token "hi" can be reported as ~2008 prompt_tokens and
-        // inflate downstream billing ~250x. cache_creation is still exposed
-        // separately via prompt_tokens_details.cache_creation_tokens below.
-        const billableInputTokens =
-          inputTokens > 0 || cacheReadTokens > 0 || cacheCreationTokens > 0
-            ? inputTokens + cacheReadTokens
-            : previousInputTokens;
-        state.usage = {
-          prompt_tokens: billableInputTokens,
-          completion_tokens: outputTokens,
-          input_tokens: billableInputTokens,
-          output_tokens: outputTokens,
-        };
-
-        // Store cache tokens if present (needed for prompt_tokens_details in final chunk)
-        const effectiveCacheReadTokens = cacheReadTokens || previousCacheReadTokens;
-        const effectiveCacheCreationTokens = cacheCreationTokens || previousCacheCreationTokens;
-        if (effectiveCacheReadTokens > 0) {
-          state.usage.cache_read_input_tokens = effectiveCacheReadTokens;
-        }
-        if (effectiveCacheCreationTokens > 0) {
-          state.usage.cache_creation_input_tokens = effectiveCacheCreationTokens;
-        }
-      }
-
-      if (chunk.delta?.stop_reason) {
-        // Flush any deferred </think> close marker now that we know the stream
-        // is finishing. Only emit when there are no tool_calls — if tool_calls
-        // were collected the marker must stay suppressed (#5123). Text-based
-        // responses that had no text_delta (edge case: thinking-only with
-        // immediate stop) still receive the marker here.
-        if (state.pendingThinkClose && state.toolCalls.size === 0) {
-          // Suppressed for clients that render the marker verbatim (#5245).
-          if (!state.suppressThinkClose) {
-            results.push(createChunk(state, { content: "</think>" }));
-          }
-          state.pendingThinkClose = false;
-        }
-        state.finishReason = convertStopReason(chunk.delta.stop_reason);
-        const finalChunk: {
-          id: string;
-          object: string;
-          created: number;
-          model: string;
-          choices: Array<{
-            index: number;
-            delta: { content?: string };
-            finish_reason: string | null;
-          }>;
-          usage?: OpenAIUsage;
-        } = {
-          id: `chatcmpl-${state.messageId}`,
-          object: "chat.completion.chunk",
-          created: Math.floor(Date.now() / 1000),
-          model: state.model,
-          choices: [
-            {
-              index: 0,
-              delta: {},
-              finish_reason: state.finishReason,
-            },
-          ],
-        };
-
-        // Include usage in final chunk if available
-        if (state.usage && typeof state.usage === "object") {
-          const inputTokens = state.usage.input_tokens || 0;
-          const outputTokens = state.usage.output_tokens || 0;
-          const cachedTokens = state.usage.cache_read_input_tokens || 0;
-          const cacheCreationTokens = state.usage.cache_creation_input_tokens || 0;
-
-          // prompt_tokens = input_tokens (input + cache_read, per #2215 —
-          // cache_creation is exposed separately in prompt_tokens_details below).
-          // completion_tokens = output_tokens
-          // total_tokens = prompt_tokens + completion_tokens
-          const promptTokens = inputTokens;
-          const completionTokens = outputTokens;
-          const totalTokens = promptTokens + completionTokens;
-
-          finalChunk.usage = {
-            prompt_tokens: promptTokens,
-            completion_tokens: completionTokens,
-            total_tokens: totalTokens,
-          };
-
-          // Add prompt_tokens_details if cached tokens exist
-          if (cachedTokens > 0 || cacheCreationTokens > 0) {
-            finalChunk.usage.prompt_tokens_details = {};
-            if (cachedTokens > 0) {
-              finalChunk.usage.prompt_tokens_details.cached_tokens = cachedTokens;
-            }
-            if (cacheCreationTokens > 0) {
-              finalChunk.usage.prompt_tokens_details.cache_creation_tokens = cacheCreationTokens;
-            }
-          }
-        }
-
-        results.push(finalChunk);
-        state.finishReasonSent = true;
-      }
+      handleMessageDelta(chunk, state, results);
       break;
     }
 
     case "message_stop": {
-      if (!state.finishReasonSent) {
-        const finishReason =
-          state.finishReason || (state.toolCalls?.size > 0 ? "tool_calls" : "stop");
-        const usageObj =
-          state.usage && typeof state.usage === "object"
-            ? {
-                usage: {
-                  prompt_tokens: state.usage.input_tokens || 0,
-                  completion_tokens: state.usage.output_tokens || 0,
-                  total_tokens: (state.usage.input_tokens || 0) + (state.usage.output_tokens || 0),
-                },
-              }
-            : {};
-        results.push({
-          id: `chatcmpl-${state.messageId}`,
-          object: "chat.completion.chunk",
-          created: Math.floor(Date.now() / 1000),
-          model: state.model,
-          choices: [
-            {
-              index: 0,
-              delta: {},
-              finish_reason: finishReason,
-            },
-          ],
-          ...usageObj,
-        });
-        state.finishReasonSent = true;
-      }
+      handleMessageStop(chunk, state, results);
       break;
     }
   }
 
   return results.length > 0 ? results : null;
+}
+
+function handleBlockStart(chunk, state, results) {
+  const block = chunk.content_block;
+  if (block?.type === "text") {
+    state.textBlockStarted = true;
+  } else if (block?.type === "thinking") {
+    state.inThinkingBlock = true;
+    state.currentBlockIndex = chunk.index;
+    // Emit empty reasoning_content to signal thinking block start
+    // (clients like Claude Code look for reasoning_content, not <think> tags)
+    results.push(createChunk(state, { reasoning_content: "" }));
+  } else if (block?.type === "tool_use") {
+    const toolCallIndex = state.toolCallIndex++;
+    // Restore original tool name from mapping (Claude OAuth)
+    const toolName = state.toolNameMap?.get(block.name) || block.name;
+    const toolCall = {
+      index: toolCallIndex,
+      id: block.id,
+      type: "function",
+      function: {
+        name: toolName,
+        arguments: "",
+      },
+    };
+    state.toolCalls.set(chunk.index, toolCall);
+    results.push(createChunk(state, { tool_calls: [toolCall] }));
+  }
+}
+
+function handleBlockDelta(chunk, state, results) {
+  const delta = chunk.delta;
+  if (delta?.type === "text_delta" && delta.text) {
+    // Flush the deferred </think> close marker before the first text delta so
+    // clients like Claude Code / Cursor (that scan content for </think>) see it
+    // immediately before the assistant reply begins — but NOT in tool-use streams
+    // where no text_delta ever arrives (#5123).
+    if (state.pendingThinkClose) {
+      // Suppressed for clients that render the marker verbatim (#5245);
+      // still clear the flag so it never re-fires later in the stream.
+      if (!state.suppressThinkClose) {
+        results.push(createChunk(state, { content: "</think>" }));
+      }
+      state.pendingThinkClose = false;
+    }
+    results.push(createChunk(state, { content: delta.text }));
+  } else if (delta?.type === "thinking_delta" && delta.thinking) {
+    // Map Claude thinking_delta → OpenAI reasoning_content
+    // Clients (Claude Code, Cursor, etc.) display reasoning_content as the thinking panel
+    results.push(createChunk(state, { reasoning_content: delta.thinking }));
+  } else if (delta?.type === "input_json_delta" && delta.partial_json) {
+    const toolCall = state.toolCalls.get(chunk.index);
+    if (toolCall) {
+      toolCall.function.arguments += delta.partial_json;
+      results.push(
+        createChunk(state, {
+          tool_calls: [
+            {
+              index: toolCall.index,
+              function: { arguments: delta.partial_json },
+            },
+          ],
+        })
+      );
+    }
+  }
+}
+
+function handleBlockStop(chunk, state, results) {
+  if (state.inThinkingBlock && chunk.index === state.currentBlockIndex) {
+    // Defer the </think> close marker instead of emitting immediately.
+    // If the next block is tool_use there will be no text_delta, so the
+    // marker would appear as a spurious assistant text chunk before
+    // tool_calls, corrupting OpenAI-compatible clients (#5123).
+    // The marker is flushed in the text_delta branch (for pure-text
+    // thinking responses — preserving the #4633 / decolua/9router#454
+    // behavior) or in the message_delta finish path when no tool_calls
+    // were collected.
+    state.pendingThinkClose = true;
+    state.inThinkingBlock = false;
+  }
+  // A completed tool block may have no argument deltas. Emit valid JSON for Chat clients.
+  const toolCall = state.toolCalls?.get(chunk.index);
+  if (toolCall?.function.arguments === "") {
+    toolCall.function.arguments = "{}";
+    results.push(
+      createChunk(state, {
+        tool_calls: [{ index: toolCall.index, function: { arguments: "{}" } }],
+      })
+    );
+  }
+  state.textBlockStarted = false;
+  state.thinkingBlockStarted = false;
+}
+
+function handleMessageDelta(chunk, state, results) {
+  // Extract usage from message_delta event (Claude native format)
+  // Normalize to OpenAI format (prompt_tokens/completion_tokens) for consistent logging
+  if (chunk.usage && typeof chunk.usage === "object") {
+    updateUsage(chunk.usage, state);
+  }
+
+  if (chunk.delta?.stop_reason) {
+    // Flush any deferred </think> close marker now that we know the stream
+    // is finishing. Only emit when there are no tool_calls — if tool_calls
+    // were collected the marker must stay suppressed (#5123). Text-based
+    // responses that had no text_delta (edge case: thinking-only with
+    // immediate stop) still receive the marker here.
+    if (state.pendingThinkClose && state.toolCalls.size === 0) {
+      // Suppressed for clients that render the marker verbatim (#5245).
+      if (!state.suppressThinkClose) {
+        results.push(createChunk(state, { content: "</think>" }));
+      }
+      state.pendingThinkClose = false;
+    }
+    state.finishReason = convertStopReason(chunk.delta.stop_reason);
+    const finalChunk: {
+      id: string;
+      object: string;
+      created: number;
+      model: string;
+      choices: Array<{
+        index: number;
+        delta: { content?: string };
+        finish_reason: string | null;
+      }>;
+      usage?: OpenAIUsage;
+    } = {
+      id: `chatcmpl-${state.messageId}`,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: state.model,
+      choices: [
+        {
+          index: 0,
+          delta: {},
+          finish_reason: state.finishReason,
+        },
+      ],
+    };
+
+    attachFinalUsage(finalChunk, state);
+
+    results.push(finalChunk);
+    state.finishReasonSent = true;
+  }
+}
+
+function handleMessageStop(chunk, state, results) {
+  if (!state.finishReasonSent) {
+    const finishReason = state.finishReason || (state.toolCalls?.size > 0 ? "tool_calls" : "stop");
+    const usageObj =
+      state.usage && typeof state.usage === "object"
+        ? {
+            usage: {
+              prompt_tokens: state.usage.input_tokens || 0,
+              completion_tokens: state.usage.output_tokens || 0,
+              total_tokens: (state.usage.input_tokens || 0) + (state.usage.output_tokens || 0),
+            },
+          }
+        : {};
+    results.push({
+      id: `chatcmpl-${state.messageId}`,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: state.model,
+      choices: [
+        {
+          index: 0,
+          delta: {},
+          finish_reason: finishReason,
+        },
+      ],
+      ...usageObj,
+    });
+    state.finishReasonSent = true;
+  }
+}
+
+function numericToken(usage, key: string): number {
+  return typeof usage[key] === "number" ? usage[key] : 0;
+}
+
+function updateUsage(usage, state) {
+  const previousUsage = state.usage && typeof state.usage === "object" ? state.usage : {};
+  const previousInputTokens =
+    typeof previousUsage.input_tokens === "number"
+      ? previousUsage.input_tokens
+      : typeof previousUsage.prompt_tokens === "number"
+        ? previousUsage.prompt_tokens
+        : 0;
+  const previousCacheReadTokens = numericToken(previousUsage, "cache_read_input_tokens");
+  const previousCacheCreationTokens = numericToken(previousUsage, "cache_creation_input_tokens");
+  const inputTokens = numericToken(usage, "input_tokens");
+  const outputTokens = numericToken(usage, "output_tokens");
+  const cacheReadTokens = numericToken(usage, "cache_read_input_tokens");
+  const cacheCreationTokens = numericToken(usage, "cache_creation_input_tokens");
+
+  // Use OpenAI format keys for consistent logging in stream.js
+  // Issue #1426: Include cache_read tokens in prompt_tokens so cached input
+  // is visible to downstream billing systems.
+  // Issue #2215: Exclude cache_creation_input_tokens from prompt_tokens —
+  // Anthropic's cache-creation pads short prompts up to a 1024-token
+  // minimum, so a 2-token "hi" can be reported as ~2008 prompt_tokens and
+  // inflate downstream billing ~250x. cache_creation is still exposed
+  // separately via prompt_tokens_details.cache_creation_tokens below.
+  const billableInputTokens =
+    inputTokens > 0 || cacheReadTokens > 0 || cacheCreationTokens > 0
+      ? inputTokens + cacheReadTokens
+      : previousInputTokens;
+  state.usage = {
+    prompt_tokens: billableInputTokens,
+    completion_tokens: outputTokens,
+    input_tokens: billableInputTokens,
+    output_tokens: outputTokens,
+  };
+
+  // Store cache tokens if present (needed for prompt_tokens_details in final chunk)
+  const effectiveCacheReadTokens = cacheReadTokens || previousCacheReadTokens;
+  const effectiveCacheCreationTokens = cacheCreationTokens || previousCacheCreationTokens;
+  if (effectiveCacheReadTokens > 0) {
+    state.usage.cache_read_input_tokens = effectiveCacheReadTokens;
+  }
+  if (effectiveCacheCreationTokens > 0) {
+    state.usage.cache_creation_input_tokens = effectiveCacheCreationTokens;
+  }
+}
+
+function attachFinalUsage(finalChunk: { usage?: OpenAIUsage }, state) {
+  // Include usage in final chunk if available
+  if (state.usage && typeof state.usage === "object") {
+    const inputTokens = state.usage.input_tokens || 0;
+    const outputTokens = state.usage.output_tokens || 0;
+    const cachedTokens = state.usage.cache_read_input_tokens || 0;
+    const cacheCreationTokens = state.usage.cache_creation_input_tokens || 0;
+
+    // prompt_tokens = input_tokens (input + cache_read, per #2215 —
+    // cache_creation is exposed separately in prompt_tokens_details below).
+    // completion_tokens = output_tokens
+    // total_tokens = prompt_tokens + completion_tokens
+    const promptTokens = inputTokens;
+    const completionTokens = outputTokens;
+    const totalTokens = promptTokens + completionTokens;
+
+    finalChunk.usage = {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: totalTokens,
+    };
+
+    // Add prompt_tokens_details if cached tokens exist
+    if (cachedTokens > 0 || cacheCreationTokens > 0) {
+      finalChunk.usage.prompt_tokens_details = {};
+      if (cachedTokens > 0) {
+        finalChunk.usage.prompt_tokens_details.cached_tokens = cachedTokens;
+      }
+      if (cacheCreationTokens > 0) {
+        finalChunk.usage.prompt_tokens_details.cache_creation_tokens = cacheCreationTokens;
+      }
+    }
+  }
 }
 
 // Convert Claude stop_reason to OpenAI finish_reason

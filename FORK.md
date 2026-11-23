@@ -1665,3 +1665,21 @@ Regression coverage in `tests/unit/codex-sse-capacity-fallback.test.ts` and
 `tests/integration/combo-codex-account-timeout.test.ts` covers fragmented
 overload, upstream cancellation, quoted error text, the byte budget, preserved
 JSON, and retry on a second mock Codex account before provider fallback.
+
+## Claude SSE tool arguments — 2026-11-23
+
+**Adapt** [OmniRoute #20167](https://github.com/cheaper-inference/OmniRoute/pull/20167)
+from diegosouzapw/OmniRoute (now cheaper-inference/OmniRoute), thanks @costajohnt.
+Reviewed head `34f90c8a62b805c383bc7edc49911dfde14a4805`, merged November 21
+as `2e48cdb256a415afc6e607e94450aef459f018bf` (confirmed November 23).
+The Claude-to-Chat translator emits `{}` at tool block completion when no
+arguments arrived. The frozen-base adaptation checks the empty buffer explicitly
+and uses the existing Chat chunk builder. The regression drives the SSE transform
+through mixed tools, split arguments, an empty delta and a duplicate block stop,
+and verifies argument bytes, call IDs and the terminal Chat frame.
+
+The translator's event handlers and usage normalization are split into private
+helpers to remove its existing function-size and cyclomatic-complexity violations
+without raising the quality baseline. Regression coverage also preserves previous
+input/cache counters across output-only usage updates and prevents duplicate
+terminal frames.

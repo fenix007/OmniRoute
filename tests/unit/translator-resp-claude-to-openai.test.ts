@@ -179,6 +179,89 @@ test("Claude stream: tool_use start reverses prefixed tool names and streams arg
   assert.equal(delta2[0].choices[0].delta.tool_calls[0].function.arguments, '"/tmp/a"}');
 });
 
+test("Claude SSE emits valid Chat arguments for parameterless tools before the finish chunk", async () => {
+  const { createSSEStream } = await import("../../open-sse/utils/stream.ts");
+  const events = [
+    { type: "message_start", message: { id: "msg_tools", model: "claude-sonnet-4-6" } },
+    {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "call_empty", name: "get_time", input: {} },
+    },
+    { type: "content_block_stop", index: 0 },
+    {
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "tool_use", id: "call_args", name: "format_time", input: {} },
+    },
+    {
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "input_json_delta", partial_json: '{"format":' },
+    },
+    {
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "input_json_delta", partial_json: '"iso"}' },
+    },
+    { type: "content_block_stop", index: 1 },
+    {
+      type: "content_block_start",
+      index: 2,
+      content_block: { type: "tool_use", id: "call_empty_delta", name: "get_date", input: {} },
+    },
+    {
+      type: "content_block_delta",
+      index: 2,
+      delta: { type: "input_json_delta", partial_json: "" },
+    },
+    { type: "content_block_stop", index: 2 },
+    { type: "content_block_stop", index: 2 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 12 } },
+    { type: "message_stop" },
+  ];
+  const encoder = new TextEncoder();
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(
+          encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+        );
+      }
+      controller.close();
+    },
+  });
+  const transform = createSSEStream({
+    mode: "translate",
+    targetFormat: FORMATS.CLAUDE,
+    sourceFormat: FORMATS.OPENAI,
+    provider: "claude",
+    model: "claude-sonnet-4-6",
+  });
+  const output = await new Response(source.pipeThrough(transform)).text();
+  const chunks = output
+    .split("\n")
+    .filter((line) => line.startsWith("data: {"))
+    .map((line) => JSON.parse(line.slice(6)));
+  const choices = chunks.flatMap((chunk) => chunk.choices);
+  const finish = choices.findIndex((choice) => choice.finish_reason === "tool_calls");
+  assert.ok(finish > 0);
+  assert.match(output, /data: \[DONE\]/);
+  const calls = choices.slice(0, finish).flatMap((choice) => choice.delta.tool_calls ?? []);
+  assert.deepEqual(
+    calls.filter((call) => call.id).map((call) => call.id),
+    ["call_empty", "call_args", "call_empty_delta"]
+  );
+  const argsFor = (index: number) =>
+    calls
+      .filter((call) => call.index === index)
+      .map((call) => call.function.arguments)
+      .join("");
+  assert.equal(argsFor(0), "{}");
+  assert.equal(argsFor(1), '{"format":"iso"}');
+  assert.equal(argsFor(2), "{}");
+});
+
 test("Claude stream: message_delta maps stop reason and usage including cache tokens (#1426, #2215)", () => {
   const state = createState();
   claudeToOpenAIResponse(
@@ -300,6 +383,34 @@ test("Claude stream: #2215 — no cache fields means no prompt_tokens_details", 
   assert.equal(result[0].usage.completion_tokens, 20);
   assert.equal(result[0].usage.total_tokens, 70);
   assert.equal(result[0].usage.prompt_tokens_details, undefined);
+});
+
+test("Claude stream: usage-only deltas preserve earlier input and cache counters", () => {
+  for (const previousUsage of [
+    { input_tokens: 17, cache_read_input_tokens: 5, cache_creation_input_tokens: 8 },
+    { prompt_tokens: 17, cache_read_input_tokens: 5, cache_creation_input_tokens: 8 },
+  ]) {
+    const state = { ...createState(), usage: previousUsage };
+    claudeToOpenAIResponse(
+      { type: "message_start", message: { id: "msg_usage", model: "claude-sonnet-4-6" } },
+      state
+    );
+    const result = claudeToOpenAIResponse(
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 3, input_tokens: "invalid", cache_read_input_tokens: null },
+      },
+      state
+    );
+    assert.deepEqual(result[0].usage, {
+      prompt_tokens: 17,
+      completion_tokens: 3,
+      total_tokens: 20,
+      prompt_tokens_details: { cached_tokens: 5, cache_creation_tokens: 8 },
+    });
+    assert.equal(claudeToOpenAIResponse({ type: "message_stop" }, state), null);
+  }
 });
 
 test("Claude stream: message_stop falls back to tool_calls when tool use already happened", () => {
