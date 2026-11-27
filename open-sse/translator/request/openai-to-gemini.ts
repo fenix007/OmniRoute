@@ -37,6 +37,7 @@ import {
   escapeHistoricalContextAttribute,
   escapeHistoricalContextContent,
   buildHistoricalToolResultContext,
+  orderVertexGeminiToolResults,
 } from "./openai-to-gemini/helpers.ts";
 
 // Observed Antigravity wrapper output cap, not an underlying model capability.
@@ -495,7 +496,14 @@ function openaiToGeminiBase(
             }
 
             if (toolParts.length > 0) {
-              result.contents.push({ role: "user", parts: toolParts });
+              result.contents.push({
+                role: "user",
+                parts: orderVertexGeminiToolResults(
+                  model,
+                  toolNameOptions.stripFunctionCallId,
+                  toolParts
+                ),
+              });
             }
           }
         } else if (parts.length > 0) {

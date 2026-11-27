@@ -1683,3 +1683,25 @@ helpers to remove its existing function-size and cyclomatic-complexity violation
 without raising the quality baseline. Regression coverage also preserves previous
 input/cache counters across output-only usage updates and prevents duplicate
 terminal frames.
+
+## Vertex Gemini mixed tool results — 2026-11-26
+
+**Adapt** [OmniRoute #21246](https://github.com/cheaper-inference/OmniRoute/pull/21246)
+by @wjuniorw, open on November 26 (reconfirmed November 27) at head
+`2b20b3a8dc0b17753439d7934c98cace11ed3a8b`.
+
+With only some thought signatures in cache, the frozen translator appends
+historical tool-result text after native function responses. Vertex Gemini can
+reject a result turn in that order with HTTP 400. Put the text first and keep
+native function responses in their original relative order. Apply the change
+only to generated tool-result batches for Vertex Gemini, before same-role
+merging. The upstream patch also reorders other user turns and Gemini-compatible
+routes. The frozen adaptation preserves those paths, including direct Gemini
+and Claude routes.
+
+An offline regression reproduces the part order on stable and checks mixed,
+all-signed and all-unsigned batches, tool-result payloads and input immutability.
+The direct Gemini and Claude control cases keep their existing part order.
+Also registered the existing `tests/unit/codex-model-unsupported-not-429.test.ts`
+(covering `src/sse/services/auth.ts`) in `stryker.conf.json` so
+`check:mutation-test-coverage` passes without altering mutation targets or thresholds.

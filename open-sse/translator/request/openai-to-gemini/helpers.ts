@@ -140,3 +140,16 @@ export function buildHistoricalToolResultContext(name: string, response: unknown
     "</previous_tool_result_context>",
   ].join("\n");
 }
+
+/** Vertex Gemini expects historical result text before native function responses. */
+export function orderVertexGeminiToolResults(
+  model: string,
+  isVertex: boolean | undefined,
+  parts: Record<string, unknown>[]
+): Record<string, unknown>[] {
+  if (!isVertex || !/^gemini-/i.test(model.split("/").at(-1) ?? "")) return parts;
+
+  const otherParts = parts.filter((part) => !("functionResponse" in part));
+  const responses = parts.filter((part) => "functionResponse" in part);
+  return otherParts.length > 0 && responses.length > 0 ? [...otherParts, ...responses] : parts;
+}

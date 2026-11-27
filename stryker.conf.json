@@ -114,6 +114,7 @@
       "tests/unit/clinepass-provider.test.ts",
       "tests/unit/cliproxyapi-model-mapping-dispatch.test.ts",
       "tests/unit/codex-failover.test.ts",
+      "tests/unit/codex-model-unsupported-not-429.test.ts",
       "tests/unit/codex-same-account-transport-retry-9708.test.ts",
       "tests/unit/codex-quota-selection-hydration.test.ts",
       "tests/unit/codex-session-affinity-reset-aware-5903.test.ts",
